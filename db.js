@@ -4,20 +4,22 @@ const { Database } = require('@libsql/sqlite3');
 
 let db;
 
-// Enhanced connection syntax to resolve the "Invalid arguments" parameter crash
+// Properly formats local files as 'file:' protocol paths to satisfy libSQL URL constraints
+const localDbUrl = 'file:' + path.join(__dirname, 'taskflow.db');
+
 if (process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN) {
   try {
-    db = new Database(path.join(__dirname, 'taskflow.db'), {
-      syncUrl: process.env.TURSO_DATABASE_URL,
-      authToken: process.env.TURSO_AUTH_TOKEN
+    db = new Database(localDbUrl, {
+      syncUrl: process.env.TURSO_DATABASE_URL.trim(),
+      authToken: process.env.TURSO_AUTH_TOKEN.trim()
     });
     console.log("☁️ Connected to Turso Cloud SQLite Replication Engine.");
   } catch (err) {
     console.error("Cloud connection initialization failed, trying clean fallback:", err.message);
-    db = new Database(path.join(__dirname, 'taskflow.db'));
+    db = new Database(localDbUrl);
   }
 } else {
-  db = new Database(path.join(__dirname, 'taskflow.db'));
+  db = new Database(localDbUrl);
   console.log("💻 Connected to Local PC SQLite File.");
 }
 
