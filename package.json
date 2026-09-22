@@ -17,6 +17,7 @@
     "axios": "^1.7.7",
     "form-data": "^4.0.1",
     "better-sqlite3": "^9.6.0",
+    "sqlite3": "^5.1.7",
     "@libsql/sqlite3": "^0.3.1"
   }
 }
