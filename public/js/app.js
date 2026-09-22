@@ -31,6 +31,7 @@ function fmtTime(iso) {
 
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
+// Standalone universal HTML escaping engine
 function escapeHtml(str) {
   if (!str) return '';
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
@@ -119,8 +120,7 @@ function stopAttendancePolling() {
 // ==========================================
 (async function init() {
   try {
-    const rawMe = await api('/auth/me');
-    ME = Array.isArray(rawMe) ? rawMe : rawMe;
+    ME = await api('/auth/me');
     enterApp();
   } catch (e) {
     const loginScreen = \$('#login-screen');
@@ -140,11 +140,10 @@ if (loginForm) {
     if (!userField || !passField) return;
 
     try {
-      const rawLogin = await api('/auth/login', {
+      ME = await api('/auth/login', {
         method: 'POST',
         body: { username: userField.value.trim(), password: passField.value },
       });
-      ME = Array.isArray(rawLogin) ? rawLogin : rawLogin;
       enterApp();
     } catch (err) {
       if (errorEl) errorEl.textContent = err.message;
@@ -175,7 +174,7 @@ async function enterApp() {
   
   try {
     const rawPeople = await api('/auth/people');
-    PEOPLE = Array.isArray(rawPeople) ? rawPeople.flat(5) : [];
+    PEOPLE = Array.isArray(rawPeople) ? rawPeople : [];
     
     await loadProjects();
     showView('attendance');
@@ -229,8 +228,7 @@ function showView(view) {
 // ==========================================
 async function loadProjects() {
   try {
-    const rawProj = await api('/projects');
-    PROJECTS = Array.isArray(rawProj) ? rawProj.flat(5) : [];
+    PROJECTS = await api('/projects');
     renderProjectList();
   } catch (e) {
     PROJECTS = [];
@@ -334,8 +332,7 @@ async function renderTasks() {
   const tbody = \$('#task-list');
   if (!tbody) return;
   try {
-    const rawTasks = await api(`/projects/${CURRENT_PROJECT.id}/tasks`);
-    const tasks = Array.isArray(rawTasks) ? rawTasks.flat(5) : [];
+    const tasks = await api(`/projects/${CURRENT_PROJECT.id}/tasks`);
     tbody.innerHTML = '';
     if (!tasks.length) {
       tbody.innerHTML = `<tr><td colspan="5" style="color:var(--muted);padding:20px 14px;">No tasks yet — add one above.</td></tr>`;
@@ -343,25 +340,19 @@ async function renderTasks() {
     }
     tasks.forEach((t) => {
       const tr = document.createElement('tr');
-      tr.className = 'task-row' + (t.status === 'done' || t.STATUS === 'done' ? ' done' : '');
-      const currentAssigneeId = t.assignee_id !== undefined ? t.assignee_id : t.ASSIGNEE_ID;
-      const person = PEOPLE.find((p) => p.id === currentAssigneeId);
-      const dueDate = t.due_date || t.DUE_DATE;
-      const taskTitle = t.title || t.TITLE;
-      const taskId = t.id || t.ID;
-      const taskStatus = t.status || t.STATUS;
-
+      tr.className = 'task-row' + (t.status === 'done' ? ' done' : '');
+      const person = PEOPLE.find((p) => p.id === t.assignee_id);
       let dueClass = '';
-      if (dueDate) {
-        if (dueDate < todayISO() && taskStatus !== 'done') dueClass = 'overdue';
-        else if (dueDate === todayISO()) dueClass = 'today';
+      if (t.due_date) {
+        if (t.due_date < todayISO() && t.status !== 'done') dueClass = 'overdue';
+        else if (t.due_date === todayISO()) dueClass = 'today';
       }
       tr.innerHTML = `
-        <td><input type="checkbox" class="task-check" ${taskStatus === 'done' ? 'checked' : ''} data-id="${taskId}"></td>
-        <td><span class="task-title-text">${escapeHtml(taskTitle)}</span></td>
-        <td><span class="badge ${dueClass}">${dueDate ? fmtDate(dueDate) : '--'}</span></td>
+        <td><input type="checkbox" class="task-check" ${t.status === 'done' ? 'checked' : ''} data-id="${t.id}"></td>
+        <td><span class="task-title-text">${escapeHtml(t.title)}</span></td>
+        <td><span class="badge ${dueClass}">${t.due_date ? fmtDate(t.due_date) : '--'}</span></td>
         <td><span class="assignee-text">${person ? escapeHtml(person.name) : '--'}</span></td>
-        <td><button class="btn btn-sm btn-secondary btn-task-edit" data-id="${taskId}">Edit</button></td>`;
+        <td><button class="btn btn-sm btn-secondary btn-task-edit" data-id="${t.id}">Edit</button></td>`;
       tbody.appendChild(tr);
     });
   } catch (err) { console.error(err); }
@@ -387,9 +378,7 @@ async function renderPunchCard() {
   const card = \$('#punch-card-container');
   if (!card) return;
   try {
-    const rawStatus = await api('/attendance/today');
-    const status = Array.isArray(rawStatus) ? rawStatus : rawStatus;
-
+    const status = await api('/attendance/today');
     if (!status) {
       card.innerHTML = `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`;
       \$('#btn-punch-in').onclick = async () => {
@@ -429,17 +418,16 @@ async function renderLiveList() {
   const list = \$('#live-attendance-list');
   if (!list) return;
   try {
-    const rawRows = await api('/attendance/live');
-    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
+    const rows = await api('/attendance/live');
     if (!rows || !rows.length) {
       list.innerHTML = '<tr><td colspan="3" class="hint" style="text-align:center; padding:15px; color:#888;">No field technicians active right now.</td></tr>';
       return;
     }
     list.innerHTML = rows.map(r => `
       <tr style="border-bottom: 1px solid #eee;">
-        <td style="padding:10px;"><b>${escapeHtml(r.user_name || r.USER_NAME)}</b></td>
-        <td style="padding:10px;">${fmtTime(r.punch_in || r.PUNCH_IN)}</td>
-        <td style="padding:10px;"><a href="https://google.com{r.in_lat || r.IN_LAT},${r.in_lng || r.IN_LNG}" target="_blank" class="map-link" style="color:#007bff; text-decoration:none; font-weight:bold;">🗺️ View Live Site</a></td>
+        <td style="padding:10px;"><b>${escapeHtml(r.user_name)}</b></td>
+        <td style="padding:10px;">${fmtTime(r.punch_in)}</td>
+        <td style="padding:10px;"><a href="https://google.com{r.in_lat},${r.in_lng}" target="_blank" class="map-link" style="color:#007bff; text-decoration:none; font-weight:bold;">🗺️ View Live Site</a></td>
       </tr>
     `).join('');
   } catch (err) { console.error(err); }
@@ -449,28 +437,22 @@ async function renderHistory() {
   const table = \$('#attendance-history-table');
   if (!table) return;
   try {
-    const rawRows = await api('/attendance/mine');
-    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
+    const rows = await api('/attendance/mine');
     if (!rows || !rows.length) {
       table.innerHTML = '<tr><td colspan="4" class="hint" style="text-align:center; padding:15px; color:#888;">No tracking history entries generated.</td></tr>';
       return;
     }
     table.innerHTML = rows.map(r => {
-      const inLat = r.in_lat || r.IN_LAT;
-      const inLng = r.in_lng || r.IN_LNG;
-      const outLat = r.out_lat || r.OUT_LAT;
-      const outLng = r.out_lng || r.OUT_LNG;
-      
-      const inMapUrl = inLat ? `https://google.com{inLat},${inLng}` : null;
-      const outMapUrl = outLat ? `https://google.com{outLat},${outLng}` : null;
+      const inMapUrl = r.in_lat ? `https://google.com{r.in_lat},${r.in_lng}` : null;
+      const outMapUrl = r.out_lat ? `https://google.com{r.out_lat},${r.out_lng}` : null;
       return `
       <tr style="border-bottom: 1px solid #eee;">
-        <td style="padding:10px;">${fmtDate(r.date || r.DATE)}</td>
-        <td style="padding:10px; color:green;">${fmtTime(r.punch_in || r.PUNCH_IN) || '--'}</td>
-        <td style="padding:10px; color:red;">${fmtTime(r.punch_out || r.PUNCH_OUT) || '--'}</td>
+        <td style="padding:10px;">${fmtDate(r.date)}</td>
+        <td style="padding:10px; color:green;">${fmtTime(r.punch_in) || '--'}</td>
+        <td style="padding:10px; color:red;">${fmtTime(r.punch_out) || '--'}</td>
         <td style="padding:10px;">
-          <small style="display:block; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#555;" title="${escapeHtml(r.location_status || r.LOCATION_STATUS || '')}">
-            ${escapeHtml(r.location_status || r.LOCATION_STATUS || '')}
+          <small style="display:block; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#555;" title="${escapeHtml(r.location_status || '')}">
+            ${escapeHtml(r.location_status || '')}
           </small>
           <div class="row-actions" style="margin-top:6px;">
             ${inMapUrl ? `<a href="\${inMapUrl}" target="_blank" style="font-size:12px; margin-right:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 In Pin</a>` : ''}
@@ -549,10 +531,10 @@ async function renderAdmin() {
         }
 
         tr.innerHTML = `
-          <td style="padding:10px;"><b>${escapeHtml(u.name || u.NAME)}</b></td>
-          <td style="padding:10px;">${escapeHtml(u.username || u.USERNAME)}</td>
-          <td style="padding:10px;"><span class="badge" style="background:#e0e0e0; padding:4px 8px; border-radius:4px; font-size:12px;">${escapeHtml(u.role || u.ROLE)}</span></td>
-          <td style="padding:10px;"><span class="badge" style="background:#c8e6c9; color:#25602a; padding:4px 8px; border-radius:4px; font-size:12px;">${u.active || u.ACTIVE ? 'Active' : 'Disabled'}</span></td>
+          <td style="padding:10px;"><b>${escapeHtml(u.name)}</b></td>
+          <td style="padding:10px;">${escapeHtml(u.username)}</td>
+          <td style="padding:10px;"><span class="badge" style="background:#e0e0e0; padding:4px 8px; border-radius:4px; font-size:12px;">${escapeHtml(u.role)}</span></td>
+          <td style="padding:10px;"><span class="badge" style="background:#c8e6c9; color:#25602a; padding:4px 8px; border-radius:4px; font-size:12px;">${u.active ? 'Active' : 'Disabled'}</span></td>
           <td style="padding:10px;">${actionsHtml}</td>
         `;
         tbody.appendChild(tr);
