@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>TaskFlow</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📋</text></svg>">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="login-screen" class="login-screen">
+  <div class="login-card">
+    <div class="login-mark">TaskFlow</div>
+    <p class="login-sub">Internal workspace — tasks &amp; attendance</p>
+    <form id="login-form">
+      <label>Username
+        <input type="text" id="login-username" autocomplete="username" required>
+      </label>
+      <label>Password
+        <input type="password" id="login-password" autocomplete="current-password" required>
+      </label>
+      <div id="login-error" class="form-error"></div>
+      <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+    </form>
+  </div>
+</div>
+
+<!-- APP SHELL -->
+<div id="app" class="app hidden">
+  <aside class="sidebar">
+    <div class="sidebar-top">
+      <div class="brand">TaskFlow</div>
+      <button class="icon-btn" id="btn-logout" title="Sign out">⏻</button>
+    </div>
+
+    <nav class="nav-section">
+      <button class="nav-item" data-view="attendance">🕒 Attendance</button>
+      <button class="nav-item" data-view="mytasks">✓ My Tasks</button>
+      <button class="nav-item" id="nav-admin" data-view="admin" style="display:none">⚙️ Admin</button>
+    </nav>
+
+    <div class="nav-section-header">
+      <span>Projects</span>
+      <button class="icon-btn small" id="btn-new-project" title="New project">+</button>
+    </div>
+    <div class="project-list" id="project-list"></div>
+
+    <div class="sidebar-bottom">
+      <div class="me" id="me-badge"></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- Attendance view -->
+    <section id="view-attendance" class="view">
+      <div id="attendance-punch"></div>
+      <div id="attendance-live"></div>
+      <div id="attendance-history"></div>
+    </section>
+
+    <!-- My Tasks view -->
+    <section id="view-mytasks" class="view hidden">
+      <div class="project-header"><div><h1>My Tasks</h1><div class="hint">Open tasks assigned to you across your projects.</div></div></div>
+      <div class="task-table-wrap"><table class="task-table"><thead><tr><th style="width:32px"></th><th>Task</th><th>Project</th><th>Due</th></tr></thead><tbody id="my-task-list"></tbody></table></div>
+    </section>
+
+    <!-- Admin view -->
+    <section id="view-admin" class="view hidden">
+      <div id="admin-content"></div>
+    </section>
+
+    <!-- Project / task view -->
+    <section id="view-project" class="view hidden">
+      <div class="project-header">
+        <div><h1 id="project-title">—</h1><div id="project-members-hint" class="hint"></div></div>
+        <div class="project-header-actions"><button class="btn btn-secondary" id="btn-manage-members">Members</button><button class="btn btn-primary" id="btn-new-task">+ Add task</button></div>
+      </div>
+      <div class="task-toolbar">
+        <div class="task-search-wrap">
+        <input id="task-search" class="task-search" placeholder="Search tasks…" autocomplete="off">
+        <div id="task-search-suggestions" class="task-search-suggestions hidden"></div>
+      </div>
+        <label class="assignee-filter">Assignee <select id="task-assignee-filter"><option value="all">All assignees</option></select></label>
+      </div>
+      <div class="task-table-wrap">
+        <table class="task-table">
+          <thead>
+            <tr><th style="width:32px"></th><th>Task</th><th>Assignee</th><th>Due</th><th style="width:32px"></th></tr>
+          </thead>
+          <tbody id="task-list"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Empty state -->
+    <section id="view-empty" class="view">
+      <div class="empty-state">
+        <div class="empty-mark">📋</div>
+        <p>Pick a project on the left, or check Attendance up top.</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- Task detail drawer -->
+  <aside id="task-drawer" class="drawer hidden">
+    <div class="drawer-header">
+      <input id="drawer-title" class="drawer-title-input" placeholder="Task title">
+      <button class="icon-btn" id="drawer-close">✕</button>
+    </div>
+    <div class="drawer-body">
+      <div class="field-row">
+        <label>Assignee</label>
+        <select id="drawer-assignee"></select>
+      </div>
+      <div class="field-row">
+        <label>Due date</label>
+        <input type="date" id="drawer-due">
+      </div>
+      <div class="field-row">
+        <label>Status</label>
+        <select id="drawer-status">
+          <option value="open">Open</option>
+          <option value="done">Done</option>
+        </select>
+      </div>
+      <div class="field-block">
+        <label>Description</label>
+        <textarea id="drawer-desc" rows="4" placeholder="Add details…"></textarea>
+      </div>
+      <div class="field-block">
+        <div class="field-block-header">
+          <label>Subtasks</label>
+          <button class="link-btn" id="btn-add-subtask">+ add</button>
+        </div>
+        <div id="drawer-subtasks"></div>
+      </div>
+      <div class="field-block">
+        <label>Comments</label>
+        <div id="drawer-comments"></div>
+        <div id="comment-image-preview" class="comment-image-preview hidden"></div>
+        <div class="comment-input-row">
+          <input id="drawer-comment-input" placeholder="Write a comment…">
+          <input type="file" id="comment-file-input" accept="image/*" class="hidden">
+          <button class="icon-btn" id="btn-attach-image" title="Attach image (up to 50MB)">📎</button>
+          <button class="btn btn-secondary" id="btn-add-comment">Post</button>
+        </div>
+      </div>
+      <button class="btn btn-primary btn-block" id="btn-complete-task">✓ Complete task</button>
+      <button class="btn btn-danger btn-block" id="btn-delete-task">Delete task</button>
+    </div>
+  </aside>
+</div>
+
+<!-- Generic modal -->
+<div id="modal-backdrop" class="modal-backdrop hidden">
+  <div class="modal" id="modal"></div>
+</div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>
