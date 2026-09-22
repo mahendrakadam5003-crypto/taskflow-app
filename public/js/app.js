@@ -298,13 +298,17 @@ async function enterProjectView(project) {
   if (pTitle) pTitle.textContent = project.name;
   await renderProjectMembersHint();
   await renderTaskAssigneeFilter();
-  await renderTasks();
+async function renderTaskAssigneeFilter() {
+  if (!CURRENT_PROJECT) return;
+  try {
+    const members = await api(`/projects/${CURRENT_PROJECT.id}/members`);
+    const sel = \$('#task-assignee-filter'); if (!sel) return;
+    const old = sel.value || 'all';
+    sel.innerHTML = '<option value="all">All assignees</option>' + members.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+    sel.value = [...sel.options].some(o => o.value === old) ? old : 'all';
+  } catch (err) { }
 }
 
-async function renderProjectMembersHint() { }
-
-async function renderTaskAssigneeFilter()
-{
 async function renderTasks() { }
 async function renderMyTasks() { }
 
@@ -321,13 +325,13 @@ function getLiveCoords() {
 }
 
 async function renderPunchCard() {
-  const card = $('#punch-card-container');
+  const card = \$('#punch-card-container');
   if (!card) return;
   try {
     const status = await api('/attendance/today');
     if (!status) {
       card.innerHTML = `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`;
-      $('#btn-punch-in').onclick = async () => {
+      \$('#btn-punch-in').onclick = async () => {
         try {
           const coords = await getLiveCoords();
           await api('/attendance/punch-in', { method: 'POST', body: coords });
@@ -341,7 +345,7 @@ async function renderPunchCard() {
           ⚡ On-Duty Since: ${fmtTime(status.punch_in)}
         </div>
         <button class="btn btn-danger btn-lg" id="btn-punch-out" style="width:100%; padding:15px; font-size:18px;">🏁 Punch Out Field Shift</button>`;
-      $('#btn-punch-out').onclick = async () => {
+      \$('#btn-punch-out').onclick = async () => {
         try {
           const coords = await getLiveCoords();
           await api('/attendance/punch-out', { method: 'POST', body: coords });
@@ -361,7 +365,7 @@ async function renderPunchCard() {
 }
 
 async function renderLiveList() {
-  const list = $('#live-attendance-list');
+  const list = \$('#live-attendance-list');
   if (!list) return;
   try {
     const rows = await api('/attendance/live');
@@ -380,7 +384,7 @@ async function renderLiveList() {
 }
 
 async function renderHistory() {
-  const table = $('#attendance-history-table');
+  const table = \$('#attendance-history-table');
   if (!table) return;
   try {
     const rows = await api('/attendance/mine');
@@ -401,8 +405,8 @@ async function renderHistory() {
             ${escapeHtml(r.location_status || '')}
           </small>
           <div class="row-actions" style="margin-top:6px;">
-            ${inMapUrl ? `<a href="${inMapUrl}" target="_blank" style="font-size:12px; margin-right:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 In Pin</a>` : ''}
-            ${outMapUrl ? `<a href="${outMapUrl}" target="_blank" style="font-size:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 Out Pin</a>` : ''}
+            ${inMapUrl ? `<a href="\${inMapUrl}" target="_blank" style="font-size:12px; margin-right:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 In Pin</a>` : ''}
+            ${outMapUrl ? `<a href="\${outMapUrl}" target="_blank" style="font-size:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 Out Pin</a>` : ''}
           </div>
         </td>
       </tr>`;
@@ -414,7 +418,7 @@ async function renderHistory() {
 async function renderAdmin() {
   try {
     const [users, settings] = await Promise.all([api('/admin/users'), api('/admin/settings')]);
-    const wrap = $('#admin-content');
+    const wrap = \$('#admin-content');
     if (!wrap) return;
 
     wrap.innerHTML = `
@@ -462,7 +466,7 @@ async function renderAdmin() {
         </table>
       </div>`;
 
-    const tbody = $('#admin-employees-table-body');
+    const tbody = \$('#admin-employees-table-body');
     if (tbody && Array.isArray(users)) {
       users.forEach((u) => {
         const tr = document.createElement('tr');
@@ -491,94 +495,5 @@ async function renderAdmin() {
       });
     }
 
-    $('#admin-settings-save').onclick = async () => {
-      const lat = parseFloat($('#admin-lat').value);
-      const lng = parseFloat($('#admin-lng').value);
-      const radius = parseInt($('#admin-radius').value);
-      try {
-        await api('/admin/settings', { method: 'PUT', body: { office_lat: lat, office_lng: lng, office_radius_m: radius } });
-        alert('Tracking center layout settings saved successfully.');
-      } catch (err) { alert(err.message); }
-    };
+    \$('#admin-settings-save').onclick = async () => {
 
-    $('#u-add').onclick = async () => {
-      const name = $('#u-name').value.trim();
-      const username = $('#u-username').value.trim();
-          const password = \$('#u-password').value.trim();
-    const role = \$('#u-role').value;
-
-    if (!name || !username || !password) return alert('Please complete all form fields.');
-
-    try {
-      await api('/admin/users', { method: 'POST', body: { name, username, password, role } });
-      alert('Employee profile generated successfully!');
-      renderAdmin(); 
-    } catch (err) { alert(err.message); }
-  };
-
-  \$('#btn-my-password').onclick = () => adminChangePassword(ME.id, ME.name);
-
-  } catch (err) {
-    console.error("Failed loading administrative template layers:", err);
-  }
-}
-
-// ================= MODAL DIALOG OPERATIONS CONTEXTS =================
-async function adminChangePassword(userId, userName) {
-  showModal(`
-    <h3>Modify Credentials for ${escapeHtml(userName)}</h3>
-    <div style="margin: 15px 0;">
-      <label style="display:block; margin-bottom:5px; font-weight:bold;">New Password</label>
-      <input id="adm-new-pass" type="password" placeholder="Enter new password (min 4 characters)" autofocus style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px;">
-    </div>
-    <div id="adm-pass-error" class="form-error" style="color:red; margin-bottom:10px; font-size:13px;"></div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" id="adm-pass-cancel">Cancel</button>
-      <button class="btn btn-primary" id="adm-pass-save">Update Password</button>
-    </div>
-  `);
-
-  \$('#adm-pass-cancel').onclick = closeModal;
-  
-  \$('#adm-pass-save').onclick = async () => {
-    const password = \$('#adm-new-pass').value.trim();
-    const errorEl = \$('#adm-pass-error');
-    if (errorEl) errorEl.textContent = '';
-
-    if (!password || password.length < 4) {
-      if (errorEl) errorEl.textContent = 'Password must be at least 4 characters long.';
-      return;
-    }
-
-    try {
-      await api(`/admin/users/${userId}/reset-password`, {
-        method: 'PUT',
-        body: { password }
-      });
-      closeModal();
-      alert(`Password for ${userName} updated successfully!`);
-      renderAdmin();
-    } catch (err) {
-      if (errorEl) errorEl.textContent = err.message;
-    }
-    };
-}
-
-async function adminRemoveUser(userId, userName) {
-  const confirmed = await confirmModal(
-    'Remove Employee?', 
-    `Are you sure you want to permanently drop "${userName}" from the application system databases?`,
-    'Remove User',
-    true
-  );
-  
-  if (!confirmed) return;
-
-  try {
-    await api(`/admin/users/${userId}`, { method: 'DELETE' });
-    alert('User dropped successfully from system registries.');
-    renderAdmin();
-  } catch (err) {
-    alert(err.message);
-  }
-}
