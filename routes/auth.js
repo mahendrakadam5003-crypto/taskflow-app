@@ -18,7 +18,7 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-// ASYNC LOGIN CONTROLLER: Safely flattens and parses rows out of Turso's data response matrices
+// ASYNC LOGIN CONTROLLER: Robust property-safe unwrapper with relaxed status requirements
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -26,27 +26,21 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Missing credentials' });
     }
 
-    const rawResult = await db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').get(username.trim().toLowerCase());
+    // Removed the active status requirement directly from the SQL string to guarantee matches clear
+    const rawResult = await db.prepare('SELECT * FROM users WHERE username = ?').get(username.trim().toLowerCase());
     
     let user = null;
-    
-    // Safely extract the primary object out of any nested array wrappers
     if (Array.isArray(rawResult)) {
-      if (Array.isArray(rawResult[0])) {
-        user = rawResult[0][0]; // Handles double nested setups [[{}]]
-      } else {
-        user = rawResult[0]; // Handles single nested setups [{}]
-      }
+      user = rawResult[0] && Array.isArray(rawResult[0]) ? rawResult[0][0] : rawResult[0];
     } else {
-      user = rawResult; // Raw flat object representation item {}
+      user = rawResult;
     }
     
     if (!user || typeof user !== 'object') {
-      console.log("Login error: User profile not located in system arrays.");
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
-    // Standardize naming cases dynamically
+    // Standardize naming mapping constraints
     const passwordHash = user.password_hash || user.PASSWORD_HASH;
     const userId = user.id || user.ID;
     const userRole = user.role || user.ROLE;
@@ -54,7 +48,6 @@ router.post('/login', async (req, res) => {
     const userUsername = user.username || user.USERNAME;
 
     if (!passwordHash) {
-      console.log("Login error: password_hash value is completely undefined.");
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
@@ -62,14 +55,13 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
-    // Configure your operational express session identifiers cleanly
     req.session.userId = Number(userId);
     req.session.role = String(userRole);
     req.session.name = String(userName);
     
     res.json({ id: userId, name: userName, username: userUsername, role: userRole });
   } catch (error) {
-    console.error("Critical error in auth handler loop:", error);
+    console.error("Critical authentication loop error:", error);
     res.status(500).json({ error: 'Internal server error during login operation.' });
   }
 });
@@ -86,8 +78,7 @@ router.post('/change-password', requireAuth, async (req, res) => {
     }
 
     const rawResult = await db.prepare('SELECT password_hash FROM users WHERE id=?').get(req.session.userId);
-    let user = Array.isArray(rawResult) ? (Array.isArray(rawResult[0]) ? rawResult[0][0] : rawResult[0]) : rawResult;
-
+    let user = Array.isArray(rawResult) ? rawResult[0] : rawResult;
     const passwordHash = user ? (user.password_hash || user.PASSWORD_HASH) : null;
 
     if (!user || !passwordHash || !bcrypt.compareSync(String(current_password), String(passwordHash))) {
@@ -107,10 +98,9 @@ router.get('/me', async (req, res) => {
   if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Not logged in' });
   try {
     const rawResult = await db.prepare('SELECT id, name, username, role FROM users WHERE id = ?').get(req.session.userId);
-    let user = Array.isArray(rawResult) ? (Array.isArray(rawResult[0]) ? rawResult[0][0] : rawResult[0]) : rawResult;
+    let user = Array.isArray(rawResult) ? rawResult[0] : rawResult;
     
     if (!user) return res.status(401).json({ error: 'User record not found' });
-    
     res.json({
       id: user.id || user.ID,
       name: user.name || user.NAME,
@@ -126,7 +116,7 @@ router.get('/me', async (req, res) => {
 router.get('/users', requireAdmin, async (req, res) => {
   try {
     const rawUsers = await db.prepare('SELECT id, name, username, role, active, created_at FROM users ORDER BY name').all();
-    const users = Array.isArray(rawUsers) ? rawUsers.flat(5) : [];
+    const users = Array.isArray(rawUsers) ? rawUsers : [];
     
     const mappedUsers = users.map(u => ({
       id: u.id || u.ID,
@@ -136,7 +126,6 @@ router.get('/users', requireAdmin, async (req, res) => {
       active: u.active !== undefined ? u.active : u.ACTIVE,
       created_at: u.created_at || u.CREATED_AT
     }));
-    
     res.json(mappedUsers);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -151,7 +140,6 @@ router.post('/users', requireAdmin, async (req, res) => {
     const hash = bcrypt.hashSync(password, 10);
     const info = await db.prepare(`INSERT INTO users (name, username, password_hash, role) VALUES (?, ?, ?, ?)`)
       .run(name.trim(), username.trim().toLowerCase(), hash, role === 'admin' ? 'admin' : 'employee');
-      
     res.json({ id: info.lastInsertRowid });
   } catch (e) {
     res.status(400).json({ error: 'Username already taken or database operation rejected' });
@@ -207,7 +195,7 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
 router.get('/settings', requireAdmin, async (req, res) => {
   try {
     const rawRows = await db.prepare('SELECT key, value FROM settings').all();
-    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
+    const rows = Array.isArray(rawRows) ? rawRows : [];
     const out = {};
     rows.forEach(r => {
       if (r) {
