@@ -4,7 +4,6 @@ const db = require('../db');
 
 const router = express.Router();
 
-// Helper middleware verification wrappers
 function requireAuth(req, res, next) {
   if (!req.session || !req.session.userId) {
     return res.status(401).json({ error: 'Not logged in' });
@@ -12,7 +11,6 @@ function requireAuth(req, res, next) {
   next();
 }
 
-// Fixed permission role comparison to align with database fields format mapping
 function requireAdmin(req, res, next) {
   if (!req.session || !req.session.userId || req.session.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
@@ -20,7 +18,7 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-// ASYNC LOGIN CONTROLLER: Extracts individual records accurately from arrays
+// ASYNC LOGIN CONTROLLER: Deeply flattens multi-nested responses from the driver wrapper
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -30,25 +28,37 @@ router.post('/login', async (req, res) => {
 
     const rawResult = await db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').get(username.trim().toLowerCase());
     
-    // Core adjustment layer: Extracts the primary single user entity out of the row array wrapper
-    const user = (Array.isArray(rawResult) && rawResult.length > 0) ? rawResult[0] : (rawResult && !Array.isArray(rawResult) ? rawResult : null);
+    // Deeply unwrap arrays to extract the flat object underneath
+    let user = rawResult;
+    while (Array.isArray(user) && user.length > 0) {
+      user = user[0];
+    }
     
-    if (!user || !user.password_hash) {
+    // If unwrapping leaves an empty array or null, no account matches
+    if (Array.isArray(user) || !user || typeof user !== 'object') {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
-    const inputPassword = String(password);
-    const storedHash = String(user.password_hash);
+    // Map properties from either lowercase or capital keys to stay compatible
+    const passwordHash = user.password_hash || user.PASSWORD_HASH;
+    const userId = user.id || user.ID;
+    const userRole = user.role || user.ROLE;
+    const userName = user.name || user.NAME;
+    const userUsername = user.username || user.USERNAME;
 
-    if (!bcrypt.compareSync(inputPassword, storedHash)) {
+    if (!passwordHash) {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
-    req.session.userId = Number(user.id);
-    req.session.role = String(user.role);
-    req.session.name = String(user.name);
+    if (!bcrypt.compareSync(String(password), String(passwordHash))) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    req.session.userId = Number(userId);
+    req.session.role = String(userRole);
+    req.session.name = String(userName);
     
-    res.json({ id: user.id, name: user.name, username: user.username, role: user.role });
+    res.json({ id: userId, name: userName, username: userUsername, role: userRole });
   } catch (error) {
     console.error("Authentication logic failure:", error);
     res.status(500).json({ error: 'Internal server error during login operation.' });
@@ -67,9 +77,12 @@ router.post('/change-password', requireAuth, async (req, res) => {
     }
 
     const rawResult = await db.prepare('SELECT password_hash FROM users WHERE id=?').get(req.session.userId);
-    const user = Array.isArray(rawResult) ? rawResult[0] : rawResult;
+    let user = rawResult;
+    while (Array.isArray(user) && user.length > 0) { user = user[0]; }
 
-    if (!user || !bcrypt.compareSync(String(current_password), String(user.password_hash))) {
+    const passwordHash = user ? (user.password_hash || user.PASSWORD_HASH) : null;
+
+    if (!user || !passwordHash || !bcrypt.compareSync(String(current_password), String(passwordHash))) {
       return res.status(401).json({ error: 'Current password is incorrect' });
     }
 
@@ -86,10 +99,17 @@ router.get('/me', async (req, res) => {
   if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Not logged in' });
   try {
     const rawResult = await db.prepare('SELECT id, name, username, role FROM users WHERE id = ?').get(req.session.userId);
-    const user = Array.isArray(rawResult) ? rawResult[0] : rawResult;
+    let user = rawResult;
+    while (Array.isArray(user) && user.length > 0) { user = user[0]; }
     
-    if (!user) return res.status(401).json({ error: 'User record not found' });
-    res.json(user);
+    if (!user || Array.isArray(user)) return res.status(401).json({ error: 'User record not found' });
+    
+    res.json({
+      id: user.id || user.ID,
+      name: user.name || user.NAME,
+      username: user.username || user.USERNAME,
+      role: user.role || user.ROLE
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -98,8 +118,20 @@ router.get('/me', async (req, res) => {
 // ---- Admin: user management endpoints ----
 router.get('/users', requireAdmin, async (req, res) => {
   try {
-    const users = await db.prepare('SELECT id, name, username, role, active, created_at FROM users ORDER BY name').all();
-    res.json(users);
+    const rawUsers = await db.prepare('SELECT id, name, username, role, active, created_at FROM users ORDER BY name').all();
+    // Flatten possible multi-nested array lists from the execute driver
+    const users = Array.isArray(rawUsers) ? rawUsers.flat(5) : [];
+    
+    const mappedUsers = users.map(u => ({
+      id: u.id || u.ID,
+      name: u.name || u.NAME,
+      username: u.username || u.USERNAME,
+      role: u.role || u.ROLE,
+      active: u.active !== undefined ? u.active : u.ACTIVE,
+      created_at: u.created_at || u.CREATED_AT
+    }));
+    
+    res.json(mappedUsers);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -120,7 +152,6 @@ router.post('/users', requireAdmin, async (req, res) => {
   }
 });
 
-// ROUTE TO RESET PASSWORDS VIA YOUR CUSTOM MODAL WINDOW PANEL
 router.put('/users/:id/reset-password', requireAdmin, async (req, res) => {
   try {
     const { password } = req.body;
@@ -167,14 +198,18 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
   }
 });
 
-// ---- Admin: office location settings endpoints ----
 router.get('/settings', requireAdmin, async (req, res) => {
   try {
-    const rows = await db.prepare('SELECT key, value FROM settings').all();
+    const rawRows = await db.prepare('SELECT key, value FROM settings').all();
+    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
     const out = {};
-    if (Array.isArray(rows)) {
-      rows.forEach(r => { if (r && r.key) out[r.key] = r.value; });
-    }
+    rows.forEach(r => {
+      if (r) {
+        const k = r.key || r.KEY;
+        const v = r.value || r.VALUE;
+        if (k) out[k] = v;
+      }
+    });
     res.json(out);
   } catch (err) {
     res.status(500).json({ error: err.message });
