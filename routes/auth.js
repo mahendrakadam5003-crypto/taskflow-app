@@ -18,7 +18,7 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-// ASYNC LOGIN CONTROLLER: Deeply flattens multi-nested responses from the driver wrapper
+// ASYNC LOGIN CONTROLLER: Correctly extracts user object fields from the driver rows array
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -28,18 +28,19 @@ router.post('/login', async (req, res) => {
 
     const rawResult = await db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').get(username.trim().toLowerCase());
     
-    // Deeply unwrap arrays to extract the flat object underneath
-    let user = rawResult;
-    while (Array.isArray(user) && user.length > 0) {
-      user = user[0];
+    // Unwraps the row correctly without any infinite loop traps
+    let user = null;
+    if (Array.isArray(rawResult) && rawResult.length > 0) {
+      user = rawResult[0];
+    } else if (rawResult && !Array.isArray(rawResult)) {
+      user = rawResult;
     }
     
-    // If unwrapping leaves an empty array or null, no account matches
-    if (Array.isArray(user) || !user || typeof user !== 'object') {
+    if (!user || typeof user !== 'object') {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
-    // Map properties from either lowercase or capital keys to stay compatible
+    // Handles both lower/uppercase keys safely from the database engine columns map
     const passwordHash = user.password_hash || user.PASSWORD_HASH;
     const userId = user.id || user.ID;
     const userRole = user.role || user.ROLE;
@@ -77,8 +78,7 @@ router.post('/change-password', requireAuth, async (req, res) => {
     }
 
     const rawResult = await db.prepare('SELECT password_hash FROM users WHERE id=?').get(req.session.userId);
-    let user = rawResult;
-    while (Array.isArray(user) && user.length > 0) { user = user[0]; }
+    let user = Array.isArray(rawResult) ? rawResult[0] : rawResult;
 
     const passwordHash = user ? (user.password_hash || user.PASSWORD_HASH) : null;
 
@@ -99,10 +99,9 @@ router.get('/me', async (req, res) => {
   if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Not logged in' });
   try {
     const rawResult = await db.prepare('SELECT id, name, username, role FROM users WHERE id = ?').get(req.session.userId);
-    let user = rawResult;
-    while (Array.isArray(user) && user.length > 0) { user = user[0]; }
+    let user = Array.isArray(rawResult) ? rawResult[0] : rawResult;
     
-    if (!user || Array.isArray(user)) return res.status(401).json({ error: 'User record not found' });
+    if (!user) return res.status(401).json({ error: 'User record not found' });
     
     res.json({
       id: user.id || user.ID,
@@ -119,8 +118,7 @@ router.get('/me', async (req, res) => {
 router.get('/users', requireAdmin, async (req, res) => {
   try {
     const rawUsers = await db.prepare('SELECT id, name, username, role, active, created_at FROM users ORDER BY name').all();
-    // Flatten possible multi-nested array lists from the execute driver
-    const users = Array.isArray(rawUsers) ? rawUsers.flat(5) : [];
+    const users = Array.isArray(rawUsers) ? rawUsers : [];
     
     const mappedUsers = users.map(u => ({
       id: u.id || u.ID,
@@ -201,7 +199,7 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
 router.get('/settings', requireAdmin, async (req, res) => {
   try {
     const rawRows = await db.prepare('SELECT key, value FROM settings').all();
-    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
+    const rows = Array.isArray(rawRows) ? rawRows : [];
     const out = {};
     rows.forEach(r => {
       if (r) {
