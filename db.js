@@ -28,6 +28,7 @@ const dbDriverInterface = {
       get: async (...params) => {
         try {
           const res = await db.execute({ sql, args: params });
+          // FIXED: Safely returns the single first object row item [0] instead of the whole array wrapper list
           return res.rows && res.rows.length > 0 ? res.rows[0] : null;
         } catch(err) { console.error("Driver GET error:", err.message); return null; }
       },
@@ -142,7 +143,7 @@ const dbDriverInterface = {
         await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN image_path TEXT');
         console.log('Migrated: added comments.image_path column');
       } catch (colErr) {
-        // dynamic handling lock pass
+        // pass
       }
     }
 
