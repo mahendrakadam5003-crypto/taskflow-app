@@ -4,23 +4,25 @@ const { Database } = require('@libsql/sqlite3');
 
 let db;
 
-// Safe, optimized fallback wrapper path string mapping
-const dbFilePath = path.join(__dirname, 'taskflow.db');
+// 1. Get absolute file path matching native platforms
+const rawPath = path.resolve(__dirname, 'taskflow.db');
+
+// 2. Format it into a clean, compliant local URI string to pass driver constraints
+const localDbUrl = rawPath.startsWith('/') ? `file://${rawPath}` : `file:///${rawPath.replace(/\\/g, '/')}`;
 
 if (process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN) {
   try {
-    // Explicit syntax block to satisfy all libSQL version configuration structures
-    db = new Database(dbFilePath, {
+    db = new Database(localDbUrl, {
       syncUrl: process.env.TURSO_DATABASE_URL.trim(),
       authToken: process.env.TURSO_AUTH_TOKEN.trim()
     });
     console.log("☁️ Connected to Turso Cloud SQLite Replication Engine.");
   } catch (err) {
     console.error("Cloud connection initialization failed, trying clean fallback:", err.message);
-    db = new Database(dbFilePath);
+    db = new Database(localDbUrl);
   }
 } else {
-  db = new Database(dbFilePath);
+  db = new Database(localDbUrl);
   console.log("💻 Connected to Local PC SQLite File.");
 }
 
@@ -102,7 +104,6 @@ CREATE TABLE IF NOT EXISTS attendance (
 `);
 
 // Async-safe Boot Seeding Operations Block
-// Project creators/admins retain access; existing projects are seeded for their creator.
 (async function initializeDatabaseScripts() {
   try {
     // 1. Column Migration Checks
