@@ -12,9 +12,13 @@ const { requireAuth, requireAdmin } = require('./auth');
 const router = express.Router();
 router.use(requireAuth);
 
-// ---- UNLIMITED STORAGE PLATFORM CONFIGURATION (VERIFIED) ----
-const TELEGRAM_TOKEN = "8892731667:AAESv4N-8E5mSwQKZ-OvDyCDpTFyAAIY4MU"; 
-const CHANNEL_ID = "-1003299962777"; 
+// ---- File storage config ----
+// Attachments are relayed through a Telegram bot/channel as free file storage.
+// Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID in the environment to enable
+// uploads/downloads; without them, those two endpoints return a clear error
+// instead of silently failing.
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
+const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || null;
 
 // Hold incoming streams in memory RAM temporarily instead of writing to Local Disk
 const upload = multer({
@@ -22,19 +26,23 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // Fully supports mixed documents up to 50MB
 });
 
-function canAccessProject(projectId, userId, admin = false) {
+async function canAccessProject(projectId, userId, admin = false) {
   if (admin) return true;
-  return !!db.prepare(`SELECT 1 FROM projects p LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=? WHERE p.id=? AND (p.created_by=? OR pm.user_id=?)`).get(userId, projectId, userId, userId);
+  return !!(await db.prepare(`SELECT 1 FROM projects p LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=? WHERE p.id=? AND (p.created_by=? OR pm.user_id=?)`).get(userId, projectId, userId, userId));
 }
-function canAccessTask(taskId, userId, admin = false) {
+async function canAccessTask(taskId, userId, admin = false) {
   if (admin) return true;
-  const row = db.prepare('SELECT project_id FROM tasks WHERE id=?').get(taskId);
-  return row && canAccessProject(row.project_id, userId, false);
+  const row = await db.prepare('SELECT project_id FROM tasks WHERE id=?').get(taskId);
+  return row && (await canAccessProject(row.project_id, userId, false));
 }
-function requireProjectAccess(req, res, next) {
-  const id = Number(req.params.id);
-  if (!canAccessProject(id, req.session.userId, req.session.role === 'admin')) return res.status(403).json({ error: 'You are not a member of this project' });
-  next();
+async function requireProjectAccess(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    if (!(await canAccessProject(id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You are not a member of this project' });
+    next();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 }
 
 // ---- AUTOMATED UNLIMITED ATTACHMENT MANAGER ----
@@ -42,6 +50,9 @@ function requireProjectAccess(req, res, next) {
 // 1. Production Upload Controller Route
 router.post('/upload', upload.single('file'), async (req, res) => {
   try {
+    if (!TELEGRAM_TOKEN || !CHANNEL_ID) {
+      return res.status(503).json({ error: 'File storage is not configured (missing TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID).' });
+    }
     if (!req.file) return res.status(400).json({ error: "No file provided" });
 
     const form = new FormData();
@@ -51,9 +62,8 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       contentType: req.file.mimetype
     });
 
-    // Fixed API endpoints syntax structure completely
     const telegramRes = await axios.post(
-      `https://telegram.org{TELEGRAM_TOKEN}/sendDocument`,
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendDocument`,
       form,
       { headers: form.getHeaders(), maxContentLength: Infinity, maxBodyLength: Infinity }
     );
@@ -74,12 +84,15 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 // 2. Production Download/Fetch Controller Route
 router.get('/download/:fileId', async (req, res) => {
   try {
+    if (!TELEGRAM_TOKEN) {
+      return res.status(503).json({ error: 'File storage is not configured (missing TELEGRAM_BOT_TOKEN).' });
+    }
     const { fileId } = req.params;
 
-    const fileInfoRes = await axios.get(`https://telegram.org{TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
+    const fileInfoRes = await axios.get(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
     const filePath = fileInfoRes.data.result.file_path;
 
-    const fileUrl = `https://telegram.org{TELEGRAM_TOKEN}/${filePath}`;
+    const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;
     const response = await axios({ method: 'get', url: fileUrl, responseType: 'stream' });
 
     res.setHeader('Content-Disposition', `attachment; filename="file"`);
@@ -91,101 +104,124 @@ router.get('/download/:fileId', async (req, res) => {
 });
 
 // ---- Projects / collaboration ----
-router.get('/projects', (req, res) => {
-  const admin = req.session.role === 'admin';
-  const rows = admin
-    ? db.prepare('SELECT id,name,created_at,(pin_hash IS NOT NULL) AS locked FROM projects ORDER BY created_at').all()
-    : db.prepare(`SELECT DISTINCT p.id,p.name,p.created_at,(p.pin_hash IS NOT NULL) AS locked FROM projects p LEFT JOIN project_members pm ON pm.project_id=p.id WHERE p.created_by=? OR pm.user_id=? ORDER BY p.created_at`).all(req.session.userId, req.session.userId);
-  res.json(rows);
+router.get('/projects', async (req, res) => {
+  try {
+    const admin = req.session.role === 'admin';
+    const rows = admin
+      ? await db.prepare('SELECT id,name,created_at,(pin_hash IS NOT NULL) AS locked FROM projects ORDER BY created_at').all()
+      : await db.prepare(`SELECT DISTINCT p.id,p.name,p.created_at,(p.pin_hash IS NOT NULL) AS locked FROM projects p LEFT JOIN project_members pm ON pm.project_id=p.id WHERE p.created_by=? OR pm.user_id=? ORDER BY p.created_at`).all(req.session.userId, req.session.userId);
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/projects', (req, res) => {
-  const { name, pin, member_ids = [] } = req.body;
-  if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
-  const pinHash = pin ? bcrypt.hashSync(String(pin), 10) : null;
-  const info = db.prepare('INSERT INTO projects (name,pin_hash,created_by) VALUES (?,?,?)').run(name.trim(), pinHash, req.session.userId);
-  db.prepare('INSERT OR IGNORE INTO project_members (project_id,user_id) VALUES (?,?)').run(info.lastInsertRowid, req.session.userId);
-  const ids = Array.isArray(member_ids) ? member_ids : [];
-  const add = db.prepare('INSERT OR IGNORE INTO project_members (project_id,user_id) VALUES (?,?)');
-  for (const id of ids) if (Number(id) !== req.session.userId) add.run(info.lastInsertRowid, Number(id));
-  res.json({ id: info.lastInsertRowid });
+router.post('/projects', async (req, res) => {
+  try {
+    const { name, pin, member_ids = [] } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
+    const pinHash = pin ? bcrypt.hashSync(String(pin), 10) : null;
+    const info = await db.prepare('INSERT INTO projects (name,pin_hash,created_by) VALUES (?,?,?)').run(name.trim(), pinHash, req.session.userId);
+    await db.prepare('INSERT OR IGNORE INTO project_members (project_id,user_id) VALUES (?,?)').run(info.lastInsertRowid, req.session.userId);
+    const ids = Array.isArray(member_ids) ? member_ids : [];
+    const add = db.prepare('INSERT OR IGNORE INTO project_members (project_id,user_id) VALUES (?,?)');
+    for (const id of ids) if (Number(id) !== req.session.userId) await add.run(info.lastInsertRowid, Number(id));
+    res.json({ id: info.lastInsertRowid });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/projects/:id/members', requireProjectAccess, (req, res) => {
-  res.json(db.prepare(`SELECT u.id,u.name,u.username,u.role FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project_id=? ORDER BY u.name`).all(req.params.id));
+router.get('/projects/:id/members', requireProjectAccess, async (req, res) => {
+  try {
+    res.json(await db.prepare(`SELECT u.id,u.name,u.username,u.role FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project_id=? ORDER BY u.name`).all(req.params.id));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/projects/:id/members', (req, res) => {
-  const projectAccess = db.prepare('SELECT created_by FROM projects WHERE id=?').get(req.params.id);
-  if (!projectAccess || (req.session.role !== 'admin' && Number(projectAccess.created_by) !== req.session.userId)) return res.status(403).json({ error: 'Only the project creator or admin can manage members' });
-  const ids = Array.isArray(req.body.user_ids) ? req.body.user_ids.map(Number).filter(Boolean) : [];
-  const project = db.prepare('SELECT created_by FROM projects WHERE id=?').get(req.params.id);
-  if (!project) return res.status(404).json({ error: 'Not found' });
-  ids.push(Number(project.created_by));
-  db.prepare('DELETE FROM project_members WHERE project_id=?').run(req.params.id);
-  const add = db.prepare('INSERT OR IGNORE INTO project_members (project_id,user_id) VALUES (?,?)');
-  for (const id of ids) add.run(req.params.id, id);
-  res.json({ ok: true });
+router.put('/projects/:id/members', async (req, res) => {
+  try {
+    const projectAccess = await db.prepare('SELECT created_by FROM projects WHERE id=?').get(req.params.id);
+    if (!projectAccess || (req.session.role !== 'admin' && Number(projectAccess.created_by) !== req.session.userId)) return res.status(403).json({ error: 'Only the project creator or admin can manage members' });
+    const ids = Array.isArray(req.body.user_ids) ? req.body.user_ids.map(Number).filter(Boolean) : [];
+    ids.push(Number(projectAccess.created_by));
+    await db.prepare('DELETE FROM project_members WHERE project_id=?').run(req.params.id);
+    const add = db.prepare('INSERT OR IGNORE INTO project_members (project_id,user_id) VALUES (?,?)');
+    for (const id of ids) await add.run(req.params.id, id);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/projects/:id/unlock', requireProjectAccess, (req, res) => {
-  const project = db.prepare('SELECT * FROM projects WHERE id=?').get(req.params.id);
-  if (!project) return res.status(404).json({ error: 'Not found' });
-  if (!project.pin_hash || bcrypt.compareSync(String(req.body.pin || ''), project.pin_hash)) return res.json({ ok: true });
-  res.status(401).json({ error: 'Wrong PIN' });
+router.post('/projects/:id/unlock', requireProjectAccess, async (req, res) => {
+  try {
+    const project = await db.prepare('SELECT * FROM projects WHERE id=?').get(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Not found' });
+    if (!project.pin_hash || bcrypt.compareSync(String(req.body.pin || ''), project.pin_hash)) return res.json({ ok: true });
+    res.status(401).json({ error: 'Wrong PIN' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.delete('/projects/:id', requireAdmin, (req, res) => { db.prepare('DELETE FROM projects WHERE id=?').run(req.params.id); res.json({ ok: true }); });
+router.delete('/projects/:id', requireAdmin, async (req, res) => {
+  try {
+    await db.prepare('DELETE FROM projects WHERE id=?').run(req.params.id);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // ---- Tasks ----
-router.get('/projects/:id/tasks', requireProjectAccess, (req, res) => {
-  const assignee = String(req.query.assignee_id || '').trim();
-  let sql = `SELECT t.*,u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? AND t.status='open'`;
-  const params = [req.params.id];
-  if (assignee && assignee !== 'all') { sql += ' AND t.assignee_id=?'; params.push(Number(assignee)); }
-  sql += ' ORDER BY t.position,t.created_at';
-  res.json(db.prepare(sql).all(...params));
+router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
+  try {
+    const assignee = String(req.query.assignee_id || '').trim();
+    let sql = `SELECT t.*,u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? AND t.status='open'`;
+    const params = [req.params.id];
+    if (assignee && assignee !== 'all') { sql += ' AND t.assignee_id=?'; params.push(Number(assignee)); }
+    sql += ' ORDER BY t.position,t.created_at';
+    res.json(await db.prepare(sql).all(...params));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/my-tasks', (req, res) => {
-  const userId = req.session.userId;
-  const sql = `SELECT t.id,t.project_id,t.title,t.description,t.assignee_id,t.due_date,t.status,t.position,t.created_at,
-      p.name AS project_name,u.name AS assignee_name
-    FROM tasks t JOIN projects p ON p.id=t.project_id
-    LEFT JOIN users u ON u.id=t.assignee_id
-    LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=?
-    WHERE t.assignee_id=? AND t.status='open' AND (p.created_by=? OR pm.user_id=? OR ?=1)
-    ORDER BY CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END, t.due_date, t.created_at`;
-  res.json(db.prepare(sql).all(userId, userId, userId, userId, req.session.role === 'admin' ? 1 : 0));
+router.get('/my-tasks', async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const sql = `SELECT t.id,t.project_id,t.title,t.description,t.assignee_id,t.due_date,t.status,t.position,t.created_at,
+        p.name AS project_name,u.name AS assignee_name
+      FROM tasks t JOIN projects p ON p.id=t.project_id
+      LEFT JOIN users u ON u.id=t.assignee_id
+      LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=?
+      WHERE t.assignee_id=? AND t.status='open' AND (p.created_by=? OR pm.user_id=? OR ?=1)
+      ORDER BY CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END, t.due_date, t.created_at`;
+    res.json(await db.prepare(sql).all(userId, userId, userId, userId, req.session.role === 'admin' ? 1 : 0));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/tasks/search', (req, res) => {
-  const q = String(req.query.q || '').trim();
-  if (!q) return res.json([]);
-  const like = `%${q}%`, admin = req.session.role === 'admin';
-  const sql = `SELECT t.id,t.project_id,t.title,t.status,t.due_date,p.name AS project_name,u.name AS assignee_name
-    FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN users u ON u.id=t.assignee_id
-    LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=?
-    WHERE (t.title LIKE ? OR t.description LIKE ?) AND (p.created_by=? OR pm.user_id=? OR ?=1)
-    ORDER BY CASE WHEN t.status='open' THEN 0 ELSE 1 END,t.created_at DESC LIMIT 20`;
-  res.json(db.prepare(sql).all(req.session.userId, like, like, req.session.userId, req.session.userId, admin ? 1 : 0));
+router.get('/tasks/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.json([]);
+    const like = `%${q}%`, admin = req.session.role === 'admin';
+    const sql = `SELECT t.id,t.project_id,t.title,t.status,t.due_date,p.name AS project_name,u.name AS assignee_name
+      FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN users u ON u.id=t.assignee_id
+      LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=?
+      WHERE (t.title LIKE ? OR t.description LIKE ?) AND (p.created_by=? OR pm.user_id=? OR ?=1)
+      ORDER BY CASE WHEN t.status='open' THEN 0 ELSE 1 END,t.created_at DESC LIMIT 20`;
+    res.json(await db.prepare(sql).all(req.session.userId, like, like, req.session.userId, req.session.userId, admin ? 1 : 0));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/projects/:id/tasks', requireProjectAccess, (req, res) => {
-  const { title, assignee_id, due_date } = req.body;
-  if (!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
-  if (assignee_id && !canAccessProject(req.params.id, Number(assignee_id), false)) return res.status(400).json({ error: 'Assignee must be a project member' });
-  const info = db.prepare('INSERT INTO tasks(project_id,title,assignee_id,due_date) VALUES(?,?,?,?)').run(req.params.id, title.trim(), assignee_id || null, due_date || null);
-  res.json({ id: info.lastInsertRowid });
+router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
+  try {
+    const { title, assignee_id, due_date } = req.body;
+    if (!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
+    if (assignee_id && !(await canAccessProject(req.params.id, Number(assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
+    const info = await db.prepare('INSERT INTO tasks(project_id,title,assignee_id,due_date) VALUES(?,?,?,?)').run(req.params.id, title.trim(), assignee_id || null, due_date || null);
+    res.json({ id: info.lastInsertRowid });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/tasks/:id', (req, res) => {
-  if (!canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin')) return res.status(403).json({ error: 'You do not have access to this task' });
-  const task = db.prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id); 
-  if (!task) return res.status(404).json({ error: 'Not found' });
-  task.subtasks = db.prepare('SELECT * FROM subtasks WHERE task_id=? ORDER BY position').all(task.id);
-  task.comments = db.prepare('SELECT c.*,u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE task_id=? ORDER BY c.created_at').all(task.id);
-  res.json(task);
+router.get('/tasks/:id', async (req, res) => {
+  try {
+    if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
+    const task = await db.prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Not found' });
+    task.subtasks = await db.prepare('SELECT * FROM subtasks WHERE task_id=? ORDER BY position').all(task.id);
+    task.comments = await db.prepare('SELECT c.*,u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE task_id=? ORDER BY c.created_at').all(task.id);
+    res.json(task);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 module.exports = router;
