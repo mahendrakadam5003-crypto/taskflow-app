@@ -249,7 +249,7 @@ function renderProjectList() {
 const btnNewProject = $('#btn-new-project');
 if (btnNewProject) {
   btnNewProject.addEventListener('click', () => {
-    showModal suicide(`
+    showModal(`
       <h3>New project</h3>
       <input id="np-name" placeholder="Project name" autofocus>
       <input id="np-pin" placeholder="Optional PIN (leave blank for none)" type="text" inputmode="numeric">
@@ -392,7 +392,7 @@ async function renderLiveList() {
       <tr style="border-bottom: 1px solid #eee;">
         <td style="padding:10px;"><b>${escapeHtml(r.user_name || r.USER_NAME)}</b></td>
         <td style="padding:10px;">${fmtTime(r.punch_in || r.PUNCH_IN)}</td>
-        <td style="padding:10px;"><a href="https://google.com{r.in_lat || r.IN_LAT},${r.in_lng || r.IN_LNG}" target="_blank" class="map-link" style="color:#007bff; text-decoration:none; font-weight:bold;">🗺️ View Live Site</a></td>
+        <td style="padding:10px;"><a href="https://www.google.com/maps?q=${r.in_lat || r.IN_LAT},${r.in_lng || r.IN_LNG}" target="_blank" class="map-link" style="color:#007bff; text-decoration:none; font-weight:bold;">🗺️ View Live Site</a></td>
       </tr>
     `).join('');
   } catch (err) { console.error(err); }
@@ -414,8 +414,8 @@ async function renderHistory() {
       const outLat = r.out_lat || r.OUT_LAT;
       const outLng = r.out_lng || r.OUT_LNG;
       
-      const inMapUrl = inLat ? `https://google.com{inLat},${inLng}` : null;
-      const outMapUrl = outLat ? `https://google.com{outLat},${outLng}` : null;
+      const inMapUrl = inLat ? `https://www.google.com/maps?q=${inLat},${inLng}` : null;
+      const outMapUrl = outLat ? `https://www.google.com/maps?q=${outLat},${outLng}` : null;
       return `
       <tr style="border-bottom: 1px solid #eee;">
         <td style="padding:10px;">${fmtDate(r.date || r.DATE)}</td>
@@ -502,29 +502,29 @@ async function renderAdmin() {
         tr.innerHTML = `
           <td style="padding:10px;"><b>${escapeHtml(u.name || u.NAME)}</b></td>
           <td style="padding:10px;">${escapeHtml(u.username || u.USERNAME)}</td>
-\${escapeHtml(u.role || u.ROLE)}</span></td>
-          <td style="padding:10px;"><span class="badge" style="background:#c8e6c9; color:#25602a; padding:4px 8px; border-radius:4px; font-size:12px;">\${u.active || u.ACTIVE ? 'Active' : 'Disabled'}</span></td>
-          <td style="padding:10px;">\${actionsHtml}</td>
+          <td style="padding:10px;"><span class="badge" style="background:#e3f2fd; color:#0d47a1; padding:4px 8px; border-radius:4px; font-size:12px;">${escapeHtml(u.role || u.ROLE)}</span></td>
+          <td style="padding:10px;"><span class="badge" style="background:#c8e6c9; color:#25602a; padding:4px 8px; border-radius:4px; font-size:12px;">${u.active || u.ACTIVE ? 'Active' : 'Disabled'}</span></td>
+          <td style="padding:10px;">${actionsHtml}</td>
         `;
         tbody.appendChild(tr);
       });
     }
 
-    \$('#admin-settings-save').onclick = async () => {
-      const lat = parseFloat(\$('#admin-lat').value);
-      const lng = parseFloat(\$('#admin-lng').value);
-      const radius = parseInt(\$('#admin-radius').value);
+    $('#admin-settings-save').onclick = async () => {
+      const lat = parseFloat($('#admin-lat').value);
+      const lng = parseFloat($('#admin-lng').value);
+      const radius = parseInt($('#admin-radius').value);
       try {
         await api('/admin/settings', { method: 'PUT', body: { office_lat: lat, office_lng: lng, office_radius_m: radius } });
         alert('Tracking center settings saved successfully.');
       } catch (err) { alert(err.message); }
     };
 
-    \$('#u-add').onclick = async () => {
-      const name = \$('#u-name').value.trim();
-      const username = \$('#u-username').value.trim();
-      const password = \$('#u-password').value.trim();
-      const role = \$('#u-role').value;
+    $('#u-add').onclick = async () => {
+      const name = $('#u-name').value.trim();
+      const username = $('#u-username').value.trim();
+      const password = $('#u-password').value.trim();
+      const role = $('#u-role').value;
 
       if (!name || !username || !password) return alert('Please complete all form fields.');
 
@@ -535,7 +535,7 @@ async function renderAdmin() {
       } catch (err) { alert(err.message); }
     };
 
-    \$('#btn-my-password').onclick = () => adminChangePassword(ME.id, ME.name);
+    $('#btn-my-password').onclick = () => adminChangePassword(ME.id, ME.name);
 
   } catch (err) {
     console.error("Failed loading administrative template layers:", err);
@@ -557,11 +557,11 @@ async function adminChangePassword(userId, userName) {
     </div>
   `);
 
-  \$('#adm-pass-cancel').onclick = closeModal;
+  $('#adm-pass-cancel').onclick = closeModal;
   
-  \$('#adm-pass-save').onclick = async () => {
-    const password = \$('#adm-new-pass').value.trim();
-    const errorEl = \$('#adm-pass-error');
+  $('#adm-pass-save').onclick = async () => {
+    const password = $('#adm-new-pass').value.trim();
+    const errorEl = $('#adm-pass-error');
     if (errorEl) errorEl.textContent = '';
 
     if (!password || password.length < 4) {
