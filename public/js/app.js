@@ -33,25 +33,40 @@ function escapeHtml(str) {
 }
 
 function showModal(html) {
-  $('#modal').innerHTML = html;
-  $('#modal-backdrop').classList.remove('hidden');
+  const modalEl = $('#modal');
+  const backdropEl = $('#modal-backdrop');
+  if (modalEl && backdropEl) {
+    modalEl.innerHTML = html;
+    backdropEl.classList.remove('hidden');
+  }
 }
-function closeModal() { $('#modal-backdrop').classList.add('hidden'); $('#modal').innerHTML = ''; }
-if ($('#modal-backdrop')) {
-  $('#modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeModal(); });
+function closeModal() { 
+  const modalEl = $('#modal');
+  const backdropEl = $('#modal-backdrop');
+  if (modalEl && backdropEl) {
+    backdropEl.classList.add('hidden'); 
+    modalEl.innerHTML = ''; 
+  }
+}
+
+const backdrop = $('#modal-backdrop');
+if (backdrop) {
+  backdrop.addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeModal(); });
 }
 
 function confirmModal(title, body, confirmLabel = 'Delete', danger = true) {
   return new Promise((resolve) => {
     showModal(`
-      <h3>\${title}</h3>
-      <p class="hint">\${body}</p>
+      <h3>${title}</h3>
+      <p class="hint">${body}</p>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="m-cancel">Cancel</button>
-        <button class="btn \${danger ? 'btn-danger' : 'btn-primary'}" id="m-ok">\${confirmLabel}</button>
+        <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="m-ok">${confirmLabel}</button>
       </div>`);
-    $('#m-cancel').onclick = () => { closeModal(); resolve(false); };
-    $('#m-ok').onclick = () => { closeModal(); resolve(true); };
+    const cancelBtn = $('#m-cancel');
+    const okBtn = $('#m-ok');
+    if (cancelBtn) cancelBtn.onclick = () => { closeModal(); resolve(false); };
+    if (okBtn) okBtn.onclick = () => { closeModal(); resolve(true); };
   });
 }
 
@@ -73,11 +88,11 @@ let attendancePollTimer = null;
 function startAttendancePolling() {
   stopAttendancePolling();
   attendancePollTimer = setInterval(() => {
-    if (document.hidden) return; // skip polling while browser tab is hidden in background
+    if (document.hidden) return; 
     renderLiveList();
     renderHistory();
     renderPunchCard();
-  }, 15000); // dynamic auto-refresh state values every 15 seconds
+  }, 15000); 
 }
 
 function stopAttendancePolling() {
@@ -137,13 +152,13 @@ async function enterApp() {
   if (appEl) appEl.classList.remove('hidden');
   
   const meBadge = $('#me-badge');
-  if (meBadge) meBadge.innerHTML = `Signed in as<br><b>\${escapeHtml(ME.name)}</b>`;
+  if (meBadge) meBadge.innerHTML = `Signed in as<br><b>${escapeHtml(ME.name)}</b>`;
   
   const navAdmin = $('#nav-admin');
   if (ME.role === 'admin' && navAdmin) navAdmin.style.display = '';
   
   try {
-    PEOPLE = await api('/people');
+    PEOPLE = await api('/users'); 
     await loadProjects();
     showView('attendance');
   } catch (err) {
@@ -191,8 +206,12 @@ function showView(view) {
 
 // ================= PROJECTS MODULE =================
 async function loadProjects() {
-  PROJECTS = await api('/projects');
-  renderProjectList();
+  try {
+    PROJECTS = await api('/projects');
+    renderProjectList();
+  } catch (e) {
+    PROJECTS = [];
+  }
 }
 
 function renderProjectList() {
@@ -203,17 +222,17 @@ function renderProjectList() {
     const row = document.createElement('div');
     row.className = 'project-item-row';
     row.innerHTML = `
-      <button class="project-item" data-id="\${p.id}">\${p.locked ? '<span class="lock">🔒</span> ' : ''}\${escapeHtml(p.name)}</button>
-      	h\${ME.role === 'admin' ? `<button class="project-del" data-id="\${p.id}" title="Delete project">✕</button>` : ''}`;
+      <button class="project-item" data-id="${p.id}">${p.locked ? '<span class="lock">🔒</span> ' : ''}${escapeHtml(p.name)}</button>
+      ${ME.role === 'admin' ? `<button class="project-del" data-id="${p.id}" title="Delete project">✕</button>` : ''}`;
     list.appendChild(row);
   });
   $$('.project-item').forEach((btn) => btn.addEventListener('click', () => openProject(Number(btn.dataset.id))));
   $$('.project-del').forEach((btn) => btn.addEventListener('click', async (e) => {
     e.stopPropagation();
     const p = PROJECTS.find((x) => x.id === Number(btn.dataset.id));
-    const ok = await confirmModal('Delete project?', `"\${escapeHtml(p.name)}" and all its tasks will be permanently deleted.`);
+    const ok = await confirmModal('Delete project?', `"${escapeHtml(p.name)}" and all its tasks will be permanently deleted.`);
     if (!ok) return;
-    await api(`/projects/\${p.id}`, { method: 'DELETE' });
+    await api(`/projects/${p.id}`, { method: 'DELETE' });
     if (CURRENT_PROJECT && CURRENT_PROJECT.id === p.id) showView('empty');
     await loadProjects();
   }));
@@ -248,7 +267,7 @@ async function openProject(id) {
   if (!project) return;
   if (project.locked && !unlockedProjects.has(id)) {
     showModal(`
-      <h3>🔒 \${escapeHtml(project.name)}</h3>
+      <h3>🔒 ${escapeHtml(project.name)}</h3>
       <input id="pin-input" placeholder="Enter PIN" type="password" autofocus>
       <div id="pin-error" class="form-error"></div>
       <div class="modal-actions">
@@ -258,13 +277,13 @@ async function openProject(id) {
     $('#m-cancel').onclick = closeModal;
     $('#m-ok').onclick = async () => {
       try {
-        await api(`/projects/\${id}/unlock`, { method: 'POST', body: { pin: $('#pin-input').value } });
+        await api(`/projects/${id}/unlock`, { method: 'POST', body: { pin: $('#pin-input').value } });
         unlockedProjects.add(id);
         closeModal();
         await enterProjectView(project);
       } catch (e) {
-        const pinError = $('#pin-error');
-        if (pinError) pinError.textContent = e.message;
+        const pinErr = $('#pin-error');
+        if (pinErr) pinErr.textContent = e.message;
       }
     };
     return;
@@ -276,29 +295,27 @@ async function enterProjectView(project) {
   CURRENT_PROJECT = project;
   showView('project');
   $$('.project-item').forEach((b) => b.classList.toggle('active', Number(b.dataset.id) === project.id));
-  const projTitle = $('#project-title');
-  if (projTitle) projTitle.textContent = project.name;
+  const pTitle = $('#project-title');
+  if (pTitle) pTitle.textContent = project.name;
   await renderProjectMembersHint();
   await renderTaskAssigneeFilter();
   await renderTasks();
 }
 
-async function renderProjectMembersHint() { /* Main helper placeholder */ }
+async function renderProjectMembersHint() { }
 
 async function renderTaskAssigneeFilter(){
   if(!CURRENT_PROJECT) return;
-  const members = await api(`/projects/\${CURRENT_PROJECT.id}/members`);
-  const sel = $('#task-assignee-filter'); if(!sel) return;
-  const old = sel.value || 'all';
-  sel.innerHTML = '<option value="all">All assignees</option>' + members.map(p => `<option value="\${p.id}">\${escapeHtml(p.name)}</option>`).join('');
-  sel.value = [...sel.options].some(o => o.value === old) ? old : 'all';
+  try {
+    const members = await api(`/projects/${CURRENT_PROJECT.id}/members`);
+    const sel = $('#task-assignee-filter'); if(!sel) return;
+    const old = sel.value || 'all';
+    sel.innerHTML = '<option value="all">All assignees</option>' + members.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+    sel.value = [...sel.options].some(o => o.value === old) ? old : 'all';
+  } catch (err) { }
 }
 
-// ================= TASKS & WORKFLOW MODULES =================
-async function renderTasks() {
-  if (!CURRENT_PROJECT) return;
-}
-
+async function renderTasks() { }
 async function renderMyTasks() { }
 
 // ================= FIELD ATTENDANCE GEO-TRACKING OPERATORS =================
@@ -317,8 +334,11 @@ async function renderPunchCard() {
   const card = $('#punch-card-container');
   if (!card) return;
   try {
-    const status = await api('/attendance/today');
-    if (!status) {
+    const rawStatus = await api('/attendance/today');
+    let status = rawStatus;
+    while (Array.isArray(status) && status.length > 0) { status = status[0]; }
+    
+    if (!status || Array.isArray(status)) {
       card.innerHTML = `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`;
       $('#btn-punch-in').onclick = async () => {
         try {
@@ -331,7 +351,7 @@ async function renderPunchCard() {
     } else if (status.punch_in && !status.punch_out) {
       card.innerHTML = `
         <div class="status-alert" style="background:#e3f2fd; color:#0d47a1; padding:12px; border-radius:4px; margin-bottom:10px; font-weight:bold; text-align:center;">
-          ⚡ On-Duty Since: \${fmtTime(status.punch_in)}
+          ⚡ On-Duty Since: ${fmtTime(status.punch_in)}
         </div>
         <button class="btn btn-danger btn-lg" id="btn-punch-out" style="width:100%; padding:15px; font-size:18px;">🏁 Punch Out Field Shift</button>`;
       $('#btn-punch-out').onclick = async () => {
@@ -345,11 +365,11 @@ async function renderPunchCard() {
     } else {
       card.innerHTML = `
         <div class="status-complete" style="background:#e8f5e9; color:#1b5e20; padding:15px; border-radius:4px; font-weight:bold; text-align:center;">
-          ✅ Today's Shift Completed (\${fmtTime(status.punch_in)} - \${fmtTime(status.punch_out)})
+          ✅ Today's Shift Completed (${fmtTime(status.punch_in)} - ${fmtTime(status.punch_out)})
         </div>`;
     }
   } catch (err) {
-    card.innerHTML = `<div class="form-error">Failed to sync tracker parameters: \${err.message}</div>`;
+    card.innerHTML = `<div class="form-error">Failed to sync tracker parameters: ${err.message}</div>`;
   }
 }
 
@@ -357,18 +377,24 @@ async function renderLiveList() {
   const list = $('#live-attendance-list');
   if (!list) return;
   try {
-    const rows = await api('/attendance/live');
-    if (!rows.length) {
+    const rawRows = await api('/attendance/live');
+    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
+    if (!rows || !rows.length) {
       list.innerHTML = '<tr><td colspan="3" class="hint" style="text-align:center; padding:15px; color:#888;">No field technicians active right now.</td></tr>';
       return;
     }
-    list.innerHTML = rows.map(r => `
+    list.innerHTML = rows.map(r => {
+      const uName = r.user_name || r.USER_NAME;
+      const pIn = r.punch_in || r.PUNCH_IN;
+      const lat = r.in_lat || r.IN_LAT;
+      const lng = r.in_lng || r.IN_LNG;
+      return `
       <tr style="border-bottom: 1px solid #eee;">
-        <td style="padding:10px;"><b>\${escapeHtml(r.user_name)}</b></td>
-        <td style="padding:10px;">\${fmtTime(r.punch_in)}</td>
-        <td style="padding:10px;"><a href="\${r.in_map_url}" target="_blank" class="map-link" style="color:#007bff; text-decoration:none; font-weight:bold;">🗺️ View Live Site</a></td>
-      </tr>
-    `).join('');
+        <td style="padding:10px;"><b>${escapeHtml(uName)}</b></td>
+        <td style="padding:10px;">${fmtTime(pIn)}</td>
+        <td style="padding:10px;"><a href="https://google.com{lat},${lng}" target="_blank" class="map-link" style="color:#007bff; text-decoration:none; font-weight:bold;">🗺️ View Live Site</a></td>
+      </tr>`;
+    }).join('');
   } catch (err) { console.error(err); }
 }
 
@@ -376,34 +402,47 @@ async function renderHistory() {
   const table = $('#attendance-history-table');
   if (!table) return;
   try {
-    const rows = await api('/attendance/mine');
-    if (!rows.length) {
+    const rawRows = await api('/attendance/mine');
+    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
+    if (!rows || !rows.length) {
       table.innerHTML = '<tr><td colspan="4" class="hint" style="text-align:center; padding:15px; color:#888;">No logging history entries generated in the last 30 days.</td></tr>';
       return;
     }
-    table.innerHTML = rows.map(r => `
+    table.innerHTML = rows.map(r => {
+      const rDate = r.date || r.DATE;
+      const pIn = r.punch_in || r.PUNCH_IN;
+      const pOut = r.punch_out || r.PUNCH_OUT;
+      const inLat = r.in_lat || r.IN_LAT;
+      const inLng = r.in_lng || r.IN_LNG;
+      const outLat = r.out_lat || r.OUT_LAT;
+      const outLng = r.out_lng || r.OUT_LNG;
+      const locStatus = r.location_status || r.LOCATION_STATUS || '';
+
+      const inMapUrl = inLat ? `https://google.com{inLat},${inLng}` : null;
+      const outMapUrl = outLat ? `https://google.com{outLat},${outLng}` : null;
+      return `
       <tr style="border-bottom: 1px solid #eee;">
-        <td style="padding:10px;">\${fmtDate(r.date)}</td>
-        <td style="padding:10px; color:green;">\${fmtTime(r.punch_in) || '--'}</td>
-        <td style="padding:10px; color:red;">\${fmtTime(r.punch_out) || '--'}</td>
+        <td style="padding:10px;">${fmtDate(rDate)}</td>
+        <td style="padding:10px; color:green;">${fmtTime(pIn) || '--'}</td>
+        <td style="padding:10px; color:red;">${fmtTime(pOut) || '--'}</td>
         <td style="padding:10px;">
-          <small style="display:block; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#555;" title="\${escapeHtml(r.location_status || '')}">
-            \${escapeHtml(r.location_status || '')}
+          <small style="display:block; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#555;" title="${escapeHtml(locStatus)}">
+            ${escapeHtml(locStatus)}
           </small>
           <div class="row-actions" style="margin-top:6px;">
-            \${r.in_map_url ? `<a href="\${r.in_map_url}" target="_blank" style="font-size:12px; margin-right:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 In Pin</a>` : ''}
-            \${r.out_map_url ? `<a href="\${r.out_map_url}" target="_blank" style="font-size:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 Out Pin</a>` : ''}
+            ${inMapUrl ? `<a href="${inMapUrl}" target="_blank" style="font-size:12px; margin-right:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 In Pin</a>` : ''}
+            ${outMapUrl ? `<a href="${outMapUrl}" target="_blank" style="font-size:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 Out Pin</a>` : ''}
           </div>
         </td>
-      </tr>
-    `).join('');
+      </tr>`;
+    }).join('');
   } catch (err) { console.error(err); }
 }
 
 // ================= ADMINISTRATIVE CORE VIEW MODULE =================
 async function renderAdmin() {
   try {
-    const [users, settings] = await Promise.all([api('/auth/users'), api('/auth/settings')]);
+    const [users, settings] = await Promise.all([api('/admin/users'), api('/admin/settings')]);
     const wrap = $('#admin-content');
     if (!wrap) return;
 
@@ -412,9 +451,9 @@ async function renderAdmin() {
         <h3>Office location (for on-site detection)</h3>
         <p class="hint">Set your office's coordinates once – punches within the radius are marked 🟢 On-site, others 🟡 Remote.</p>
         <div class="admin-form-row">
-          <input id="admin-lat" placeholder="Latitude" value="\${settings.office_lat || ''}">
-          <input id="admin-lng" placeholder="Longitude" value="\${settings.office_lng || ''}">
-          <input id="admin-radius" placeholder="Radius (meters)" value="\${settings.office_radius_m || '150'}">
+          <input id="admin-lat" placeholder="Latitude" value="${settings.office_lat || ''}">
+          <input id="admin-lng" placeholder="Longitude" value="${settings.office_lng || ''}">
+          <input id="admin-radius" placeholder="Radius (meters)" value="${settings.office_radius_m || '150'}">
           <button class="btn btn-primary" id="admin-settings-save">Save</button>
         </div>
       </div>
@@ -450,11 +489,10 @@ async function renderAdmin() {
           </thead>
           <tbody id="admin-employees-table-body"></tbody>
         </table>
-      </div>
-    `;
+      </div>`;
 
     const tbody = $('#admin-employees-table-body');
-    if (tbody) {
+    if (tbody && Array.isArray(users)) {
       users.forEach((u) => {
         const tr = document.createElement('tr');
         tr.style.borderBottom = "1px solid #eee";
@@ -462,53 +500,56 @@ async function renderAdmin() {
         let actionsHtml = '';
         if (u.id !== ME.id) {
           actionsHtml = `
-            <button class="btn btn-secondary btn-sm" style="margin-right:6px;" onclick="adminChangePassword(\${u.id}, '\${escapeHtml(u.name)}')">Change Password</button>
-            <button class="btn btn-danger btn-sm" onclick="adminRemoveUser(\${u.id}, '\${escapeHtml(u.name)}')">Remove</button>
+            <button class="btn btn-secondary btn-sm" style="margin-right:6px;" onclick="adminChangePassword(${u.id}, '${escapeHtml(u.name)}')">Change Password</button>
+            <button class="btn btn-danger btn-sm" onclick="adminRemoveUser(${u.id}, '${escapeHtml(u.name)}')">Remove</button>
           `;
         } else {
           actionsHtml = `
-            <button class="btn btn-secondary btn-sm" onclick="adminChangePassword(\${u.id}, '\${escapeHtml(u.name)}')">Change Password</button>
-          `;
-        }
-
-        tr.innerHTML = `
-          <td style="padding:10px;"><b>\${escapeHtml(u.name)}</b></td>
-          <td style="padding:10px;">\${escapeHtml(u.username)}</td>
-          <td style="padding:10px;"><span class="badge" style="background:#e0e0e0; padding:4px 8px; border-radius:4px; font-size:12px;">\${escapeHtml(u.role)}</span></td>
-          <td style="padding:10px;"><span class="badge" style="background:#c8e6c9; color:#25602a; padding:4px 8px; border-radius:4px; font-size:12px;">\${escapeHtml(u.status || 'Active')}</span></td>
-          <td style="padding:10px;">\${actionsHtml}</td>
+                      <button class="btn btn-danger btn-sm" onclick="adminRemoveUser(u.id, '{escapeHtml(u.name)}')">Remove</button>
         `;
-        tbody.appendChild(tr);
-      });
-    }
+      } else {
+        actionsHtml = `
+          <button class="btn btn-secondary btn-sm" onclick="adminChangePassword(${u.id}, '${escapeHtml(u.name)}')">Change Password</button>
+        `;
+      }
 
-    $('#admin-settings-save').onclick = async () => {
-      const lat = parseFloat($('#admin-lat').value);
-      const lng = parseFloat($('#admin-lng').value);
-      const radius = parseInt($('#admin-radius').value);
-      try {
-        await api('/auth/settings', { method: 'POST', body: { office_lat: lat, office_lng: lng, office_radius_m: radius } });
-        alert('Tracking center layout settings saved successfully.');
-      } catch (err) { alert(err.message); }
-    };
+      tr.innerHTML = `
+        <td style="padding:10px;"><b>${escapeHtml(u.name)}</b></td>
+        <td style="padding:10px;">${escapeHtml(u.username)}</td>
+        <td style="padding:10px;"><span class="badge" style="background:#e0e0e0; padding:4px 8px; border-radius:4px; font-size:12px;">${escapeHtml(u.role)}</span></td>
+        <td style="padding:10px;"><span class="badge" style="background:#c8e6c9; color:#25602a; padding:4px 8px; border-radius:4px; font-size:12px;">${u.active ? 'Active' : 'Disabled'}</span></td>
+        <td style="padding:10px;">${actionsHtml}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
 
-    $('#u-add').onclick = async () => {
-      const name = $('#u-name').value.trim();
-      const username = $('#u-username').value.trim();
-      const password = $('#u-password').value.trim();
-      const role = $('#u-role').value;
+  \$('#admin-settings-save').onclick = async () => {
+    const lat = parseFloat(\$('#admin-lat').value);
+    const lng = parseFloat(\$('#admin-lng').value);
+    const radius = parseInt(\$('#admin-radius').value);
+    try {
+      await api('/admin/settings', { method: 'PUT', body: { office_lat: lat, office_lng: lng, office_radius_m: radius } });
+      alert('Tracking center layout settings saved successfully.');
+    } catch (err) { alert(err.message); }
+  };
 
-      if (!name || !username || !password) return alert('Please complete all form blocks before submission.');
+  \$('#u-add').onclick = async () => {
+    const name = \$('#u-name').value.trim();
+    const username = \$('#u-username').value.trim();
+    const password = \$('#u-password').value.trim();
+    const role = \$('#u-role').value;
 
-      try {
-        await api('/admin/users', { method: 'POST', body: { name, username, password, role } });
-        alert('Employee profile generated successfully!');
-        PEOPLE = await api('/people');
-        renderAdmin(); 
-      } catch (err) { alert(err.message); }
-    };
+    if (!name || !username || !password) return alert('Please complete all form blocks before submission.');
 
-    $('#btn-my-password').onclick = () => adminChangePassword(ME.id, ME.name);
+    try {
+      await api('/admin/users', { method: 'POST', body: { name, username, password, role } });
+      alert('Employee profile generated successfully!');
+      renderAdmin(); 
+    } catch (err) { alert(err.message); }
+  };
+
+  \$('#btn-my-password').onclick = () => adminChangePassword(ME.id, ME.name);
 
   } catch (err) {
     console.error("Failed loading administrative template layers:", err);
@@ -518,7 +559,7 @@ async function renderAdmin() {
 // ================= MODAL DIALOG OPERATIONS CONTEXTS =================
 async function adminChangePassword(userId, userName) {
   showModal(`
-    <h3>Modify Credentials for \${escapeHtml(userName)}</h3>
+    <h3>Modify Credentials for ${escapeHtml(userName)}</h3>
     <div style="margin: 15px 0;">
       <label style="display:block; margin-bottom:5px; font-weight:bold;">New Password</label>
       <input id="adm-new-pass" type="password" placeholder="Enter new password (min 4 characters)" autofocus style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px;">
@@ -530,28 +571,28 @@ async function adminChangePassword(userId, userName) {
     </div>
   `);
 
-  $('#adm-pass-cancel').onclick = closeModal;
+  \$('#adm-pass-cancel').onclick = closeModal;
   
-  $('#adm-pass-save').onclick = async () => {
-    const password = $('#adm-new-pass').value.trim();
-    const errorEl = $('#adm-pass-error');
-    errorEl.textContent = '';
+  \$('#adm-pass-save').onclick = async () => {
+    const password = \$('#adm-new-pass').value.trim();
+    const errorEl = \$('#adm-pass-error');
+    if (errorEl) errorEl.textContent = '';
 
     if (!password || password.length < 4) {
-      errorEl.textContent = 'Password must be at least 4 characters long.';
+      if (errorEl) errorEl.textContent = 'Password must be at least 4 characters long.';
       return;
     }
 
     try {
-      await api(`/admin/users/\${userId}/reset-password`, {
+      await api(`/admin/users/${userId}/reset-password`, {
         method: 'PUT',
         body: { password }
       });
       closeModal();
-      alert(`Password for \${userName} updated successfully!`);
+      alert(`Password for ${userName} updated successfully!`);
       renderAdmin();
     } catch (err) {
-      errorEl.textContent = err.message;
+      if (errorEl) errorEl.textContent = err.message;
     }
   };
 }
@@ -559,7 +600,7 @@ async function adminChangePassword(userId, userName) {
 async function adminRemoveUser(userId, userName) {
   const confirmed = await confirmModal(
     'Remove Employee?', 
-    `Are you sure you want to permanently drop "\${userName}" from the application system databases?`,
+    `Are you sure you want to permanently drop "${userName}" from the application system databases?`,
     'Remove User',
     true
   );
@@ -567,9 +608,8 @@ async function adminRemoveUser(userId, userName) {
   if (!confirmed) return;
 
   try {
-    await api(`/admin/users/\${userId}`, { method: 'DELETE' });
+    await api(`/admin/users/${userId}`, { method: 'DELETE' });
     alert('User dropped successfully from system registries.');
-    PEOPLE = await api('/people');
     renderAdmin();
   } catch (err) {
     alert(err.message);
