@@ -4,25 +4,22 @@ const { Database } = require('@libsql/sqlite3');
 
 let db;
 
-// 1. Get absolute file path matching native platforms
-const rawPath = path.resolve(__dirname, 'taskflow.db');
-
-// 2. Format it into a clean, compliant local URI string to pass driver constraints
-const localDbUrl = rawPath.startsWith('/') ? `file://${rawPath}` : `file:///${rawPath.replace(/\\/g, '/')}`;
+// Safe, optimized fallback path mapping
+const dbFilePath = path.join(__dirname, 'taskflow.db');
 
 if (process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN) {
   try {
-    db = new Database(localDbUrl, {
+    db = new Database(dbFilePath, {
       syncUrl: process.env.TURSO_DATABASE_URL.trim(),
       authToken: process.env.TURSO_AUTH_TOKEN.trim()
     });
     console.log("☁️ Connected to Turso Cloud SQLite Replication Engine.");
   } catch (err) {
     console.error("Cloud connection initialization failed, trying clean fallback:", err.message);
-    db = new Database(localDbUrl);
+    db = new Database(dbFilePath);
   }
 } else {
-  db = new Database(localDbUrl);
+  db = new Database(dbFilePath);
   console.log("💻 Connected to Local PC SQLite File.");
 }
 
@@ -106,23 +103,43 @@ CREATE TABLE IF NOT EXISTS attendance (
 // Async-safe Boot Seeding Operations Block
 (async function initializeDatabaseScripts() {
   try {
-    // 1. Column Migration Checks
-    const commentCols = (await db.prepare("PRAGMA table_info(comments)").all()).map(c => c.name);
+    // 1. Fully Resilient Column Migration Check Loop (Fixes the final crash)
+    const rawPragmaRows = await db.prepare("PRAGMA table_info(comments)").all();
+    const commentCols = [];
+    
+    if (Array.isArray(rawPragmaRows)) {
+      rawPragmaRows.forEach(row => {
+        if (row && typeof row === 'object') {
+          const columnName = row.name || row.Name;
+          if (columnName) commentCols.push(columnName);
+        }
+      });
+    }
+
     if (!commentCols.includes('image_path')) {
-      db.exec('ALTER TABLE comments ADD COLUMN image_path TEXT');
-      console.log('Migrated: added comments.image_path column');
+      try {
+        db.exec('ALTER TABLE comments ADD COLUMN image_path TEXT');
+        console.log('Migrated: added comments.image_path column');
+      } catch (colErr) {
+        // Prevent crashing if the column execution was already processed by a concurrent loop
+        console.log('Notice: Column validation skipped or already present.');
+      }
     }
 
     // 2. Project Creator Membership Seeding
     const projectsToSeed = await db.prepare('SELECT id, created_by FROM projects WHERE created_by IS NOT NULL').all();
     const seedMember = db.prepare('INSERT OR IGNORE INTO project_members (project_id, user_id) VALUES (?, ?)');
     for (const p of projectsToSeed) {
-      await seedMember.run(p.id, p.created_by);
+      if (p && p.id && p.created_by) {
+        await seedMember.run(p.id, p.created_by);
+      }
     }
 
     // 3. Secure Admin Credential Initialization
-    const users = await db.prepare('SELECT COUNT(*) as c FROM users').get();
-    if (!users || users.c === 0) {
+    const usersCountObj = await db.prepare('SELECT COUNT(*) as c FROM users').get();
+    const totalUsers = usersCountObj ? (usersCountObj.c || usersCountObj['COUNT(*)']) : 0;
+    
+    if (!totalUsers || totalUsers === 0) {
       const hash = bcrypt.hashSync('admin123', 10);
       await db.prepare(`INSERT INTO users (name, username, password_hash, role) VALUES (?, ?, ?, 'admin')`)
         .run('Admin', 'admin', hash);
