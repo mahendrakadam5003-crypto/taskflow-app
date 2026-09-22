@@ -27,32 +27,12 @@ function fmtTime(iso) {
 }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
-function escapeHtml(str) {
-  if (!str) return '';
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
-}
-
 function showModal(html) {
-  const modalEl = $('#modal');
-  const backdropEl = $('#modal-backdrop');
-  if (modalEl && backdropEl) {
-    modalEl.innerHTML = html;
-    backdropEl.classList.remove('hidden');
-  }
+  $('#modal').innerHTML = html;
+  $('#modal-backdrop').classList.remove('hidden');
 }
-function closeModal() { 
-  const modalEl = $('#modal');
-  const backdropEl = $('#modal-backdrop');
-  if (modalEl && backdropEl) {
-    backdropEl.classList.add('hidden'); 
-    modalEl.innerHTML = ''; 
-  }
-}
-
-const backdrop = $('#modal-backdrop');
-if (backdrop) {
-  backdrop.addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeModal(); });
-}
+function closeModal() { $('#modal-backdrop').classList.add('hidden'); $('#modal').innerHTML = ''; }
+$('#modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeModal(); });
 
 function confirmModal(title, body, confirmLabel = 'Delete', danger = true) {
   return new Promise((resolve) => {
@@ -63,16 +43,9 @@ function confirmModal(title, body, confirmLabel = 'Delete', danger = true) {
         <button class="btn btn-secondary" id="m-cancel">Cancel</button>
         <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="m-ok">${confirmLabel}</button>
       </div>`);
-    const cancelBtn = $('#m-cancel');
-    const okBtn = $('#m-ok');
-    if (cancelBtn) cancelBtn.onclick = () => { closeModal(); resolve(false); };
-    if (okBtn) okBtn.onclick = () => { closeModal(); resolve(true); };
+    $('#m-cancel').onclick = () => { closeModal(); resolve(false); };
+    $('#m-ok').onclick = () => { closeModal(); resolve(true); };
   });
-}
-
-function closeDrawer() {
-  const drawer = $('#drawer');
-  if (drawer) drawer.classList.add('hidden');
 }
 
 // ---------- state ----------
@@ -82,90 +55,50 @@ let PEOPLE = [];
 let CURRENT_PROJECT = null;
 let CURRENT_TASK_ID = null;
 const unlockedProjects = new Set();
-let attendancePollTimer = null;
 
-// ---------- live tracking data synchronization ----------
-function startAttendancePolling() {
-  stopAttendancePolling();
-  attendancePollTimer = setInterval(() => {
-    if (document.hidden) return; 
-    renderLiveList();
-    renderHistory();
-    renderPunchCard();
-  }, 15000); 
-}
-
-function stopAttendancePolling() {
-  if (attendancePollTimer) {
-    clearInterval(attendancePollTimer);
-    attendancePollTimer = null;
-  }
-}
-
-// ---------- boot backend authentication initialization ----------
+// ---------- boot ----------
 (async function init() {
   try {
     ME = await api('/auth/me');
     enterApp();
   } catch (e) {
-    const loginScreen = $('#login-screen');
-    if (loginScreen) loginScreen.classList.remove('hidden');
+    $('#login-screen').classList.remove('hidden');
   }
 })();
 
-const loginForm = $('#login-form');
-if (loginForm) {
-  loginForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const errorEl = $('#login-error');
-    if (errorEl) errorEl.textContent = '';
-    
-    const userField = $('#login-username');
-    const passField = $('#login-password');
-    if (!userField || !passField) return;
+$('#login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('#login-error').textContent = '';
+  try {
+    ME = await api('/auth/login', {
+      method: 'POST',
+      body: { username: $('#login-username').value, password: $('#login-password').value },
+    });
+    enterApp();
+  } catch (err) {
+    $('#login-error').textContent = err.message;
+  }
+});
 
-    try {
-      ME = await api('/auth/login', {
-        method: 'POST',
-        body: { username: userField.value.trim(), password: passField.value },
-      });
-      enterApp();
-    } catch (err) {
-      if (errorEl) errorEl.textContent = err.message;
-    }
-  });
-}
-
-const btnLogout = $('#btn-logout');
-if (btnLogout) {
-  btnLogout.addEventListener('click', async () => {
-    stopAttendancePolling();
-    await api('/auth/logout', { method: 'POST' });
-    location.reload();
-  });
-}
+$('#btn-logout').addEventListener('click', async () => {
+  await api('/auth/logout', { method: 'POST' });
+  location.reload();
+});
 
 async function enterApp() {
-  const loginScreen = $('#login-screen');
-  if (loginScreen) loginScreen.classList.add('hidden');
-  const appEl = $('#app');
-  if (appEl) appEl.classList.remove('hidden');
-  
-  const meBadge = $('#me-badge');
-  if (meBadge) meBadge.innerHTML = `Signed in as<br><b>${escapeHtml(ME.name)}</b>`;
-  
-  const navAdmin = $('#nav-admin');
-  if (ME.role === 'admin' && navAdmin) navAdmin.style.display = '';
-  
-  try {
-    await loadProjects();
-    showView('attendance');
-  } catch (err) {
-    console.error("App boot failure:", err);
-  }
+  $('#login-screen').classList.add('hidden');
+  $('#app').classList.remove('hidden');
+  $('#me-badge').innerHTML = `Signed in as<br><b>${ME.name}</b>`;
+  if (ME.role === 'admin') $('#nav-admin').style.display = '';
+  PEOPLE = await api('/people');
+  await loadProjects();
+  showView('attendance');
+  renderPunchCard();
+  renderLiveList();
+  renderHistory();
 }
 
-// ---------- navigation panels controller ----------
+// ---------- nav ----------
 $$('.nav-item').forEach((btn) => {
   btn.addEventListener('click', () => showView(btn.dataset.view));
 });
@@ -173,63 +106,43 @@ $$('.nav-item').forEach((btn) => {
 function showView(view) {
   $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   $$('.project-item').forEach((b) => b.classList.remove('active'));
-  ['attendance', 'admin', 'project', 'mytasks', 'empty'].forEach((v) => {
-    const el = $('#view-' + v);
-    if (el) el.classList.add('hidden');
-  });
+  ['attendance', 'admin', 'project', 'empty'].forEach((v) => $('#view-' + v).classList.add('hidden'));
   closeDrawer();
-
-  if (view !== 'attendance') stopAttendancePolling();
-
   if (view === 'attendance') {
-    const viewAttendance = $('#view-attendance');
-    if (viewAttendance) viewAttendance.classList.remove('hidden');
+    $('#view-attendance').classList.remove('hidden');
     renderPunchCard(); renderLiveList(); renderHistory();
-    startAttendancePolling();
   } else if (view === 'admin') {
-    const viewAdmin = $('#view-admin');
-    if (viewAdmin) viewAdmin.classList.remove('hidden');
+    $('#view-admin').classList.remove('hidden');
     renderAdmin();
-  } else if (view === 'mytasks') {
-    const viewMyTasks = $('#view-mytasks');
-    if (viewMyTasks) viewMyTasks.classList.remove('hidden');
-    renderMyTasks();
   } else if (view === 'project') {
-    const viewProject = $('#view-project');
-    if (viewProject) viewProject.classList.remove('hidden');
+    $('#view-project').classList.remove('hidden');
   } else {
-    const viewEmpty = $('#view-empty');
-    if (viewEmpty) viewEmpty.classList.remove('hidden');
+    $('#view-empty').classList.remove('hidden');
   }
 }
 
-// ================= PROJECTS MODULE =================
+// ================= PROJECTS =================
 async function loadProjects() {
-  try {
-    PROJECTS = await api('/projects');
-    renderProjectList();
-  } catch (e) {
-    PROJECTS = [];
-  }
+  PROJECTS = await api('/projects');
+  renderProjectList();
 }
 
 function renderProjectList() {
   const list = $('#project-list');
-  if (!list) return;
   list.innerHTML = '';
   PROJECTS.forEach((p) => {
     const row = document.createElement('div');
     row.className = 'project-item-row';
     row.innerHTML = `
       <button class="project-item" data-id="${p.id}">${p.locked ? '<span class="lock">🔒</span> ' : ''}${escapeHtml(p.name)}</button>
-      ${ME.role === 'admin' ? `<button class="project-del" data-id="${p.id}" title="Delete project">✕</button>` : ''}`;
+      <button class="project-del" data-id="${p.id}" title="Delete project">✕</button>`;
     list.appendChild(row);
   });
   $$('.project-item').forEach((btn) => btn.addEventListener('click', () => openProject(Number(btn.dataset.id))));
   $$('.project-del').forEach((btn) => btn.addEventListener('click', async (e) => {
     e.stopPropagation();
     const p = PROJECTS.find((x) => x.id === Number(btn.dataset.id));
-    const ok = await confirmModal('Delete project?', `"${escapeHtml(p.name)}" and all its tasks will be permanently deleted.`);
+    const ok = await confirmModal('Delete project?', `"${p.name}" and all its tasks will be permanently deleted.`);
     if (!ok) return;
     await api(`/projects/${p.id}`, { method: 'DELETE' });
     if (CURRENT_PROJECT && CURRENT_PROJECT.id === p.id) showView('empty');
@@ -237,29 +150,26 @@ function renderProjectList() {
   }));
 }
 
-const btnNewProject = $('#btn-new-project');
-if (btnNewProject) {
-  btnNewProject.addEventListener('click', () => {
-    showModal(`
-      <h3>New project</h3>
-      <input id="np-name" placeholder="Project name" autofocus>
-      <input id="np-pin" placeholder="Optional PIN (leave blank for none)" type="text" inputmode="numeric">
-      <p class="hint">A PIN adds light in-app privacy — anyone opening this project on this device will be asked for it.</p>
-      <div class="modal-actions">
-        <button class="btn btn-secondary" id="m-cancel">Cancel</button>
-        <button class="btn btn-primary" id="m-ok">Create</button>
-      </div>`);
-    $('#m-cancel').onclick = closeModal;
-    $('#m-ok').onclick = async () => {
-      const name = $('#np-name').value.trim();
-      if (!name) return;
-      const pin = $('#np-pin').value.trim();
-      await api('/projects', { method: 'POST', body: { name, pin: pin || null } });
-      closeModal();
-      await loadProjects();
-    };
-  });
-}
+$('#btn-new-project').addEventListener('click', () => {
+  showModal(`
+    <h3>New project</h3>
+    <input id="np-name" placeholder="Project name" autofocus>
+    <input id="np-pin" placeholder="Optional PIN (leave blank for none)" type="text" inputmode="numeric">
+    <p class="hint">A PIN adds light in-app privacy — anyone opening this project on this device will be asked for it.</p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="m-cancel">Cancel</button>
+      <button class="btn btn-primary" id="m-ok">Create</button>
+    </div>`);
+  $('#m-cancel').onclick = closeModal;
+  $('#m-ok').onclick = async () => {
+    const name = $('#np-name').value.trim();
+    if (!name) return;
+    const pin = $('#np-pin').value.trim();
+    await api('/projects', { method: 'POST', body: { name, pin: pin || null } });
+    closeModal();
+    await loadProjects();
+  };
+});
 
 async function openProject(id) {
   const project = PROJECTS.find((p) => p.id === id);
@@ -281,8 +191,7 @@ async function openProject(id) {
         closeModal();
         await enterProjectView(project);
       } catch (e) {
-        const pinErr = $('#pin-error');
-        if (pinErr) pinErr.textContent = e.message;
+        $('#pin-error').textContent = e.message;
       }
     };
     return;
@@ -294,206 +203,417 @@ async function enterProjectView(project) {
   CURRENT_PROJECT = project;
   showView('project');
   $$('.project-item').forEach((b) => b.classList.toggle('active', Number(b.dataset.id) === project.id));
-  const pTitle = $('#project-title');
-  if (pTitle) pTitle.textContent = project.name;
-  await renderProjectMembersHint();
-  await renderTaskAssigneeFilter();
-async function renderTaskAssigneeFilter() {
-  if (!CURRENT_PROJECT) return;
-  try {
-    const members = await api(`/projects/${CURRENT_PROJECT.id}/members`);
-    const sel = \$('#task-assignee-filter'); if (!sel) return;
-    const old = sel.value || 'all';
-    sel.innerHTML = '<option value="all">All assignees</option>' + members.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-    sel.value = [...sel.options].some(o => o.value === old) ? old : 'all';
-  } catch (err) { }
+  $('#project-title').textContent = project.name;
+  await renderTasks();
 }
 
-async function renderTasks() { }
-async function renderMyTasks() { }
+// ================= TASKS =================
+async function renderTasks() {
+  const tasks = await api(`/projects/${CURRENT_PROJECT.id}/tasks`);
+  const tbody = $('#task-list');
+  tbody.innerHTML = '';
+  if (!tasks.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="color:var(--muted);padding:20px 14px;">No tasks yet — add one above.</td></tr>`;
+    return;
+  }
+  tasks.forEach((t) => {
+    const tr = document.createElement('tr');
+    tr.className = 'task-row' + (t.status === 'done' ? ' done' : '');
+    const person = PEOPLE.find((p) => p.id === t.assignee_id);
+    let dueClass = '';
+    if (t.due_date) {
+      if (t.due_date < todayISO() && t.status !== 'done') dueClass = 'overdue';
+      else if (t.due_date === todayISO()) dueClass = 'today';
+    }
+    tr.innerHTML = `
+      <td><input type="checkbox" class="task-check" ${t.status === 'done' ? 'checked' : ''}></td>
+      <td class="task-title">${escapeHtml(t.title)}</td>
+      <td>${person ? `<span class="assignee-chip">${escapeHtml(person.name)}</span>` : ''}</td>
+      <td><span class="task-due ${dueClass}">${t.due_date ? fmtDate(t.due_date) : ''}</span></td>
+      <td><button class="row-del" title="Delete">✕</button></td>`;
+    tr.querySelector('.task-check').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await api(`/tasks/${t.id}`, { method: 'PUT', body: { status: e.target.checked ? 'done' : 'open' } });
+      renderTasks();
+    });
+    tr.querySelector('.row-del').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const ok = await confirmModal('Delete task?', `"${t.title}" will be permanently deleted.`);
+      if (!ok) return;
+      await api(`/tasks/${t.id}`, { method: 'DELETE' });
+      renderTasks();
+    });
+    tr.addEventListener('click', () => openTaskDrawer(t.id));
+    tbody.appendChild(tr);
+  });
+}
 
-// ================= FIELD ATTENDANCE GEO-TRACKING OPERATORS =================
-function getLiveCoords() {
+$('#btn-new-task').addEventListener('click', () => {
+  showModal(`
+    <h3>New task</h3>
+    <input id="nt-title" placeholder="Task title" autofocus>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="m-cancel">Cancel</button>
+      <button class="btn btn-primary" id="m-ok">Add</button>
+    </div>`);
+  $('#m-cancel').onclick = closeModal;
+  $('#m-ok').onclick = async () => {
+    const title = $('#nt-title').value.trim();
+    if (!title) return;
+    await api(`/projects/${CURRENT_PROJECT.id}/tasks`, { method: 'POST', body: { title } });
+    closeModal();
+    renderTasks();
+  };
+});
+
+// ---------- task drawer ----------
+async function openTaskDrawer(id) {
+  CURRENT_TASK_ID = id;
+  const t = await api(`/tasks/${id}`);
+  $('#task-drawer').classList.remove('hidden');
+  $('#drawer-title').value = t.title;
+  $('#drawer-desc').value = t.description || '';
+  autoResize($('#drawer-desc'));
+  $('#drawer-due').value = t.due_date || '';
+  $('#drawer-status').value = t.status;
+  const sel = $('#drawer-assignee');
+  sel.innerHTML = '<option value="">Unassigned</option>' + PEOPLE.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+  sel.value = t.assignee_id || '';
+
+  renderSubtasks(t.subtasks);
+  renderComments(t.comments);
+}
+function closeDrawer() { $('#task-drawer').classList.add('hidden'); CURRENT_TASK_ID = null; }
+$('#drawer-close').addEventListener('click', closeDrawer);
+
+let saveTimer;
+function debounceSave(fn) { clearTimeout(saveTimer); saveTimer = setTimeout(fn, 400); }
+
+$('#drawer-title').addEventListener('input', () => debounceSave(() =>
+  api(`/tasks/${CURRENT_TASK_ID}`, { method: 'PUT', body: { title: $('#drawer-title').value } }).then(renderTasks)));
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+}
+$('#drawer-desc').addEventListener('input', () => {
+  autoResize($('#drawer-desc'));
+  debounceSave(() => api(`/tasks/${CURRENT_TASK_ID}`, { method: 'PUT', body: { description: $('#drawer-desc').value } }));
+});
+$('#drawer-due').addEventListener('change', () =>
+  api(`/tasks/${CURRENT_TASK_ID}`, { method: 'PUT', body: { due_date: $('#drawer-due').value || null } }).then(renderTasks));
+$('#drawer-status').addEventListener('change', () =>
+  api(`/tasks/${CURRENT_TASK_ID}`, { method: 'PUT', body: { status: $('#drawer-status').value } }).then(renderTasks));
+$('#drawer-assignee').addEventListener('change', () =>
+  api(`/tasks/${CURRENT_TASK_ID}`, { method: 'PUT', body: { assignee_id: $('#drawer-assignee').value || null } }).then(renderTasks));
+
+$('#btn-delete-task').addEventListener('click', async () => {
+  const ok = await confirmModal('Delete task?', 'This will be permanently deleted.');
+  if (!ok) return;
+  await api(`/tasks/${CURRENT_TASK_ID}`, { method: 'DELETE' });
+  closeDrawer();
+  renderTasks();
+});
+
+function renderSubtasks(subtasks) {
+  const wrap = $('#drawer-subtasks');
+  wrap.innerHTML = '';
+  subtasks.forEach((s) => {
+    const row = document.createElement('div');
+    row.className = 'subtask-row' + (s.done ? ' done' : '');
+    row.innerHTML = `<input type="checkbox" ${s.done ? 'checked' : ''}><span class="subtask-title">${escapeHtml(s.title)}</span><button class="subtask-del">✕</button>`;
+    row.querySelector('input').addEventListener('change', async (e) => {
+      await api(`/subtasks/${s.id}`, { method: 'PUT', body: { done: e.target.checked } });
+      openTaskDrawer(CURRENT_TASK_ID);
+    });
+    row.querySelector('.subtask-del').addEventListener('click', async () => {
+      await api(`/subtasks/${s.id}`, { method: 'DELETE' });
+      openTaskDrawer(CURRENT_TASK_ID);
+    });
+    wrap.appendChild(row);
+  });
+}
+
+$('#btn-add-subtask').addEventListener('click', () => {
+  showModal(`
+    <h3>Add subtask</h3>
+    <input id="st-title" placeholder="Subtask title" autofocus>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="m-cancel">Cancel</button>
+      <button class="btn btn-primary" id="m-ok">Add</button>
+    </div>`);
+  $('#m-cancel').onclick = closeModal;
+  $('#m-ok').onclick = async () => {
+    const title = $('#st-title').value.trim();
+    if (!title) return;
+    await api(`/tasks/${CURRENT_TASK_ID}/subtasks`, { method: 'POST', body: { title } });
+    closeModal();
+    openTaskDrawer(CURRENT_TASK_ID);
+  };
+});
+
+function renderComments(comments) {
+  const wrap = $('#drawer-comments');
+  wrap.innerHTML = comments.length ? '' : '<p class="hint">No comments yet.</p>';
+  comments.forEach((c) => {
+    const el = document.createElement('div');
+    el.className = 'comment';
+    const img = c.image_path ? `<a href="${c.image_path}" target="_blank"><img class="comment-image" src="${c.image_path}"></a>` : '';
+    el.innerHTML = `<div class="comment-meta">${escapeHtml(c.user_name || 'Someone')} · ${fmtDate(c.created_at)} ${fmtTime(c.created_at)}</div>${escapeHtml(c.body)}${img}`;
+    wrap.appendChild(el);
+  });
+}
+
+let pendingCommentFile = null;
+
+$('#btn-attach-image').addEventListener('click', () => $('#comment-file-input').click());
+$('#comment-file-input').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  const preview = $('#comment-image-preview');
+  if (!file) { pendingCommentFile = null; preview.classList.add('hidden'); preview.innerHTML = ''; return; }
+  if (file.size > 50 * 1024 * 1024) {
+    alert('That image is larger than 50MB — please pick a smaller one.');
+    e.target.value = '';
+    return;
+  }
+  pendingCommentFile = file;
+  preview.classList.remove('hidden');
+  preview.innerHTML = `<img src="${URL.createObjectURL(file)}"><button type="button" id="remove-comment-image">✕ remove</button>`;
+  $('#remove-comment-image').addEventListener('click', () => {
+    pendingCommentFile = null;
+    $('#comment-file-input').value = '';
+    preview.classList.add('hidden');
+    preview.innerHTML = '';
+  });
+});
+
+$('#btn-add-comment').addEventListener('click', addComment);
+$('#drawer-comment-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') addComment(); });
+async function addComment() {
+  const input = $('#drawer-comment-input');
+  const body = input.value.trim();
+  if (!body && !pendingCommentFile) return;
+
+  const fd = new FormData();
+  fd.append('body', body);
+  if (pendingCommentFile) fd.append('image', pendingCommentFile);
+
+  const res = await fetch(`/api/tasks/${CURRENT_TASK_ID}/comments`, {
+    method: 'POST', credentials: 'same-origin', body: fd,
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) { alert((data && data.error) || 'Could not post comment'); return; }
+
+  input.value = '';
+  pendingCommentFile = null;
+  $('#comment-file-input').value = '';
+  $('#comment-image-preview').classList.add('hidden');
+  $('#comment-image-preview').innerHTML = '';
+  openTaskDrawer(CURRENT_TASK_ID);
+}
+
+// ================= ATTENDANCE =================
+function getLocation() {
   return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject(new Error('Geolocation tracking is not supported by this device browser.'));
+    if (!navigator.geolocation) {
+      return reject(new Error('This browser/device does not support location.'));
+    }
+    if (window.isSecureContext === false) {
+      return reject(new Error('Location requires a secure connection (HTTPS). Ask your admin to set up HTTPS/Tailscale cert for remote access.'));
+    }
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      (err) => reject(new Error('Location access denied. Please enable phone GPS location parameters.')),
-      { enableHighAccuracy: true, timeout: 10000 }
+      (err) => {
+        if (err.code === err.PERMISSION_DENIED) {
+          reject(new Error('Location permission was denied. Enable location access for this site in your browser/phone settings, then try again.'));
+        } else {
+          reject(new Error('Could not get your location. Make sure location/GPS is turned on and try again.'));
+        }
+      },
+      { timeout: 10000, enableHighAccuracy: true }
     );
   });
 }
 
+function statusBadge(status) {
+  const map = { 'on-site': '🟢 On-site', 'remote': '🟡 Remote', 'unknown': '⚪ Location not confirmed' };
+  return `<span class="badge ${status || 'unknown'}">${map[status] || map.unknown}</span>`;
+}
+
 async function renderPunchCard() {
-  const card = \$('#punch-card-container');
-  if (!card) return;
-  try {
-    const status = await api('/attendance/today');
-    if (!status) {
-      card.innerHTML = `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`;
-      \$('#btn-punch-in').onclick = async () => {
-        try {
-          const coords = await getLiveCoords();
-          await api('/attendance/punch-in', { method: 'POST', body: coords });
-          alert('Shift started safely! Location registered.');
-          renderPunchCard(); renderLiveList(); renderHistory();
-        } catch (err) { alert(err.message); }
-      };
-    } else if (status.punch_in && !status.punch_out) {
-      card.innerHTML = `
-        <div class="status-alert" style="background:#e3f2fd; color:#0d47a1; padding:12px; border-radius:4px; margin-bottom:10px; font-weight:bold; text-align:center;">
-          ⚡ On-Duty Since: ${fmtTime(status.punch_in)}
+  const today = await api('/attendance/today');
+  const card = $('#attendance-punch');
+  if (!today || !today.punch_in) {
+    card.innerHTML = `
+      <div class="punch-card">
+        <div>
+          <h2>You haven't punched in today</h2>
+          <div class="punch-status">${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div>
         </div>
-        <button class="btn btn-danger btn-lg" id="btn-punch-out" style="width:100%; padding:15px; font-size:18px;">🏁 Punch Out Field Shift</button>`;
-      \$('#btn-punch-out').onclick = async () => {
-        try {
-          const coords = await getLiveCoords();
-          await api('/attendance/punch-out', { method: 'POST', body: coords });
-          alert('Shift ended successfully! Out-location registered.');
-          renderPunchCard(); renderLiveList(); renderHistory();
-        } catch (err) { alert(err.message); }
-      };
-    } else {
-      card.innerHTML = `
-        <div class="status-complete" style="background:#e8f5e9; color:#1b5e20; padding:15px; border-radius:4px; font-weight:bold; text-align:center;">
-          ✅ Today's Shift Completed (${fmtTime(status.punch_in)} - ${fmtTime(status.punch_out)})
-        </div>`;
-    }
-  } catch (err) {
-    card.innerHTML = `<div class="form-error">Failed to sync tracker parameters: ${err.message}</div>`;
+        <button class="btn btn-primary" id="btn-punch-in">Punch in</button>
+        <div class="punch-error" id="punch-error"></div>
+      </div>`;
+    $('#btn-punch-in').addEventListener('click', async () => {
+      const btn = $('#btn-punch-in');
+      const errBox = $('#punch-error');
+      errBox.textContent = '';
+      btn.textContent = 'Locating…';
+      btn.disabled = true;
+      try {
+        const loc = await getLocation();
+        await api('/attendance/punch-in', { method: 'POST', body: loc });
+        renderPunchCard(); renderLiveList(); renderHistory();
+      } catch (e) {
+        errBox.textContent = e.message;
+        btn.textContent = 'Punch in';
+        btn.disabled = false;
+      }
+    });
+  } else if (!today.punch_out) {
+    card.innerHTML = `
+      <div class="punch-card">
+        <div>
+          <h2>Punched in at ${fmtTime(today.punch_in)}</h2>
+          <div class="punch-status">${statusBadge(today.location_status)}</div>
+        </div>
+        <button class="btn btn-secondary" id="btn-punch-out">Punch out</button>
+        <div class="punch-error" id="punch-error"></div>
+      </div>`;
+    $('#btn-punch-out').addEventListener('click', async () => {
+      const btn = $('#btn-punch-out');
+      const errBox = $('#punch-error');
+      errBox.textContent = '';
+      btn.textContent = 'Locating…';
+      btn.disabled = true;
+      try {
+        const loc = await getLocation();
+        await api('/attendance/punch-out', { method: 'POST', body: loc });
+        renderPunchCard(); renderLiveList(); renderHistory();
+      } catch (e) {
+        errBox.textContent = e.message;
+        btn.textContent = 'Punch out';
+        btn.disabled = false;
+      }
+    });
+  } else {
+    card.innerHTML = `
+      <div class="punch-card">
+        <div>
+          <h2>Done for today ✓</h2>
+          <div class="punch-status">In ${fmtTime(today.punch_in)} → Out ${fmtTime(today.punch_out)} · ${statusBadge(today.location_status)}</div>
+        </div>
+      </div>`;
   }
 }
 
 async function renderLiveList() {
-  const list = \$('#live-attendance-list');
-  if (!list) return;
-  try {
-    const rows = await api('/attendance/live');
-    if (!rows || !rows.length) {
-      list.innerHTML = '<tr><td colspan="3" class="hint" style="text-align:center; padding:15px; color:#888;">No field technicians active right now.</td></tr>';
-      return;
-    }
-    list.innerHTML = rows.map(r => `
-      <tr style="border-bottom: 1px solid #eee;">
-        <td style="padding:10px;"><b>${escapeHtml(r.user_name)}</b></td>
-        <td style="padding:10px;">${fmtTime(r.punch_in)}</td>
-        <td style="padding:10px;"><a href="https://google.com{r.in_lat},${r.in_lng}" target="_blank" class="map-link" style="color:#007bff; text-decoration:none; font-weight:bold;">🗺️ View Live Site</a></td>
-      </tr>
-    `).join('');
-  } catch (err) { console.error(err); }
+  if (ME.role !== 'admin') { $('#attendance-live').innerHTML = ''; return; }
+  const live = await api('/attendance/live');
+  const wrap = $('#attendance-live');
+  wrap.innerHTML = `<div class="section-title">Currently on the clock (${live.length})</div>
+    <div class="live-list">${
+      live.length
+        ? live.map((r) => `<div class="live-chip"><span class="dot"></span>${escapeHtml(r.user_name)} · since ${fmtTime(r.punch_in)}</div>`).join('')
+        : '<span style="color:var(--muted);font-size:13.5px;">No one is currently punched in.</span>'
+    }</div>`;
 }
 
 async function renderHistory() {
-  const table = \$('#attendance-history-table');
-  if (!table) return;
-  try {
-    const rows = await api('/attendance/mine');
-    if (!rows || !rows.length) {
-      table.innerHTML = '<tr><td colspan="4" class="hint" style="text-align:center; padding:15px; color:#888;">No tracking history entries generated.</td></tr>';
-      return;
-    }
-    table.innerHTML = rows.map(r => {
-      const inMapUrl = r.in_lat ? `https://google.com{r.in_lat},${r.in_lng}` : null;
-      const outMapUrl = r.out_lat ? `https://google.com{r.out_lat},${r.out_lng}` : null;
-      return `
-      <tr style="border-bottom: 1px solid #eee;">
-        <td style="padding:10px;">${fmtDate(r.date)}</td>
-        <td style="padding:10px; color:green;">${fmtTime(r.punch_in) || '--'}</td>
-        <td style="padding:10px; color:red;">${fmtTime(r.punch_out) || '--'}</td>
-        <td style="padding:10px;">
-          <small style="display:block; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#555;" title="${escapeHtml(r.location_status || '')}">
-            ${escapeHtml(r.location_status || '')}
-          </small>
-          <div class="row-actions" style="margin-top:6px;">
-            ${inMapUrl ? `<a href="\${inMapUrl}" target="_blank" style="font-size:12px; margin-right:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 In Pin</a>` : ''}
-            ${outMapUrl ? `<a href="\${outMapUrl}" target="_blank" style="font-size:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 Out Pin</a>` : ''}
-          </div>
-        </td>
-      </tr>`;
-    }).join('');
-  } catch (err) { console.error(err); }
+  const wrap = $('#attendance-history');
+  if (ME.role !== 'admin') {
+    const mine = await api('/attendance/mine');
+    wrap.innerHTML = `<div class="section-title">Your recent attendance</div>
+      <table class="attn-table">
+        <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Location</th></tr></thead>
+        <tbody>${
+          mine.length
+            ? mine.map((r) => `<tr><td>${r.date}</td><td>${fmtTime(r.punch_in) || '—'}</td><td>${fmtTime(r.punch_out) || '—'}</td><td>${statusBadge(r.location_status)}</td></tr>`).join('')
+            : `<tr><td colspan="4" style="color:var(--muted);">No records yet.</td></tr>`
+        }</tbody>
+      </table>`;
+    return;
+  }
+  const dataRows = await api('/attendance?' + new URLSearchParams({ from: last14Days() }));
+  const title = 'Team attendance — last 14 days';
+  wrap.innerHTML = `<div class="section-title">${title}</div>
+    <table class="attn-table">
+      <thead><tr><th>Name</th><th>Date</th><th>In</th><th>Out</th><th>Location</th></tr></thead>
+      <tbody>${
+        dataRows.length
+          ? dataRows.map((r) => `<tr><td>${escapeHtml(r.user_name)}</td><td>${r.date}</td><td>${fmtTime(r.punch_in)}</td><td>${fmtTime(r.punch_out) || '—'}</td><td>${statusBadge(r.location_status)}</td></tr>`).join('')
+          : `<tr><td colspan="5" style="color:var(--muted);">No records yet.</td></tr>`
+      }</tbody>
+    </table>
+    <p style="margin-top:10px;"><a href="/api/attendance/export.csv?from=${last14Days()}" style="color:var(--green);font-size:13px;font-weight:600;">Export CSV ↓</a></p>`;
+}
+function last14Days() { const d = new Date(); d.setDate(d.getDate() - 14); return d.toISOString().slice(0, 10); }
+
+// ================= ADMIN =================
+async function renderAdmin() {
+  const [users, settings] = await Promise.all([api('/auth/users'), api('/auth/settings')]);
+  const wrap = $('#admin-content');
+  wrap.innerHTML = `
+    <div class="admin-block">
+      <h3>Office location (for on-site detection)</h3>
+      <p class="hint">Set your office's coordinates once — punches within the radius are marked 🟢 On-site, others 🟡 Remote. Find coordinates by searching your address on Google Maps, right-click → "What's here?".</p>
+      <div class="admin-form-row">
+        <input id="s-lat" placeholder="Latitude" value="${settings.office_lat || ''}">
+        <input id="s-lng" placeholder="Longitude" value="${settings.office_lng || ''}">
+        <input id="s-radius" placeholder="Radius (meters)" value="${settings.office_radius_m || '150'}">
+        <button class="btn btn-primary" id="s-save">Save</button>
+      </div>
+    </div>
+
+    <div class="admin-block">
+      <h3>Team members</h3>
+      <div class="admin-form-row">
+        <input id="u-name" placeholder="Full name">
+        <input id="u-username" placeholder="Username">
+        <input id="u-password" placeholder="Password" type="text">
+        <select id="u-role"><option value="employee">Employee</option><option value="admin">Admin</option></select>
+        <button class="btn btn-primary" id="u-add">Add person</button>
+      </div>
+      <table class="admin-table">
+        <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th></th></tr></thead>
+        <tbody>${users.map((u) => `
+          <tr>
+            <td>${escapeHtml(u.name)}</td>
+            <td>${escapeHtml(u.username)}</td>
+            <td><span class="tag ${u.role === 'admin' ? 'admin' : ''}">${u.role}</span></td>
+            <td>${u.active ? 'Active' : 'Disabled'}</td>
+            <td><button class="link-btn" data-id="${u.id}" data-action="toggle">${u.active ? 'Disable' : 'Enable'}</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+
+  $('#s-save').addEventListener('click', async () => {
+    await api('/auth/settings', { method: 'PUT', body: {
+      office_lat: $('#s-lat').value, office_lng: $('#s-lng').value, office_radius_m: $('#s-radius').value,
+    }});
+    $('#s-save').textContent = 'Saved ✓';
+    setTimeout(() => $('#s-save').textContent = 'Save', 1200);
+  });
+
+  $('#u-add').addEventListener('click', async () => {
+    const name = $('#u-name').value.trim();
+    const username = $('#u-username').value.trim();
+    const password = $('#u-password').value.trim();
+    if (!name || !username || !password) return;
+    try {
+      await api('/auth/users', { method: 'POST', body: { name, username, password, role: $('#u-role').value } });
+      renderAdmin();
+    } catch (e) { alert(e.message); }
+  });
+
+  $$('#admin-content [data-action="toggle"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const u = users.find((x) => x.id === Number(btn.dataset.id));
+      await api(`/auth/users/${u.id}`, { method: 'PUT', body: { active: !u.active } });
+      renderAdmin();
+    });
+  });
 }
 
-// ================= ADMINISTRATIVE CORE VIEW MODULE =================
-async function renderAdmin() {
-  try {
-    const [users, settings] = await Promise.all([api('/admin/users'), api('/admin/settings')]);
-    const wrap = \$('#admin-content');
-    if (!wrap) return;
-
-    wrap.innerHTML = `
-      <div class="admin-block">
-        <h3>Office location (for on-site detection)</h3>
-        <p class="hint">Set your office's coordinates once – punches within the radius are marked 🟢 On-site, others 🟡 Remote.</p>
-        <div class="admin-form-row">
-          <input id="admin-lat" placeholder="Latitude" value="${settings.office_lat || ''}">
-          <input id="admin-lng" placeholder="Longitude" value="${settings.office_lng || ''}">
-          <input id="admin-radius" placeholder="Radius (meters)" value="${settings.office_radius_m || '150'}">
-          <button class="btn btn-primary" id="admin-settings-save">Save</button>
-        </div>
-      </div>
-
-      <div class="admin-block">
-        <h3>Remote attendance access</h3>
-        <p class="hint">Recommended: use Tailscale Serve so employees use an HTTPS TaskFlow URL from anywhere.</p>
-        <div class="hint"><b>On the TaskFlow server:</b> run <code>tailscale serve --bg 3000</code> and share the address with staff.</div>
-      </div>
-
-      <div class="admin-block">
-        <h3>Team members <button class="btn btn-secondary" id="btn-my-password" style="float:right;">Change my password</button></h3>
-        <div class="admin-form-row" style="margin-bottom: 20px;">
-          <input id="u-name" placeholder="Full name">
-          <input id="u-username" placeholder="Username">
-          <input id="u-password" placeholder="Password" type="password">
-          <select id="u-role">
-            <option value="employee">Employee</option>
-            <option value="admin">Admin</option>
-          </select>
-          <button class="btn btn-primary" id="u-add">Add person</button>
-        </div>
-
-        <table class="admin-table" style="width:100%; border-collapse:collapse; margin-top:15px;">
-          <thead>
-            <tr style="text-align:left; border-bottom:2px solid #ddd; background:#f8f9fa;">
-              <th style="padding:10px;">Name</th>
-              <th style="padding:10px;">Username</th>
-              <th style="padding:10px;">Role</th>
-              <th style="padding:10px;">Status</th>
-              <th style="padding:10px;">Actions</th>
-            </tr>
-          </thead>
-          <tbody id="admin-employees-table-body"></tbody>
-        </table>
-      </div>`;
-
-    const tbody = \$('#admin-employees-table-body');
-    if (tbody && Array.isArray(users)) {
-      users.forEach((u) => {
-        const tr = document.createElement('tr');
-        tr.style.borderBottom = "1px solid #eee";
-        
-        let actionsHtml = '';
-        if (u.id !== ME.id) {
-          actionsHtml = `
-            <button class="btn btn-secondary btn-sm" style="margin-right:6px;" onclick="adminChangePassword(${u.id}, '${escapeHtml(u.name)}')">Change Password</button>
-            <button class="btn btn-danger btn-sm" onclick="adminRemoveUser(${u.id}, '${escapeHtml(u.name)}')">Remove</button>
-          `;
-        } else {
-          actionsHtml = `
-            <button class="btn btn-secondary btn-sm" onclick="adminChangePassword(${u.id}, '${escapeHtml(u.name)}')">Change Password</button>
-          `;
-        }
-
-        tr.innerHTML = `
-          <td style="padding:10px;"><b>${escapeHtml(u.name)}</b></td>
-          <td style="padding:10px;">${escapeHtml(u.username)}</td>
-          <td style="padding:10px;"><span class="badge" style="background:#e0e0e0; padding:4px 8px; border-radius:4px; font-size:12px;">${escapeHtml(u.role)}</span></td>
-          <td style="padding:10px;"><span class="badge" style="background:#c8e6c9; color:#25602a; padding:4px 8px; border-radius:4px; font-size:12px;">${u.active ? 'Active' : 'Disabled'}</span></td>
-          <td style="padding:10px;">${actionsHtml}</td>
-        `;
-        tbody.appendChild(tr);
-      });
-    }
-
-    \$('#admin-settings-save').onclick = async () => {
-
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
