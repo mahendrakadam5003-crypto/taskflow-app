@@ -1,6 +1,6 @@
 const path = require('path');
 const bcrypt = require('bcryptjs');
-const Database = require('@libsql/sqlite3'); // Restored to Turso Cloud Engine
+const { Database } = require('@libsql/sqlite3'); // Fixed constructor extraction mismatch
 
 let db;
 
