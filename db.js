@@ -28,7 +28,7 @@ const dbDriverInterface = {
       get: async (...params) => {
         try {
           const res = await db.execute({ sql, args: params });
-          // FIXED: Safely returns the single first object row item [0] instead of the whole array wrapper list
+          // FIXED FOR REAL: Pulls index [0] so auth.js gets the flat row object directly!
           return res.rows && res.rows.length > 0 ? res.rows[0] : null;
         } catch(err) { console.error("Driver GET error:", err.message); return null; }
       },
