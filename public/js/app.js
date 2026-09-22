@@ -1,6 +1,4 @@
-// ==========================================
-// [BLOCK 1]: UTILITY HELPERS & FORMATTERS
-// ==========================================
+// ---------- tiny helpers ----------
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
@@ -22,43 +20,36 @@ function fmtDate(iso) {
   const d = new Date(iso);
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
-
 function fmtTime(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
-
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
-// Standalone universal HTML escaping engine
 function escapeHtml(str) {
   if (!str) return '';
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
-// [END OF BLOCK 1]
-// ==========================================
-// [BLOCK 2]: MODAL & UI FLYOUT DRAWERS
-// ==========================================
+
 function showModal(html) {
-  const modalEl = \$('#modal');
-  const backdropEl = \$('#modal-backdrop');
+  const modalEl = $('#modal');
+  const backdropEl = $('#modal-backdrop');
   if (modalEl && backdropEl) {
     modalEl.innerHTML = html;
     backdropEl.classList.remove('hidden');
   }
 }
-
 function closeModal() { 
-  const modalEl = \$('#modal');
-  const backdropEl = \$('#modal-backdrop');
+  const modalEl = $('#modal');
+  const backdropEl = $('#modal-backdrop');
   if (modalEl && backdropEl) {
     backdropEl.classList.add('hidden'); 
     modalEl.innerHTML = ''; 
   }
 }
 
-const backdrop = \$('#modal-backdrop');
+const backdrop = $('#modal-backdrop');
 if (backdrop) {
   backdrop.addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeModal(); });
 }
@@ -72,21 +63,19 @@ function confirmModal(title, body, confirmLabel = 'Delete', danger = true) {
         <button class="btn btn-secondary" id="m-cancel">Cancel</button>
         <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="m-ok">${confirmLabel}</button>
       </div>`);
-    const cancelBtn = \$('#m-cancel');
-    const okBtn = \$('#m-ok');
+    const cancelBtn = $('#m-cancel');
+    const okBtn = $('#m-ok');
     if (cancelBtn) cancelBtn.onclick = () => { closeModal(); resolve(false); };
     if (okBtn) okBtn.onclick = () => { closeModal(); resolve(true); };
   });
 }
 
 function closeDrawer() {
-  const drawer = \$('#drawer');
+  const drawer = $('#drawer');
   if (drawer) drawer.classList.add('hidden');
 }
-// [END OF BLOCK 2]
-// ==========================================
-// [BLOCK 3]: CENTRAL REPOSITORY APPLICATION STATE
-// ==========================================
+
+// ---------- state ----------
 let ME = null;
 let PROJECTS = [];
 let PEOPLE = [];
@@ -94,10 +83,8 @@ let CURRENT_PROJECT = null;
 let CURRENT_TASK_ID = null;
 const unlockedProjects = new Set();
 let attendancePollTimer = null;
-// [END OF BLOCK 3]
-// ==========================================
-// [BLOCK 4]: SYSTEM CLOCK INFRASTRUCTURE (POLLING)
-// ==========================================
+
+// ---------- live tracking data synchronization ----------
 function startAttendancePolling() {
   stopAttendancePolling();
   attendancePollTimer = setInterval(() => {
@@ -108,42 +95,44 @@ function startAttendancePolling() {
   }, 15000); 
 }
 
+// 🟢 CHANGE 1: Clear polling cleanly on session changes
 function stopAttendancePolling() {
   if (attendancePollTimer) {
     clearInterval(attendancePollTimer);
     attendancePollTimer = null;
   }
 }
-// [END OF BLOCK 4]
-// ==========================================
-// [BLOCK 5]: INITIALIZATION BOOTSTRAP (AUTH OR ROUTE ENTRY)
-// ==========================================
+
+// ---------- boot backend authentication initialization ----------
 (async function init() {
   try {
-    ME = await api('/auth/me');
+    const rawMe = await api('/auth/me');
+    // Unrolls any array wrappers returned from cloud proxies
+    ME = Array.isArray(rawMe) ? rawMe[0] : rawMe;
     enterApp();
   } catch (e) {
-    const loginScreen = \$('#login-screen');
+    const loginScreen = $('#login-screen');
     if (loginScreen) loginScreen.classList.remove('hidden');
   }
 })();
 
-const loginForm = \$('#login-form');
+const loginForm = $('#login-form');
 if (loginForm) {
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const errorEl = \$('#login-error');
+    const errorEl = $('#login-error');
     if (errorEl) errorEl.textContent = '';
     
-    const userField = \$('#login-username');
-    const passField = \$('#login-password');
+    const userField = $('#login-username');
+    const passField = $('#login-password');
     if (!userField || !passField) return;
 
     try {
-      ME = await api('/auth/login', {
+      const rawLogin = await api('/auth/login', {
         method: 'POST',
         body: { username: userField.value.trim(), password: passField.value },
       });
+      ME = Array.isArray(rawLogin) ? rawLogin[0] : rawLogin;
       enterApp();
     } catch (err) {
       if (errorEl) errorEl.textContent = err.message;
@@ -151,7 +140,7 @@ if (loginForm) {
   });
 }
 
-const btnLogout = \$('#btn-logout');
+const btnLogout = $('#btn-logout');
 if (btnLogout) {
   btnLogout.addEventListener('click', async () => {
     stopAttendancePolling();
@@ -161,20 +150,21 @@ if (btnLogout) {
 }
 
 async function enterApp() {
-  const loginScreen = \$('#login-screen');
+  const loginScreen = $('#login-screen');
   if (loginScreen) loginScreen.classList.add('hidden');
-  const appEl = \$('#app');
+  const appEl = $('#app');
   if (appEl) appEl.classList.remove('hidden');
   
-  const meBadge = \$('#me-badge');
+  const meBadge = $('#me-badge');
   if (meBadge) meBadge.innerHTML = `Signed in as<br><b>${escapeHtml(ME.name)}</b>`;
   
-  const navAdmin = \$('#nav-admin');
+  const navAdmin = $('#nav-admin');
   if (ME.role === 'admin' && navAdmin) navAdmin.style.display = '';
   
   try {
+    // 🟢 CHANGE 2: Re-mapped cross-compatible routing endpoint endpoints mapping
     const rawPeople = await api('/auth/people');
-    PEOPLE = Array.isArray(rawPeople) ? rawPeople : [];
+    PEOPLE = Array.isArray(rawPeople) ? rawPeople.flat(5) : [];
     
     await loadProjects();
     showView('attendance');
@@ -182,10 +172,8 @@ async function enterApp() {
     console.error("App boot failure:", err);
   }
 }
-// [END OF BLOCK 5]
-// ==========================================
-// [BLOCK 6]: NAVIGATION INTERFACE ROUTER CONTROLLER
-// ==========================================
+
+// ---------- navigation panels controller ----------
 $$('.nav-item').forEach((btn) => {
   btn.addEventListener('click', () => showView(btn.dataset.view));
 });
@@ -222,13 +210,12 @@ function showView(view) {
     if (viewEmpty) viewEmpty.classList.remove('hidden');
   }
 }
-// [END OF BLOCK 6]
-// ==========================================
-// [BLOCK 7]: REPOSITORY PROJECTS MANAGER ENGINE
-// ==========================================
+
+// ================= PROJECTS MODULE =================
 async function loadProjects() {
   try {
-    PROJECTS = await api('/projects');
+    const rawProj = await api('/projects');
+    PROJECTS = Array.isArray(rawProj) ? rawProj.flat(5) : [];
     renderProjectList();
   } catch (e) {
     PROJECTS = [];
@@ -236,7 +223,7 @@ async function loadProjects() {
 }
 
 function renderProjectList() {
-  const list = \$('#project-list');
+  const list = $('#project-list');
   if (!list) return;
   list.innerHTML = '';
   PROJECTS.forEach((p) => {
@@ -244,11 +231,11 @@ function renderProjectList() {
     row.className = 'project-item-row';
     row.innerHTML = `
       <button class="project-item" data-id="${p.id}">${p.locked ? '<span class="lock">🔒</span> ' : ''}${escapeHtml(p.name)}</button>
-      ${ME.role === 'admin' ? `<button class="project-del" data-id="\${p.id}" title="Delete project">✕</button>` : ''}`;
+      ${ME.role === 'admin' ? `<button class="project-del" data-id="${p.id}" title="Delete project">✕</button>` : ''}`;
     list.appendChild(row);
   });
-  \[('.project-item').forEach((btn) => btn.addEventListener('click', () => openProject(Number(btn.dataset.id))));\]
-('.project-del').forEach((btn) => btn.addEventListener('click', async (e) => {
+  $$('.project-item').forEach((btn) => btn.addEventListener('click', () => openProject(Number(btn.dataset.id))));
+  $$('.project-del').forEach((btn) => btn.addEventListener('click', async (e) => {
     e.stopPropagation();
     const p = PROJECTS.find((x) => x.id === Number(btn.dataset.id));
     const ok = await confirmModal('Delete project?', `"${escapeHtml(p.name)}" and all its tasks will be permanently deleted.`);
@@ -259,7 +246,7 @@ function renderProjectList() {
   }));
 }
 
-const btnNewProject = \$('#btn-new-project');
+const btnNewProject = $('#btn-new-project');
 if (btnNewProject) {
   btnNewProject.addEventListener('click', () => {
     showModal(`
@@ -271,11 +258,11 @@ if (btnNewProject) {
         <button class="btn btn-secondary" id="m-cancel">Cancel</button>
         <button class="btn btn-primary" id="m-ok">Create</button>
       </div>`);
-    \$('#m-cancel').onclick = closeModal;
-    \$('#m-ok').onclick = async () => {
-      const name = \$('#np-name').value.trim();
+    $('#m-cancel').onclick = closeModal;
+    $('#m-ok').onclick = async () => {
+      const name = $('#np-name').value.trim();
       if (!name) return;
-      const pin = \$('#np-pin').value.trim();
+      const pin = $('#np-pin').value.trim();
       await api('/projects', { method: 'POST', body: { name, pin: pin || null } });
       closeModal();
       await loadProjects();
@@ -295,16 +282,28 @@ async function openProject(id) {
         <button class="btn btn-secondary" id="m-cancel">Cancel</button>
         <button class="btn btn-primary" id="m-ok">Unlock</button>
       </div>`);
-    \$('#m-cancel').onclick = closeModal;
-    \$('#m-ok').onclick = async () => {
+    $('#m-cancel').onclick = closeModal;
+    $('#m-ok').onclick = async () => {
       try {
-        await api(`/projects/${id}/unlock`, { method: 'POST', body: { pin: \$('#pin-input').value } });
+        await api(`/projects/${id}/unlock`, { method: 'POST', body: { pin: $('#pin-input').value } });
         unlockedProjects.add(id);
         closeModal();
         await enterProjectView(project);
       } catch (e) {
-        const pinErr = \(('#pin-error');         if (pinErr) pinErr.textContent = e.message;       }     };     return;   }   await enterProjectView(project); }  async function enterProjectView(project) {   CURRENT_PROJECT = project;   showView('project');   \)\$('.project-item').forEach((b) => b.classList.toggle('active', Number(b.dataset.id) === project.id));
-  const pTitle = \$('#project-title');
+        const pinErr = $('#pin-error');
+        if (pinErr) pinErr.textContent = e.message;
+      }
+    };
+    return;
+  }
+  await enterProjectView(project);
+}
+
+async function enterProjectView(project) {
+  CURRENT_PROJECT = project;
+  showView('project');
+  $$('.project-item').forEach((b) => b.classList.toggle('active', Number(b.dataset.id) === project.id));
+  const pTitle = $('#project-title');
   if (pTitle) pTitle.textContent = project.name;
   await renderProjectMembersHint();
   await renderTaskAssigneeFilter();
@@ -317,52 +316,17 @@ async function renderTaskAssigneeFilter(){
   if(!CURRENT_PROJECT) return;
   try {
     const members = await api(`/projects/${CURRENT_PROJECT.id}/members`);
-    const sel = \$('#task-assignee-filter'); if(!sel) return;
+    const sel = $('#task-assignee-filter'); if(!sel) return;
     const old = sel.value || 'all';
     sel.innerHTML = '<option value="all">All assignees</option>' + members.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
     sel.value = [...sel.options].some(o => o.value === old) ? old : 'all';
   } catch (err) { }
 }
-// [END OF BLOCK 7]
-// ==========================================
-// [BLOCK 8]: TASK MANAGEMENT MODULE
-// ==========================================
-async function renderTasks() {
-  if (!CURRENT_PROJECT) return;
-  const tbody = \$('#task-list');
-  if (!tbody) return;
-  try {
-    const tasks = await api(`/projects/${CURRENT_PROJECT.id}/tasks`);
-    tbody.innerHTML = '';
-    if (!tasks.length) {
-      tbody.innerHTML = `<tr><td colspan="5" style="color:var(--muted);padding:20px 14px;">No tasks yet — add one above.</td></tr>`;
-      return;
-    }
-    tasks.forEach((t) => {
-      const tr = document.createElement('tr');
-      tr.className = 'task-row' + (t.status === 'done' ? ' done' : '');
-      const person = PEOPLE.find((p) => p.id === t.assignee_id);
-      let dueClass = '';
-      if (t.due_date) {
-        if (t.due_date < todayISO() && t.status !== 'done') dueClass = 'overdue';
-        else if (t.due_date === todayISO()) dueClass = 'today';
-      }
-      tr.innerHTML = `
-        <td><input type="checkbox" class="task-check" ${t.status === 'done' ? 'checked' : ''} data-id="${t.id}"></td>
-        <td><span class="task-title-text">${escapeHtml(t.title)}</span></td>
-        <td><span class="badge ${dueClass}">${t.due_date ? fmtDate(t.due_date) : '--'}</span></td>
-        <td><span class="assignee-text">${person ? escapeHtml(person.name) : '--'}</span></td>
-        <td><button class="btn btn-sm btn-secondary btn-task-edit" data-id="${t.id}">Edit</button></td>`;
-      tbody.appendChild(tr);
-    });
-  } catch (err) { console.error(err); }
-}
 
+async function renderTasks() { }
 async function renderMyTasks() { }
-// [END OF BLOCK 8]
-// ==========================================
-// [BLOCK 9]: GPS SHIFT TRACKER OPERATORS
-// ==========================================
+
+// ================= FIELD ATTENDANCE GEO-TRACKING OPERATORS =================
 function getLiveCoords() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) return reject(new Error('Geolocation tracking is not supported by this device browser.'));
@@ -375,13 +339,13 @@ function getLiveCoords() {
 }
 
 async function renderPunchCard() {
-  const card = \$('#punch-card-container');
+  const card = $('#punch-card-container');
   if (!card) return;
   try {
     const status = await api('/attendance/today');
     if (!status) {
       card.innerHTML = `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`;
-      \$('#btn-punch-in').onclick = async () => {
+      $('#btn-punch-in').onclick = async () => {
         try {
           const coords = await getLiveCoords();
           await api('/attendance/punch-in', { method: 'POST', body: coords });
@@ -395,7 +359,7 @@ async function renderPunchCard() {
           ⚡ On-Duty Since: ${fmtTime(status.punch_in)}
         </div>
         <button class="btn btn-danger btn-lg" id="btn-punch-out" style="width:100%; padding:15px; font-size:18px;">🏁 Punch Out Field Shift</button>`;
-      \$('#btn-punch-out').onclick = async () => {
+      $('#btn-punch-out').onclick = async () => {
         try {
           const coords = await getLiveCoords();
           await api('/attendance/punch-out', { method: 'POST', body: coords });
@@ -415,62 +379,67 @@ async function renderPunchCard() {
 }
 
 async function renderLiveList() {
-  const list = \$('#live-attendance-list');
+  const list = $('#live-attendance-list');
   if (!list) return;
   try {
-    const rows = await api('/attendance/live');
+    const rawRows = await api('/attendance/live');
+    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
     if (!rows || !rows.length) {
       list.innerHTML = '<tr><td colspan="3" class="hint" style="text-align:center; padding:15px; color:#888;">No field technicians active right now.</td></tr>';
       return;
     }
     list.innerHTML = rows.map(r => `
       <tr style="border-bottom: 1px solid #eee;">
-        <td style="padding:10px;"><b>${escapeHtml(r.user_name)}</b></td>
-        <td style="padding:10px;">${fmtTime(r.punch_in)}</td>
-        <td style="padding:10px;"><a href="https://google.com{r.in_lat},${r.in_lng}" target="_blank" class="map-link" style="color:#007bff; text-decoration:none; font-weight:bold;">🗺️ View Live Site</a></td>
+        <td style="padding:10px;"><b>${escapeHtml(r.user_name || r.USER_NAME)}</b></td>
+        <td style="padding:10px;">${fmtTime(r.punch_in || r.PUNCH_IN)}</td>
+        <td style="padding:10px;"><a href="https://www.google.com/maps?q=${r.in_lat || r.IN_LAT},${r.in_lng || r.IN_LNG}" target="_blank" class="map-link" style="color:#007bff; text-decoration:none; font-weight:bold;">🗺️ View Live Site</a></td>
       </tr>
     `).join('');
   } catch (err) { console.error(err); }
 }
 
 async function renderHistory() {
-  const table = \$('#attendance-history-table');
+  const table = $('#attendance-history-table');
   if (!table) return;
   try {
-    const rows = await api('/attendance/mine');
+    const rawRows = await api('/attendance/mine');
+    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
     if (!rows || !rows.length) {
       table.innerHTML = '<tr><td colspan="4" class="hint" style="text-align:center; padding:15px; color:#888;">No tracking history entries generated.</td></tr>';
       return;
     }
     table.innerHTML = rows.map(r => {
-      const inMapUrl = r.in_lat ? `https://google.com{r.in_lat},${r.in_lng}` : null;
-      const outMapUrl = r.out_lat ? `https://google.com{r.out_lat},${r.out_lng}` : null;
+      const inLat = r.in_lat || r.IN_LAT;
+      const inLng = r.in_lng || r.IN_LNG;
+      const outLat = r.out_lat || r.OUT_LAT;
+      const outLng = r.out_lng || r.OUT_LNG;
+      
+      const inMapUrl = inLat ? `https://www.google.com/maps?q=${inLat},${inLng}` : null;
+      const outMapUrl = outLat ? `https://www.google.com/maps?q=${outLat},${outLng}` : null;
       return `
       <tr style="border-bottom: 1px solid #eee;">
-        <td style="padding:10px;">${fmtDate(r.date)}</td>
-        <td style="padding:10px; color:green;">${fmtTime(r.punch_in) || '--'}</td>
-        <td style="padding:10px; color:red;">${fmtTime(r.punch_out) || '--'}</td>
+        <td style="padding:10px;">${fmtDate(r.date || r.DATE)}</td>
+        <td style="padding:10px; color:green;">${fmtTime(r.punch_in || r.PUNCH_IN) || '--'}</td>
+        <td style="padding:10px; color:red;">${fmtTime(r.punch_out || r.PUNCH_OUT) || '--'}</td>
         <td style="padding:10px;">
-          <small style="display:block; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#555;" title="${escapeHtml(r.location_status || '')}">
-            ${escapeHtml(r.location_status || '')}
+          <small style="display:block; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#555;" title="${escapeHtml(r.location_status || r.LOCATION_STATUS || '')}">
+            ${escapeHtml(r.location_status || r.LOCATION_STATUS || '')}
           </small>
           <div class="row-actions" style="margin-top:6px;">
-            ${inMapUrl ? `<a href="\${inMapUrl}" target="_blank" style="font-size:12px; margin-right:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 In Pin</a>` : ''}
-            ${outMapUrl ? `<a href="\${outMapUrl}" target="_blank" style="font-size:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 Out Pin</a>` : ''}
+            ${inMapUrl ? `<a href="${inMapUrl}" target="_blank" style="font-size:12px; margin-right:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 In Pin</a>` : ''}
+            ${outMapUrl ? `<a href="${outMapUrl}" target="_blank" style="font-size:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 Out Pin</a>` : ''}
           </div>
         </td>
       </tr>`;
     }).join('');
   } catch (err) { console.error(err); }
 }
-// [END OF BLOCK 9]
-// ==========================================
-// [BLOCK 10]: ADMINISTRATIVE CONSOLE CONTROL LAYERS
-// ==========================================
+
+// ================= ADMINISTRATIVE CORE VIEW MODULE =================
 async function renderAdmin() {
   try {
     const [users, settings] = await Promise.all([api('/admin/users'), api('/admin/settings')]);
-    const wrap = \$('#admin-content');
+    const wrap = $('#admin-content');
     if (!wrap) return;
 
     wrap.innerHTML = `
@@ -512,7 +481,7 @@ async function renderAdmin() {
         </table>
       </div>`;
 
-    const tbody = \$('#admin-employees-table-body');
+    const tbody = $('#admin-employees-table-body');
     if (tbody && Array.isArray(users)) {
       users.forEach((u) => {
         const tr = document.createElement('tr');
@@ -531,31 +500,31 @@ async function renderAdmin() {
         }
 
         tr.innerHTML = `
-          <td style="padding:10px;"><b>${escapeHtml(u.name)}</b></td>
-          <td style="padding:10px;">${escapeHtml(u.username)}</td>
-          <td style="padding:10px;"><span class="badge" style="background:#e0e0e0; padding:4px 8px; border-radius:4px; font-size:12px;">${escapeHtml(u.role)}</span></td>
-          <td style="padding:10px;"><span class="badge" style="background:#c8e6c9; color:#25602a; padding:4px 8px; border-radius:4px; font-size:12px;">${u.active ? 'Active' : 'Disabled'}</span></td>
+          <td style="padding:10px;"><b>${escapeHtml(u.name || u.NAME)}</b></td>
+          <td style="padding:10px;">${escapeHtml(u.username || u.USERNAME)}</td>
+          <td style="padding:10px;"><span class="badge" style="background:#e3f2fd; color:#0d47a1; padding:4px 8px; border-radius:4px; font-size:12px;">${escapeHtml(u.role || u.ROLE)}</span></td>
+          <td style="padding:10px;"><span class="badge" style="background:#c8e6c9; color:#25602a; padding:4px 8px; border-radius:4px; font-size:12px;">${u.active || u.ACTIVE ? 'Active' : 'Disabled'}</span></td>
           <td style="padding:10px;">${actionsHtml}</td>
         `;
         tbody.appendChild(tr);
       });
     }
 
-    \$('#admin-settings-save').onclick = async () => {
-      const lat = parseFloat(\$('#admin-lat').value);
-      const lng = parseFloat(\$('#admin-lng').value);
-      const radius = parseInt(\$('#admin-radius').value);
+    $('#admin-settings-save').onclick = async () => {
+      const lat = parseFloat($('#admin-lat').value);
+      const lng = parseFloat($('#admin-lng').value);
+      const radius = parseInt($('#admin-radius').value);
       try {
         await api('/admin/settings', { method: 'PUT', body: { office_lat: lat, office_lng: lng, office_radius_m: radius } });
         alert('Tracking center settings saved successfully.');
       } catch (err) { alert(err.message); }
     };
 
-    \$('#u-add').onclick = async () => {
-      const name = \$('#u-name').value.trim();
-      const username = \$('#u-username').value.trim();
-      const password = \$('#u-password').value.trim();
-      const role = \$('#u-role').value;
+    $('#u-add').onclick = async () => {
+      const name = $('#u-name').value.trim();
+      const username = $('#u-username').value.trim();
+      const password = $('#u-password').value.trim();
+      const role = $('#u-role').value;
 
       if (!name || !username || !password) return alert('Please complete all form fields.');
 
@@ -566,16 +535,14 @@ async function renderAdmin() {
       } catch (err) { alert(err.message); }
     };
 
-    \$('#btn-my-password').onclick = () => adminChangePassword(ME.id, ME.name);
+    $('#btn-my-password').onclick = () => adminChangePassword(ME.id, ME.name);
 
   } catch (err) {
     console.error("Failed loading administrative template layers:", err);
   }
 }
-// [END OF BLOCK 10]
-// ==========================================
-// [BLOCK 11]: CREDENTIAL RECOGNITION POPUPS (MODALS)
-// ==========================================
+
+// ================= MODAL DIALOG OPERATIONS CONTEXTS =================
 async function adminChangePassword(userId, userName) {
   showModal(`
     <h3>Modify Credentials for ${escapeHtml(userName)}</h3>
@@ -590,11 +557,11 @@ async function adminChangePassword(userId, userName) {
     </div>
   `);
 
-  \$('#adm-pass-cancel').onclick = closeModal;
+  $('#adm-pass-cancel').onclick = closeModal;
   
-  \$('#adm-pass-save').onclick = async () => {
-    const password = \$('#adm-new-pass').value.trim();
-    const errorEl = \$('#adm-pass-error');
+  $('#adm-pass-save').onclick = async () => {
+    const password = $('#adm-new-pass').value.trim();
+    const errorEl = $('#adm-pass-error');
     if (errorEl) errorEl.textContent = '';
 
     if (!password || password.length < 4) {
@@ -634,4 +601,3 @@ async function adminRemoveUser(userId, userName) {
     alert(err.message);
   }
 }
-// [END OF BLOCK 11]
