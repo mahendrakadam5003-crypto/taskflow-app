@@ -1,18 +1,21 @@
 const path = require('path');
 const bcrypt = require('bcryptjs');
-const { Database } = require('@libsql/sqlite3'); // Fixed constructor extraction mismatch
+const { Database } = require('@libsql/sqlite3'); 
 
 let db;
 
-// Dynamically handle Render cloud syncing or local PC offline testing
+// Enhanced connection syntax to resolve the "Invalid arguments" parameter crash
 if (process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN) {
-  db = new Database(path.join(__dirname, 'taskflow.db'), {
-    syncUrl: process.env.TURSO_DATABASE_URL,
-    authToken: process.env.TURSO_AUTH_TOKEN,
-    syncInterval: 60 // Safely replicates changes to Turso cloud every 60 seconds
-  });
-  if (typeof db.sync === 'function') db.sync();
-  console.log("☁️ Connected to Turso Cloud SQLite Replication Engine.");
+  try {
+    db = new Database(path.join(__dirname, 'taskflow.db'), {
+      syncUrl: process.env.TURSO_DATABASE_URL,
+      authToken: process.env.TURSO_AUTH_TOKEN
+    });
+    console.log("☁️ Connected to Turso Cloud SQLite Replication Engine.");
+  } catch (err) {
+    console.error("Cloud connection initialization failed, trying clean fallback:", err.message);
+    db = new Database(path.join(__dirname, 'taskflow.db'));
+  }
 } else {
   db = new Database(path.join(__dirname, 'taskflow.db'));
   console.log("💻 Connected to Local PC SQLite File.");
@@ -132,7 +135,7 @@ CREATE TABLE IF NOT EXISTS attendance (
       }
     }
 
-    // Force an initial cloud synchronization check
+    // Sync cloud synchronization check
     if (typeof db.sync === 'function') await db.sync();
     console.log("🏁 Database structure and synchronization parameters initialized cleanly.");
   } catch (err) {
