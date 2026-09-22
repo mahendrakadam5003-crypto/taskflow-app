@@ -1,15 +1,13 @@
 const path = require('path');
 const bcrypt = require('bcryptjs');
-const { createClient } = require('@libsql/client'); // Optimized for robust cloud schema streaming
+const { createClient } = require('@libsql/client'); 
 
 let db = null;
 
-// Initialize deep configuration fallback constants securely
 const syncUrl = "libsql://taskflow-db-mahendrakadam5003-crypto.aws-ap-south-1.turso.io";
 const authToken = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTAwNzQxMTYsImlkIjoiMDFhMGM4YmEtNTkwMS03MmQwLTg2MTYtZTEyZmNlZjA5NzI5Iiwia2lkIjoieVF3Z3NwV1lKSl9fRXFSZXVZS295aFFqWUZGOXhtLTJsWWpMTHVQZC0ybyIsInJpZCI6IjVkZjgxOTBkLWUzZWMtNDI0ZS05OGY1LTg4MTFjNjdhNmMzNCJ9.g8jDHdtdJEbMJZWvzJX8fm2aE1qf3wTxDTxFAQu7X-jX87dB0WeBoEmchh7SSedU4QHZGKHKfWm91TTE1LpuAw";
 
 try {
-  // Establish an optimized, real-time streaming channel directly to your Turso cluster cloud instance
   db = createClient({
     url: syncUrl,
     authToken: authToken
@@ -17,21 +15,20 @@ try {
   console.log("☁️ Successfully connected to permanent Turso Cloud Data Vault Infrastructure Layer.");
 } catch (initErr) {
   console.error("Critical Cloud connection mapping failure:", initErr.message);
-  // Fail-safe emergency local storage tracking setup recovery channel
   db = createClient({ url: "file:" + path.join(__dirname, "taskflow.db") });
 }
 
-// Global cross-compatible execution wrapper driver interface abstraction layers
+// Global interface driver alignment abstraction layers
 const dbDriverInterface = {
   exec: async (sql) => {
-    try { return await db.execute(sql); } catch(e) { console.error("Driver EXEC error:", e.message); }
+    try { return await db.execute(sql); } catch(e) { console.error("Driver EXEC error:", e.message); throw e; }
   },
   prepare: (sql) => {
     return {
       get: async (...params) => {
         try {
           const res = await db.execute({ sql, args: params });
-          return res.rows && res.rows[0] ? res.rows[0] : null;
+          return res.rows && res.rows.length > 0 ? res.rows[0] : null;
         } catch(err) { console.error("Driver GET error:", err.message); return null; }
       },
       all: async (...params) => {
@@ -43,90 +40,91 @@ const dbDriverInterface = {
       run: async (...params) => {
         try {
           const res = await db.execute({ sql, args: params });
-          return { lastInsertRowid: res.lastInsertRowid || null, changes: res.rowsAffected || 0 };
+          return { lastInsertRowid: res.lastInsertRowid ? Number(res.lastInsertRowid) : null, changes: res.rowsAffected || 0 };
         } catch(err) { console.error("Driver RUN error:", err.message); throw err; }
       }
     };
   }
 };
 
-// Initialize all core relational enterprise data tables cleanly across cloud shards
-dbDriverInterface.exec(`
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  username TEXT UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'employee',
-  active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS settings (
-  key TEXT PRIMARY KEY,
-  value TEXT
-);
-
-CREATE TABLE IF NOT EXISTS projects (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  pin_hash TEXT,
-  created_by INTEGER REFERENCES users(id),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS project_members (
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  added_at TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (project_id, user_id)
-);
-
-CREATE TABLE IF NOT EXISTS tasks (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  description TEXT DEFAULT '',
-  assignee_id INTEGER REFERENCES users(id),
-  due_date TEXT,
-  status TEXT NOT NULL DEFAULT 'open',
-  position INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS subtasks (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  done INTEGER NOT NULL DEFAULT 0,
-  position INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS comments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  user_id INTEGER REFERENCES users(id),
-  body TEXT NOT NULL DEFAULT '',
-  image_path TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS attendance (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL REFERENCES users(id),
-  date TEXT NOT NULL,
-  punch_in TEXT,
-  punch_out TEXT,
-  in_lat REAL, in_lng REAL,
-  out_lat REAL, out_lng REAL,
-  location_status TEXT,
-  notes TEXT
-);
-`);
-
-// Automated backend ledger migration loop
+// Initialize each schema matrix separately to solve the multi-statement constraints error loop
 (async function initializeDatabaseScripts() {
   try {
+    console.log("⚙️ Building cloud database tables...");
+    
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'employee',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );`);
+
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );`);
+
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS projects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      pin_hash TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );`);
+
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS project_members (
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      added_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (project_id, user_id)
+    );`);
+
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      assignee_id INTEGER REFERENCES users(id),
+      due_date TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      position INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );`);
+
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS subtasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      done INTEGER NOT NULL DEFAULT 0,
+      position INTEGER NOT NULL DEFAULT 0
+    );`);
+
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id),
+      body TEXT NOT NULL DEFAULT '',
+      image_path TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );`);
+
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS attendance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      date TEXT NOT NULL,
+      punch_in TEXT,
+      punch_out TEXT,
+      in_lat REAL, in_lng REAL,
+      out_lat REAL, out_lng REAL,
+      location_status TEXT,
+      notes TEXT
+    );`);
+
+    console.log("✅ Cloud tables initialized. Running migrations and seeds...");
+
     // 1. Column Migration Checks
     const rawPragmaRows = await dbDriverInterface.prepare("PRAGMA table_info(comments)").all();
     const commentCols = [];
@@ -144,7 +142,7 @@ CREATE TABLE IF NOT EXISTS attendance (
         await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN image_path TEXT');
         console.log('Migrated: added comments.image_path column');
       } catch (colErr) {
-        console.log('Notice: Column validation verified.');
+        // dynamic handling lock pass
       }
     }
 
@@ -178,9 +176,9 @@ CREATE TABLE IF NOT EXISTS attendance (
         await setSetting.run(k, v);
       }
     }
-    console.log("🏁 Database cluster matrices fully verified and deployed into production cloud.");
+    console.log("🏁 Permanent Turso database architecture fully synchronized!");
   } catch (err) {
-    console.error("Database seeding/migration warning:", err.message);
+    console.error("Database initialization fault loop warning:", err.message);
   }
 })();
 
