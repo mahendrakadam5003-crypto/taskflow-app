@@ -42,11 +42,11 @@ $('#modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'mod
 function confirmModal(title, body, confirmLabel = 'Delete', danger = true) {
   return new Promise((resolve) => {
     showModal(`
-      <h3>\${title}</h3>
-      <p class="hint">\${body}</p>
+      <h3>${title}</h3>
+      <p class="hint">${body}</p>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="m-cancel">Cancel</button>
-        <button class="btn \${danger ? 'btn-danger' : 'btn-primary'}" id="m-ok">\${confirmLabel}</button>
+        <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="m-ok">${confirmLabel}</button>
       </div>`);
     $('#m-cancel').onclick = () => { closeModal(); resolve(false); };
     $('#m-ok').onclick = () => { closeModal(); resolve(true); };
@@ -65,6 +65,24 @@ let PEOPLE = [];
 let CURRENT_PROJECT = null;
 let CURRENT_TASK_ID = null;
 const unlockedProjects = new Set();
+let attendancePollTimer = null;
+
+function startAttendancePolling() {
+  stopAttendancePolling();
+  attendancePollTimer = setInterval(() => {
+    if (document.hidden) return; // skip while tab is backgrounded
+    renderLiveList();
+    renderHistory();
+    renderPunchCard();
+  }, 15000); // refresh every 15s
+}
+
+function stopAttendancePolling() {
+  if (attendancePollTimer) {
+    clearInterval(attendancePollTimer);
+    attendancePollTimer = null;
+  }
+}
 
 // ---------- boot ----------
 (async function init() {
@@ -91,6 +109,7 @@ $('#login-form').addEventListener('submit', async (e) => {
 });
 
 $('#btn-logout').addEventListener('click', async () => {
+  stopAttendancePolling();
   await api('/auth/logout', { method: 'POST' });
   location.reload();
 });
@@ -98,14 +117,11 @@ $('#btn-logout').addEventListener('click', async () => {
 async function enterApp() {
   $('#login-screen').classList.add('hidden');
   $('#app').classList.remove('hidden');
-  $('#me-badge').innerHTML = `Signed in as<br><b>\${ME.name}</b>`;
+  $('#me-badge').innerHTML = `Signed in as<br><b>${ME.name}</b>`;
   if (ME.role === 'admin') $('#nav-admin').style.display = '';
   PEOPLE = await api('/people');
   await loadProjects();
   showView('attendance');
-  renderPunchCard();
-  renderLiveList();
-  renderHistory();
 }
 
 // ---------- nav ----------
@@ -121,9 +137,13 @@ function showView(view) {
     if (el) el.classList.add('hidden');
   });
   closeDrawer();
+
+  if (view !== 'attendance') stopAttendancePolling();
+
   if (view === 'attendance') {
     $('#view-attendance').classList.remove('hidden');
     renderPunchCard(); renderLiveList(); renderHistory();
+    startAttendancePolling();
   } else if (view === 'admin') {
     $('#view-admin').classList.remove('hidden');
     renderAdmin();
@@ -150,17 +170,17 @@ function renderProjectList() {
     const row = document.createElement('div');
     row.className = 'project-item-row';
     row.innerHTML = `
-      <button class="project-item" data-id="\${p.id}">\${p.locked ? '<span class="lock">🔒</span> ' : ''}\${escapeHtml(p.name)}</button>
-      \${ME.role === 'admin' ? `<button class="project-del" data-id="\${p.id}" title="Delete project">✕</button>` : ''}`;
+      <button class="project-item" data-id="${p.id}">${p.locked ? '<span class="lock">🔒</span> ' : ''}${escapeHtml(p.name)}</button>
+      ${ME.role === 'admin' ? `<button class="project-del" data-id="${p.id}" title="Delete project">✕</button>` : ''}`;
     list.appendChild(row);
   });
   $$('.project-item').forEach((btn) => btn.addEventListener('click', () => openProject(Number(btn.dataset.id))));
   $$('.project-del').forEach((btn) => btn.addEventListener('click', async (e) => {
     e.stopPropagation();
     const p = PROJECTS.find((x) => x.id === Number(btn.dataset.id));
-    const ok = await confirmModal('Delete project?', `"\${p.name}" and all its tasks will be permanently deleted.`);
+    const ok = await confirmModal('Delete project?', `"${p.name}" and all its tasks will be permanently deleted.`);
     if (!ok) return;
-    await api(`/projects/\${p.id}`, { method: 'DELETE' });
+    await api(`/projects/${p.id}`, { method: 'DELETE' });
     if (CURRENT_PROJECT && CURRENT_PROJECT.id === p.id) showView('empty');
     await loadProjects();
   }));
@@ -192,7 +212,7 @@ async function openProject(id) {
   if (!project) return;
   if (project.locked && !unlockedProjects.has(id)) {
     showModal(`
-      <h3>🔒 \${escapeHtml(project.name)}</h3>
+      <h3>🔒 ${escapeHtml(project.name)}</h3>
       <input id="pin-input" placeholder="Enter PIN" type="password" autofocus>
       <div id="pin-error" class="form-error"></div>
       <div class="modal-actions">
@@ -202,7 +222,7 @@ async function openProject(id) {
     $('#m-cancel').onclick = closeModal;
     $('#m-ok').onclick = async () => {
       try {
-        await api(`/projects/\${id}/unlock`, { method: 'POST', body: { pin: $('#pin-input').value } });
+        await api(`/projects/${id}/unlock`, { method: 'POST', body: { pin: $('#pin-input').value } });
         unlockedProjects.add(id);
         closeModal();
         await enterProjectView(project);
@@ -229,10 +249,10 @@ async function renderProjectMembersHint() { /* Stub for your existing project me
 
 async function renderTaskAssigneeFilter(){
   if(!CURRENT_PROJECT) return;
-  const members = await api(`/projects/\${CURRENT_PROJECT.id}/members`);
+  const members = await api(`/projects/${CURRENT_PROJECT.id}/members`);
   const sel = $('#task-assignee-filter'); if(!sel) return;
   const old = sel.value || 'all';
-  sel.innerHTML = '<option value="all">All assignees</option>' + members.map(p => `<option value="\${p.id}">\${escapeHtml(p.name)}</option>`).join('');
+  sel.innerHTML = '<option value="all">All assignees</option>' + members.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
   sel.value = [...sel.options].some(o => o.value === old) ? old : 'all';
 }
 
@@ -274,7 +294,7 @@ async function renderPunchCard() {
       };
     } else if (status.punch_in && !status.punch_out) {
       card.innerHTML = `
-        <div class="status-alert">Active Shift Started: \${fmtTime(status.punch_in)}</div>
+        <div class="status-alert">Active Shift Started: ${fmtTime(status.punch_in)}</div>
         <button class="btn btn-danger btn-lg" id="btn-punch-out">🏁 Punch Out Shift</button>`;
       $('#btn-punch-out').onclick = async () => {
         try {
@@ -285,10 +305,10 @@ async function renderPunchCard() {
         } catch (err) { alert(err.message); }
       };
     } else {
-      card.innerHTML = `<div class="status-complete">✅ Duty Completed Today (\${fmtTime(status.punch_in)} - \${fmtTime(status.punch_out)})</div>`;
+      card.innerHTML = `<div class="status-complete">✅ Duty Completed Today (${fmtTime(status.punch_in)} - ${fmtTime(status.punch_out)})</div>`;
     }
   } catch (err) {
-    card.innerHTML = `<div class="form-error">Failed to sync tracker metrics: \${err.message}</div>`;
+    card.innerHTML = `<div class="form-error">Failed to sync tracker metrics: ${err.message}</div>`;
   }
 }
 
@@ -303,9 +323,9 @@ async function renderLiveList() {
     }
     list.innerHTML = rows.map(r => `
       <tr>
-        <td><b>\${escapeHtml(r.user_name)}</b></td>
-        <td>\${fmtTime(r.punch_in)}</td>
-        <td><a href="\${r.in_map_url}" target="_blank" class="map-link">\${r.location_status || 'View Map'}</a></td>
+        <td><b>${escapeHtml(r.user_name)}</b></td>
+        <td>${fmtTime(r.punch_in)}</td>
+        <td><a href="${r.in_map_url}" target="_blank" class="map-link">${r.location_status || 'View Map'}</a></td>
       </tr>
     `).join('');
   } catch (err) { console.error(err); }
@@ -322,14 +342,14 @@ async function renderHistory() {
     }
     table.innerHTML = rows.map(r => `
       <tr>
-        <td>\${fmtDate(r.date)}</td>
-        <td>\${fmtTime(r.punch_in) || '--'}</td>
-        <td>\${fmtTime(r.punch_out) || '--'}</td>
+        <td>${fmtDate(r.date)}</td>
+        <td>${fmtTime(r.punch_in) || '--'}</td>
+        <td>${fmtTime(r.punch_out) || '--'}</td>
         <td>
-          <small style="display:block; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">\${escapeHtml(r.location_status || '')}</small>
+          <small style="display:block; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(r.location_status || '')}</small>
           <div class="row-actions" style="margin-top:4px;">
-            \${r.in_map_url ? `<a href="\${r.in_map_url}" target="_blank" style="font-size:12px; margin-right:8px;">📍 In Map</a>` : ''}
-            \${r.out_map_url ? `<a href="\${r.out_map_url}" target="_blank" style="font-size:12px;">📍 Out Map</a>` : ''}
+            ${r.in_map_url ? `<a href="${r.in_map_url}" target="_blank" style="font-size:12px; margin-right:8px;">📍 In Map</a>` : ''}
+            ${r.out_map_url ? `<a href="${r.out_map_url}" target="_blank" style="font-size:12px;">📍 Out Map</a>` : ''}
           </div>
         </td>
       </tr>
@@ -349,9 +369,9 @@ async function renderAdmin() {
         <h3>Office location (for on-site detection)</h3>
         <p class="hint">Set your office's coordinates once – punches within the radius are marked 🟢 On-site, others 🟡 Remote.</p>
         <div class="admin-form-row">
-          <input id="admin-lat" placeholder="Latitude" value="\${settings.office_lat || ''}">
-          <input id="admin-lng" placeholder="Longitude" value="\${settings.office_lng || ''}">
-          <input id="admin-radius" placeholder="Radius (meters)" value="\${settings.office_radius_m || '150'}">
+          <input id="admin-lat" placeholder="Latitude" value="${settings.office_lat || ''}">
+          <input id="admin-lng" placeholder="Longitude" value="${settings.office_lng || ''}">
+          <input id="admin-radius" placeholder="Radius (meters)" value="${settings.office_radius_m || '150'}">
           <button class="btn btn-primary" id="admin-settings-save">Save</button>
         </div>
       </div>
@@ -395,25 +415,25 @@ async function renderAdmin() {
     users.forEach((u) => {
       const tr = document.createElement('tr');
       tr.style.borderBottom = "1px solid #eee";
-      
+
       let actionsHtml = '';
       if (u.id !== ME.id) {
         actionsHtml = `
-          <button class="btn btn-secondary btn-sm" style="margin-right:4px;" onclick="adminChangePassword(\${u.id}, '\${escapeHtml(u.name)}')">Change Password</button>
-          <button class="btn btn-danger btn-sm" onclick="adminRemoveUser(\${u.id}, '\${escapeHtml(u.name)}')">Remove</button>
+          <button class="btn btn-secondary btn-sm" style="margin-right:4px;" onclick="adminChangePassword(${u.id}, '${escapeHtml(u.name)}')">Change Password</button>
+          <button class="btn btn-danger btn-sm" onclick="adminRemoveUser(${u.id}, '${escapeHtml(u.name)}')">Remove</button>
         `;
       } else {
         actionsHtml = `
-          <button class="btn btn-secondary btn-sm" onclick="adminChangePassword(\${u.id}, '\${escapeHtml(u.name)}')">Change Password</button>
+          <button class="btn btn-secondary btn-sm" onclick="adminChangePassword(${u.id}, '${escapeHtml(u.name)}')">Change Password</button>
         `;
       }
 
       tr.innerHTML = `
-        <td style="padding:8px;"><b>\${escapeHtml(u.name)}</b></td>
-        <td style="padding:8px;">\${escapeHtml(u.username)}</td>
-        <td style="padding:8px;"><span class="badge">\${escapeHtml(u.role)}</span></td>
-        <td style="padding:8px;"><span class="badge">\${escapeHtml(u.status || 'Active')}</span></td>
-        <td style="padding:8px;">\${actionsHtml}</td>
+        <td style="padding:8px;"><b>${escapeHtml(u.name)}</b></td>
+        <td style="padding:8px;">${escapeHtml(u.username)}</td>
+        <td style="padding:8px;"><span class="badge">${escapeHtml(u.role)}</span></td>
+        <td style="padding:8px;"><span class="badge">${escapeHtml(u.status || 'Active')}</span></td>
+        <td style="padding:8px;">${actionsHtml}</td>
       `;
       tbody.appendChild(tr);
     });
@@ -441,7 +461,7 @@ async function renderAdmin() {
         await api('/admin/users', { method: 'POST', body: { name, username, password, role } });
         alert('New profile added successfully!');
         PEOPLE = await api('/people'); // Re-sync local state lists
-        renderAdmin(); 
+        renderAdmin();
       } catch (err) { alert(err.message); }
     };
 
@@ -455,7 +475,7 @@ async function renderAdmin() {
 // ---------- INTERACTIVE MODAL OVERLAY INJECTIONS ----------
 async function adminChangePassword(userId, userName) {
   showModal(`
-    <h3>Change Password for \${escapeHtml(userName)}</h3>
+    <h3>Change Password for ${escapeHtml(userName)}</h3>
     <div style="margin: 15px 0;">
       <label style="display:block; margin-bottom:5px; font-weight:bold;">New Password</label>
       <input id="adm-new-pass" type="password" placeholder="Enter new password (min 4 characters)" autofocus style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px;">
@@ -468,7 +488,7 @@ async function adminChangePassword(userId, userName) {
   `);
 
   $('#adm-pass-cancel').onclick = closeModal;
-  
+
   $('#adm-pass-save').onclick = async () => {
     const password = $('#adm-new-pass').value.trim();
     const errorEl = $('#adm-pass-error');
@@ -480,12 +500,12 @@ async function adminChangePassword(userId, userName) {
     }
 
     try {
-      await api(`/admin/users/\${userId}/reset-password`, {
+      await api(`/admin/users/${userId}/reset-password`, {
         method: 'PUT',
         body: { password }
       });
       closeModal();
-      alert(`Password for \${userName} updated successfully!`);
+      alert(`Password for ${userName} updated successfully!`);
       renderAdmin();
     } catch (err) {
       errorEl.textContent = err.message;
@@ -495,16 +515,16 @@ async function adminChangePassword(userId, userName) {
 
 async function adminRemoveUser(userId, userName) {
   const confirmed = await confirmModal(
-    'Remove Employee?', 
-    `Are you sure you want to permanently remove "\${userName}" from the team roster?`,
+    'Remove Employee?',
+    `Are you sure you want to permanently remove "${userName}" from the team roster?`,
     'Remove User',
     true
   );
-  
+
   if (!confirmed) return;
 
   try {
-    await api(`/admin/users/\${userId}`, { method: 'DELETE' });
+    await api(`/admin/users/${userId}`, { method: 'DELETE' });
     alert('User account successfully dropped.');
     PEOPLE = await api('/people');
     renderAdmin();
