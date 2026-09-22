@@ -1,6 +1,6 @@
 const path = require('path');
 const bcrypt = require('bcryptjs');
-const { DatabaseSync } = require('node:sqlite');
+const Database = require('better-sqlite3');
 
 const db = new DatabaseSync(path.join(__dirname, 'taskflow.db'));
 db.exec('PRAGMA journal_mode = WAL;');
