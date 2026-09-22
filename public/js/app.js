@@ -158,7 +158,6 @@ async function enterApp() {
   if (ME.role === 'admin' && navAdmin) navAdmin.style.display = '';
   
   try {
-    PEOPLE = await api('/users'); 
     await loadProjects();
     showView('attendance');
   } catch (err) {
@@ -304,17 +303,8 @@ async function enterProjectView(project) {
 
 async function renderProjectMembersHint() { }
 
-async function renderTaskAssigneeFilter(){
-  if(!CURRENT_PROJECT) return;
-  try {
-    const members = await api(`/projects/${CURRENT_PROJECT.id}/members`);
-    const sel = $('#task-assignee-filter'); if(!sel) return;
-    const old = sel.value || 'all';
-    sel.innerHTML = '<option value="all">All assignees</option>' + members.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-    sel.value = [...sel.options].some(o => o.value === old) ? old : 'all';
-  } catch (err) { }
-}
-
+async function renderTaskAssigneeFilter()
+{
 async function renderTasks() { }
 async function renderMyTasks() { }
 
@@ -334,11 +324,8 @@ async function renderPunchCard() {
   const card = $('#punch-card-container');
   if (!card) return;
   try {
-    const rawStatus = await api('/attendance/today');
-    let status = rawStatus;
-    while (Array.isArray(status) && status.length > 0) { status = status[0]; }
-    
-    if (!status || Array.isArray(status)) {
+    const status = await api('/attendance/today');
+    if (!status) {
       card.innerHTML = `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`;
       $('#btn-punch-in').onclick = async () => {
         try {
@@ -377,24 +364,18 @@ async function renderLiveList() {
   const list = $('#live-attendance-list');
   if (!list) return;
   try {
-    const rawRows = await api('/attendance/live');
-    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
+    const rows = await api('/attendance/live');
     if (!rows || !rows.length) {
       list.innerHTML = '<tr><td colspan="3" class="hint" style="text-align:center; padding:15px; color:#888;">No field technicians active right now.</td></tr>';
       return;
     }
-    list.innerHTML = rows.map(r => {
-      const uName = r.user_name || r.USER_NAME;
-      const pIn = r.punch_in || r.PUNCH_IN;
-      const lat = r.in_lat || r.IN_LAT;
-      const lng = r.in_lng || r.IN_LNG;
-      return `
+    list.innerHTML = rows.map(r => `
       <tr style="border-bottom: 1px solid #eee;">
-        <td style="padding:10px;"><b>${escapeHtml(uName)}</b></td>
-        <td style="padding:10px;">${fmtTime(pIn)}</td>
-        <td style="padding:10px;"><a href="https://google.com{lat},${lng}" target="_blank" class="map-link" style="color:#007bff; text-decoration:none; font-weight:bold;">🗺️ View Live Site</a></td>
-      </tr>`;
-    }).join('');
+        <td style="padding:10px;"><b>${escapeHtml(r.user_name)}</b></td>
+        <td style="padding:10px;">${fmtTime(r.punch_in)}</td>
+        <td style="padding:10px;"><a href="https://google.com{r.in_lat},${r.in_lng}" target="_blank" class="map-link" style="color:#007bff; text-decoration:none; font-weight:bold;">🗺️ View Live Site</a></td>
+      </tr>
+    `).join('');
   } catch (err) { console.error(err); }
 }
 
@@ -402,32 +383,22 @@ async function renderHistory() {
   const table = $('#attendance-history-table');
   if (!table) return;
   try {
-    const rawRows = await api('/attendance/mine');
-    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
+    const rows = await api('/attendance/mine');
     if (!rows || !rows.length) {
-      table.innerHTML = '<tr><td colspan="4" class="hint" style="text-align:center; padding:15px; color:#888;">No logging history entries generated in the last 30 days.</td></tr>';
+      table.innerHTML = '<tr><td colspan="4" class="hint" style="text-align:center; padding:15px; color:#888;">No tracking history entries generated.</td></tr>';
       return;
     }
     table.innerHTML = rows.map(r => {
-      const rDate = r.date || r.DATE;
-      const pIn = r.punch_in || r.PUNCH_IN;
-      const pOut = r.punch_out || r.PUNCH_OUT;
-      const inLat = r.in_lat || r.IN_LAT;
-      const inLng = r.in_lng || r.IN_LNG;
-      const outLat = r.out_lat || r.OUT_LAT;
-      const outLng = r.out_lng || r.OUT_LNG;
-      const locStatus = r.location_status || r.LOCATION_STATUS || '';
-
-      const inMapUrl = inLat ? `https://google.com{inLat},${inLng}` : null;
-      const outMapUrl = outLat ? `https://google.com{outLat},${outLng}` : null;
+      const inMapUrl = r.in_lat ? `https://google.com{r.in_lat},${r.in_lng}` : null;
+      const outMapUrl = r.out_lat ? `https://google.com{r.out_lat},${r.out_lng}` : null;
       return `
       <tr style="border-bottom: 1px solid #eee;">
-        <td style="padding:10px;">${fmtDate(rDate)}</td>
-        <td style="padding:10px; color:green;">${fmtTime(pIn) || '--'}</td>
-        <td style="padding:10px; color:red;">${fmtTime(pOut) || '--'}</td>
+        <td style="padding:10px;">${fmtDate(r.date)}</td>
+        <td style="padding:10px; color:green;">${fmtTime(r.punch_in) || '--'}</td>
+        <td style="padding:10px; color:red;">${fmtTime(r.punch_out) || '--'}</td>
         <td style="padding:10px;">
-          <small style="display:block; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#555;" title="${escapeHtml(locStatus)}">
-            ${escapeHtml(locStatus)}
+          <small style="display:block; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#555;" title="${escapeHtml(r.location_status || '')}">
+            ${escapeHtml(r.location_status || '')}
           </small>
           <div class="row-actions" style="margin-top:6px;">
             ${inMapUrl ? `<a href="${inMapUrl}" target="_blank" style="font-size:12px; margin-right:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 In Pin</a>` : ''}
@@ -505,42 +476,38 @@ async function renderAdmin() {
           `;
         } else {
           actionsHtml = `
-                      <button class="btn btn-danger btn-sm" onclick="adminRemoveUser(u.id, '{escapeHtml(u.name)}')">Remove</button>
+            <button class="btn btn-secondary btn-sm" onclick="adminChangePassword(${u.id}, '${escapeHtml(u.name)}')">Change Password</button>
+          `;
+        }
+
+        tr.innerHTML = `
+          <td style="padding:10px;"><b>${escapeHtml(u.name)}</b></td>
+          <td style="padding:10px;">${escapeHtml(u.username)}</td>
+          <td style="padding:10px;"><span class="badge" style="background:#e0e0e0; padding:4px 8px; border-radius:4px; font-size:12px;">${escapeHtml(u.role)}</span></td>
+          <td style="padding:10px;"><span class="badge" style="background:#c8e6c9; color:#25602a; padding:4px 8px; border-radius:4px; font-size:12px;">${u.active ? 'Active' : 'Disabled'}</span></td>
+          <td style="padding:10px;">${actionsHtml}</td>
         `;
-      } else {
-        actionsHtml = `
-          <button class="btn btn-secondary btn-sm" onclick="adminChangePassword(${u.id}, '${escapeHtml(u.name)}')">Change Password</button>
-        `;
-      }
+        tbody.appendChild(tr);
+      });
+    }
 
-      tr.innerHTML = `
-        <td style="padding:10px;"><b>${escapeHtml(u.name)}</b></td>
-        <td style="padding:10px;">${escapeHtml(u.username)}</td>
-        <td style="padding:10px;"><span class="badge" style="background:#e0e0e0; padding:4px 8px; border-radius:4px; font-size:12px;">${escapeHtml(u.role)}</span></td>
-        <td style="padding:10px;"><span class="badge" style="background:#c8e6c9; color:#25602a; padding:4px 8px; border-radius:4px; font-size:12px;">${u.active ? 'Active' : 'Disabled'}</span></td>
-        <td style="padding:10px;">${actionsHtml}</td>
-      `;
-      tbody.appendChild(tr);
-    });
-  }
+    $('#admin-settings-save').onclick = async () => {
+      const lat = parseFloat($('#admin-lat').value);
+      const lng = parseFloat($('#admin-lng').value);
+      const radius = parseInt($('#admin-radius').value);
+      try {
+        await api('/admin/settings', { method: 'PUT', body: { office_lat: lat, office_lng: lng, office_radius_m: radius } });
+        alert('Tracking center layout settings saved successfully.');
+      } catch (err) { alert(err.message); }
+    };
 
-  \$('#admin-settings-save').onclick = async () => {
-    const lat = parseFloat(\$('#admin-lat').value);
-    const lng = parseFloat(\$('#admin-lng').value);
-    const radius = parseInt(\$('#admin-radius').value);
-    try {
-      await api('/admin/settings', { method: 'PUT', body: { office_lat: lat, office_lng: lng, office_radius_m: radius } });
-      alert('Tracking center layout settings saved successfully.');
-    } catch (err) { alert(err.message); }
-  };
-
-  \$('#u-add').onclick = async () => {
-    const name = \$('#u-name').value.trim();
-    const username = \$('#u-username').value.trim();
-    const password = \$('#u-password').value.trim();
+    $('#u-add').onclick = async () => {
+      const name = $('#u-name').value.trim();
+      const username = $('#u-username').value.trim();
+          const password = \$('#u-password').value.trim();
     const role = \$('#u-role').value;
 
-    if (!name || !username || !password) return alert('Please complete all form blocks before submission.');
+    if (!name || !username || !password) return alert('Please complete all form fields.');
 
     try {
       await api('/admin/users', { method: 'POST', body: { name, username, password, role } });
@@ -615,3 +582,4 @@ async function adminRemoveUser(userId, userName) {
     alert(err.message);
   }
 }
+
