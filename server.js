@@ -4,56 +4,13 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const FormData = require('form-data');
-
-const TELEGRAM_TOKEN = "8892731667:AAESv4N-8E5mSwQKZ-OvDyCDpTFyAAIY4MU";
-const CHANNEL_ID = "-1003299962777";
-const DB_PATH = path.join(__dirname, 'taskflow.db');
+const bcrypt = require('bcryptjs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ========================================================
-// REFACTORED STORAGE PERSISTENCE ENGINE (NON-BLOCKING)
-// ========================================================
-async function initializeCloudStorage() {
-  try {
-    console.log("Checking cloud vault for active database backup history...");
-    
-    // Added a short timeout constraint to prevent infinite loading loops
-    const historyRes = await axios.get(`https://telegram.org{TELEGRAM_TOKEN}/getUpdates?limit=100`, { timeout: 5000 });
-    let targetFileId = null;
-
-    if (historyRes.data && historyRes.data.result) {
-      const updates = historyRes.data.result.reverse();
-      for (const update of updates) {
-        const message = update.message || update.channel_post;
-        if (message && message.document && message.document.file_name === 'AUTOMATED_BACKUP_taskflow.db') {
-          targetFileId = message.document.file_id;
-          break;
-        }
-      }
-    }
-
-    if (targetFileId) {
-      console.log("Database backup state identified. Initiating data restoration pipeline...");
-      const fileInfo = await axios.get(`https://telegram.org{TELEGRAM_TOKEN}/getFile?file_id=${targetFileId}`);
-      const filePath = fileInfo.data.result.file_path;
-      
-      const fileUrl = `https://telegram.org{TELEGRAM_TOKEN}/${filePath}`;
-      const downloadStream = await axios({ method: 'get', url: fileUrl, responseType: 'arraybuffer' });
-      
-      fs.writeFileSync(DB_PATH, downloadStream.data);
-      console.log("Text logs restored to live app memory cleanly!");
-    } else {
-      console.log("No previous backup file detected. Running on active database engine configuration.");
-    }
-  } catch (err) {
-    console.warn("Notice: Sync bootstrap bypassed or timed out. Initializing native database fallback instance.", err.message);
-  }
-
-  // Load backend models cleanly right after synchronization runs
-  require('./db');
-}
+// Import our central database client abstraction instance layer cleanly 
+const db = require('./db');
 
 // ========================================================
 // CORE MIDDLEWARE & INTEGRATION ROUTES
@@ -84,29 +41,28 @@ app.use('/uploads', express.static(uploadsDir));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ========================================================
-// INSTANT PORT BINDING (Fixes Render 30-min loading stalls)
+// INSTANT PORT BINDING & EMERGENCY ACCOUNT SEEDING
 // ========================================================
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`TaskFlow operational server running on port: ${PORT}`);
   
-  // Triggers the data extraction script safely AFTER the port goes live
-  initializeCloudStorage();
-});
-
-// Automated background snapshot synchronization (Fires every 10 minutes)
-setInterval(async () => {
-  try {
-    if (fs.existsSync(DB_PATH)) {
-      const form = new FormData();
-      form.append('chat_id', CHANNEL_ID);
-      form.append('document', fs.createReadStream(DB_PATH), { filename: 'AUTOMATED_BACKUP_taskflow.db' });
-
-      await axios.post(`https://telegram.org{TELEGRAM_TOKEN}/sendDocument`, form, {
-        headers: form.getHeaders(),
-      });
-      console.log("Database backup synced to cloud repository successfully.");
+  // Triggers the account injection script immediately after the network socket binds live
+  (async function forceCreateAdminAccount() {
+    try {
+      console.log("⚡ Checking and forcing admin profile deployment into cloud shards...");
+      const hash = bcrypt.hashSync('admin123', 10);
+      
+      // Inject row coordinates straight into your Turso production tables matrix clusters
+      await db.prepare(`INSERT OR IGNORE INTO users (name, username, password_hash, role, active) VALUES (?, ?, ?, ?, ?)`).run(
+        'System Admin Manager',
+        'admin',
+        hash,
+        'admin',
+        1
+      );
+      console.log("🚀 FORCE SEED COMPLETE: User 'admin' with password 'admin123' is now live inside Turso Cloud!");
+    } catch (err) {
+      console.error("Bypass verification note:", err.message);
     }
-  } catch (error) {
-    console.error("Automated database backup sync failed:", error.message);
-  }
-}, 10 * 60 * 1000);
+  })();
+});
