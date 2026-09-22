@@ -561,7 +561,7 @@ async function adminChangePassword(userId, userName) {
     } catch (err) {
       if (errorEl) errorEl.textContent = err.message;
     }
-  };
+    };
 }
 
 async function adminRemoveUser(userId, userName) {
@@ -582,4 +582,3 @@ async function adminRemoveUser(userId, userName) {
     alert(err.message);
   }
 }
-
