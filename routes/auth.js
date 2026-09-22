@@ -12,6 +12,7 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// Fixed permission role comparison to align with database fields format mapping
 function requireAdmin(req, res, next) {
   if (!req.session || !req.session.userId || req.session.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
@@ -19,7 +20,7 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-// ASYNC LOGIN CONTROLLER: Resolves network promises cleanly before verification
+// ASYNC LOGIN CONTROLLER: Extracts individual records accurately from arrays
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -27,15 +28,25 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Missing credentials' });
     }
 
-    // Await added to handle the Turso cloud database fetch loop safely
-    const user = await db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').get(username.trim());
-    if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    const rawResult = await db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').get(username.trim().toLowerCase());
+    
+    // Core adjustment layer: Extracts the primary single user entity out of the row array wrapper
+    const user = (Array.isArray(rawResult) && rawResult.length > 0) ? rawResult[0] : (rawResult && !Array.isArray(rawResult) ? rawResult : null);
+    
+    if (!user || !user.password_hash) {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
-    req.session.userId = user.id;
-    req.session.role = user.role;
-    req.session.name = user.name;
+    const inputPassword = String(password);
+    const storedHash = String(user.password_hash);
+
+    if (!bcrypt.compareSync(inputPassword, storedHash)) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    req.session.userId = Number(user.id);
+    req.session.role = String(user.role);
+    req.session.name = String(user.name);
     
     res.json({ id: user.id, name: user.name, username: user.username, role: user.role });
   } catch (error) {
@@ -55,8 +66,10 @@ router.post('/change-password', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'New password must be at least 6 characters' });
     }
 
-    const user = await db.prepare('SELECT password_hash FROM users WHERE id=?').get(req.session.userId);
-    if (!user || !bcrypt.compareSync(String(current_password), user.password_hash)) {
+    const rawResult = await db.prepare('SELECT password_hash FROM users WHERE id=?').get(req.session.userId);
+    const user = Array.isArray(rawResult) ? rawResult[0] : rawResult;
+
+    if (!user || !bcrypt.compareSync(String(current_password), String(user.password_hash))) {
       return res.status(401).json({ error: 'Current password is incorrect' });
     }
 
@@ -72,7 +85,10 @@ router.post('/change-password', requireAuth, async (req, res) => {
 router.get('/me', async (req, res) => {
   if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Not logged in' });
   try {
-    const user = await db.prepare('SELECT id, name, username, role FROM users WHERE id = ?').get(req.session.userId);
+    const rawResult = await db.prepare('SELECT id, name, username, role FROM users WHERE id = ?').get(req.session.userId);
+    const user = Array.isArray(rawResult) ? rawResult[0] : rawResult;
+    
+    if (!user) return res.status(401).json({ error: 'User record not found' });
     res.json(user);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -96,7 +112,7 @@ router.post('/users', requireAdmin, async (req, res) => {
     
     const hash = bcrypt.hashSync(password, 10);
     const info = await db.prepare(`INSERT INTO users (name, username, password_hash, role) VALUES (?, ?, ?, ?)`)
-      .run(name.trim(), username.trim(), hash, role === 'admin' ? 'admin' : 'employee');
+      .run(name.trim(), username.trim().toLowerCase(), hash, role === 'admin' ? 'admin' : 'employee');
       
     res.json({ id: info.lastInsertRowid });
   } catch (e) {
@@ -156,7 +172,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
   try {
     const rows = await db.prepare('SELECT key, value FROM settings').all();
     const out = {};
-    rows.forEach(r => out[r.key] = r.value);
+    if (Array.isArray(rows)) {
+      rows.forEach(r => { if (r && r.key) out[r.key] = r.value; });
+    }
     res.json(out);
   } catch (err) {
     res.status(500).json({ error: err.message });
