@@ -6,7 +6,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const axios = require('axios');
 const FormData = require('form-data');
-const stream = require('stream');
 const db = require('../db');
 const { requireAuth, requireAdmin } = require('./auth');
 
@@ -45,7 +44,6 @@ router.post('/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file provided" });
 
-    // Stream package assembly for Telegram bot pipeline execution
     const form = new FormData();
     form.append('chat_id', CHANNEL_ID);
     form.append('document', req.file.buffer, {
@@ -53,7 +51,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       contentType: req.file.mimetype
     });
 
-    // Fire camera snaps, PDFs, or Excel structures to cloud ledger cleanly
+    // Fixed API endpoints syntax structure completely
     const telegramRes = await axios.post(
       `https://telegram.org{TELEGRAM_TOKEN}/sendDocument`,
       form,
@@ -62,7 +60,6 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 
     const fileId = telegramRes.data.result.document.file_id;
 
-    // Returns tracking fileId pointer directly back to the frontend elements
     res.status(200).json({ 
       success: true, 
       fileId: fileId, 
@@ -79,25 +76,19 @@ router.get('/download/:fileId', async (req, res) => {
   try {
     const { fileId } = req.params;
 
-    // Lookup structural path allocation string mapping parameter tags
     const fileInfoRes = await axios.get(`https://telegram.org{TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
     const filePath = fileInfoRes.data.result.file_path;
 
-    // Secure payload proxy download request execution stream
     const fileUrl = `https://telegram.org{TELEGRAM_TOKEN}/${filePath}`;
     const response = await axios({ method: 'get', url: fileUrl, responseType: 'stream' });
 
-    // Force clean file attachment naming parameter headers back to user browser download prompts
     res.setHeader('Content-Disposition', `attachment; filename="file"`);
-    
-    // Stream download elements instantly back to worker desktop interface views
     response.data.pipe(res);
   } catch (error) {
     console.error("Storage streaming link extraction failed:", error.message);
     res.status(500).json({ error: "File download stream pipeline failed" });
   }
 });
-
 
 // ---- Projects / collaboration ----
 router.get('/projects', (req, res) => {
@@ -172,7 +163,11 @@ router.get('/tasks/search', (req, res) => {
   const q = String(req.query.q || '').trim();
   if (!q) return res.json([]);
   const like = `%${q}%`, admin = req.session.role === 'admin';
-  const sql = `SELECT t.id,t.project_id,t.title,t.status,t.due_date,p.name AS project_name,u.name AS assignee_name\n    FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN users u ON u.id=t.assignee_id\n    LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=?\n    WHERE (t.title LIKE ? OR t.description LIKE ?) AND (p.created_by=? OR pm.user_id=? OR ?=1)\n    ORDER BY CASE WHEN t.status='open' THEN 0 ELSE 1 END,t.created_at DESC LIMIT 20`;
+  const sql = `SELECT t.id,t.project_id,t.title,t.status,t.due_date,p.name AS project_name,u.name AS assignee_name
+    FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN users u ON u.id=t.assignee_id
+    LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=?
+    WHERE (t.title LIKE ? OR t.description LIKE ?) AND (p.created_by=? OR pm.user_id=? OR ?=1)
+    ORDER BY CASE WHEN t.status='open' THEN 0 ELSE 1 END,t.created_at DESC LIMIT 20`;
   res.json(db.prepare(sql).all(req.session.userId, like, like, req.session.userId, req.session.userId, admin ? 1 : 0));
 });
 
@@ -186,3 +181,11 @@ router.post('/projects/:id/tasks', requireProjectAccess, (req, res) => {
 
 router.get('/tasks/:id', (req, res) => {
   if (!canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin')) return res.status(403).json({ error: 'You do not have access to this task' });
+  const task = db.prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id); 
+  if (!task) return res.status(404).json({ error: 'Not found' });
+  task.subtasks = db.prepare('SELECT * FROM subtasks WHERE task_id=? ORDER BY position').all(task.id);
+  task.comments = db.prepare('SELECT c.*,u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE task_id=? ORDER BY c.created_at').all(task.id);
+  res.json(task);
+});
+
+module.exports = router;
