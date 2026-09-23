@@ -1,0 +1,6 @@
+{
+  "appId": "com.taskflow.app",
+  "appName": "TaskFlow",
+  "webDir": "public",
+  "bundledWebRuntime": false
+}

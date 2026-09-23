@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: taskflow-app
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: TURSO_PLATFORM_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHANNEL_ID
+        sync: false
