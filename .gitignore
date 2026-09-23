@@ -1,0 +1,19 @@
+node_modules/
+sessions/
+uploads/
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+.vscode/
+
+# Native build output
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+ios/App/Pods/
+ios/App/App/public/
