@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>TaskFlow</title>
+<meta name="theme-color" content="#14213D">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📋</text></svg>">
+<link rel="stylesheet" href="/css/style.css?v=20260923-2">
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="login-screen" class="login-screen hidden">
+  <div class="login-card">
+    <div class="login-mark">TaskFlow</div>
+    <p class="login-sub">Internal workspace — tasks &amp; attendance</p>
+    <form id="login-form">
+      <label>Username
+        <input type="text" id="login-username" autocomplete="username" required>
+      </label>
+      <label>Password
+        <input type="password" id="login-password" autocomplete="current-password" required>
+      </label>
+      <div id="login-error" class="form-error"></div>
+      <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+    </form>
+  </div>
+</div>
+
+<!-- APP SHELL -->
+<div id="app" class="app hidden">
+  <aside class="sidebar">
+    <div class="sidebar-top">
+      <div class="brand">TaskFlow</div>
+      <button class="icon-btn" id="btn-logout" title="Sign out">⏻</button>
+    </div>
+
+    <nav class="nav-section" id="main-nav-section">
+      <button class="nav-item" data-view="attendance">🕒 Attendance</button>
+      <button class="nav-item" data-view="reimbursements">💳 Reimbursements</button>
+      <button class="nav-item" data-view="mytasks">✓ My Tasks</button>
+      <button class="nav-item" data-view="notifications">🔔 Notifications</button>
+      <button class="nav-item" id="nav-admin" data-view="admin" style="display:none">⚙️ Admin</button>
+    </nav>
+
+    <div class="nav-section-header">
+      <span>Projects</span>
+      <button class="icon-btn small" id="btn-new-project" title="New project">+</button>
+    </div>
+    <div class="project-list" id="project-list"></div>
+
+    <div class="sidebar-bottom" id="sidebar-bottom">
+      <div class="me" id="me-badge"></div>
+      <button class="btn btn-secondary btn-block" id="btn-change-password" style="margin-top:10px;">Change password</button>
+    </div>
+  </aside>
+  <div id="mobile-nav-backdrop" class="mobile-nav-backdrop hidden"></div>
+
+  <main class="main">
+    <header class="mobile-topbar">
+      <button class="mobile-back-btn" id="btn-mobile-back" title="Back to dashboard" aria-label="Back to dashboard">‹</button>
+      <b id="mobile-page-title">TaskFlow</b>
+      <div class="mobile-topbar-actions">
+        <button class="logout-mini-btn" id="dashboard-logout-btn" type="button">Logout</button>
+        <button class="mobile-menu-btn" id="btn-mobile-nav" title="Open navigation" aria-label="Open navigation">☰</button>
+      </div>
+    </header>
+    <div id="app-notification" class="app-notification hidden" role="status"></div>
+    <!-- Dashboard -->
+    <section id="view-dashboard" class="view">
+      <div class="dashboard-hero">
+        <div class="dashboard-hero-row">
+          <div><span class="eyebrow">Workspace</span><h1>Dashboard</h1><p>Choose where you want to work.</p></div>
+          <div class="dashboard-greeting">
+            <div id="dashboard-greeting-text">Good morning</div>
+            <div id="dashboard-date-text">Wednesday, September 23</div>
+          </div>
+        </div>
+      </div>
+      <div class="dashboard-grid">
+        <button class="dashboard-card dashboard-card-primary" data-dashboard-view="reimbursements"><span>💳</span><b>Reimbursements</b><small>Submit and review expenses</small></button>
+        <button class="dashboard-card" data-dashboard-view="attendance"><span>🕒</span><b>Attendance</b><small>Punch in and view history</small></button>
+        <button class="dashboard-card" data-dashboard-view="mytasks"><span>✓</span><b>My Tasks</b><small>See tasks assigned to you</small></button>
+        <button class="dashboard-card" data-dashboard-view="notifications"><span>🔔</span><b>Notifications</b><small>Recent workspace changes</small></button>
+        <button class="dashboard-card" data-dashboard-view="projects"><span>▦</span><b>Projects</b><small>Open your project workspace</small></button>
+        <button class="dashboard-card" id="dashboard-tracking-card" data-dashboard-view="tracking" style="display:none"><span>🗺️</span><b>Tracking</b><small>View live employee locations</small></button>
+        <button class="dashboard-card" id="dashboard-admin-card" data-dashboard-view="admin" style="display:none"><span>⚙️</span><b>Admin</b><small>Manage workspace settings</small></button>
+        <div class="dashboard-card" id="dashboard-storage-card" style="display:none"><span>🗄️</span><b>Storage</b><small>Monitor system storage usage</small></div>
+      </div>
+      <div id="dashboard-summary" class="dashboard-summary"></div>
+    </section>
+    <section id="view-projects" class="view hidden">
+      <div class="project-header"><div><span class="eyebrow">Workspace</span><h1>Projects</h1><div class="hint">Choose a project to open its tasks.</div></div><button class="btn btn-primary" id="projects-new-project">+ New project</button></div>
+      <div id="projects-directory" class="dashboard-projects"></div>
+    </section>
+    <!-- Attendance view -->
+    <section id="view-attendance" class="view">
+      <div id="attendance-punch">
+        <div id="punch-card-container" class="punch-card"></div>
+      </div>
+      <div id="admin-attendance-monitor"></div>
+      <div id="attendance-live">
+        <h2 class="section-title">Live attendance</h2>
+        <table class="attn-table">
+          <thead><tr><th>Employee</th><th>Punch in</th><th>Location</th></tr></thead>
+          <tbody id="live-attendance-list"></tbody>
+        </table>
+      </div>
+      <div id="attendance-history">
+        <h2 class="section-title">My attendance history</h2>
+        <table class="attn-table">
+          <thead><tr><th>Date</th><th>Punch in</th><th>Punch out</th><th>Location</th></tr></thead>
+          <tbody id="attendance-history-table"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Reimbursements view -->
+    <section id="view-reimbursements" class="view hidden">
+      <div id="reimbursements-content"></div>
+    </section>
+
+    <!-- My Tasks view -->
+    <section id="view-mytasks" class="view hidden">
+      <div class="project-header"><div><h1>My Tasks</h1><div class="hint">Open tasks assigned to you across your projects.</div></div></div>
+      <div class="task-table-wrap"><table class="task-table"><thead><tr><th style="width:32px"></th><th>Task</th><th>Project</th><th>Due</th></tr></thead><tbody id="my-task-list"></tbody></table></div>
+    </section>
+
+    <!-- Notifications view -->
+    <section id="view-notifications" class="view hidden">
+      <div class="project-header"><div><h1>Notifications</h1><div class="hint">Changes affecting you and recent actions in your workspace.</div></div></div>
+      <div id="notifications-list" class="admin-block"></div>
+    </section>
+
+    <!-- Admin view -->
+    <section id="view-admin" class="view hidden">
+      <div id="admin-content"></div>
+    </section>
+
+    <!-- Live tracking view -->
+    <section id="view-tracking" class="view hidden">
+      <div class="project-header"><div><span class="eyebrow">Live tracking</span><h1>Employee locations</h1><div class="hint">Select an employee to view today\'s location timeline.</div></div></div>
+      <div class="tracking-layout"><aside class="tracking-people" id="tracking-people"></aside><section class="tracking-detail" id="tracking-detail"><div class="tracking-empty">Select an employee to view their timeline.</div></section></div>
+    </section>
+
+    <!-- Project / task view -->
+    <section id="view-project" class="view hidden">
+      <div class="project-switcher-bar" id="project-switcher-bar"><span class="eyebrow">Projects</span><div id="focused-project-list" class="focused-project-list"></div><button class="btn btn-secondary btn-sm" id="project-new-project">+ New project</button></div>
+      <div class="project-header">
+        <div><h1 id="project-title">—</h1><div id="project-members-hint" class="hint"></div></div>
+        <div class="project-header-actions"><button class="btn btn-secondary" id="btn-manage-members">Members</button><button class="btn btn-primary" id="btn-new-task">+ Add task</button></div>
+      </div>
+      <div class="task-toolbar">
+        <div class="task-search-wrap">
+        <input id="task-search" class="task-search" placeholder="Search tasks…" autocomplete="off">
+        <div id="task-search-suggestions" class="task-search-suggestions hidden"></div>
+      </div>
+        <button class="btn btn-secondary" id="btn-task-filters">☷ Filters</button>
+        <select id="task-sort" class="task-sort" aria-label="Sort tasks">
+          <option value="manual">Sort: Manual</option>
+          <option value="assignee">Sort: Assignee</option>
+          <option value="due">Sort: Due date</option>
+          <option value="created">Sort: Created date</option>
+        </select>
+        <button class="btn btn-secondary" id="btn-task-clear-filters">Clear</button>
+      </div>
+      <div id="task-filter-panel" class="task-filter-panel hidden">
+        <div class="filter-panel-header"><b>Filters</b><button class="icon-btn small" id="btn-close-task-filters">✕</button></div>
+        <div class="task-filter-grid">
+          <label>Completion status<select id="task-filter-status"><option value="open">Incomplete tasks</option><option value="done">Completed tasks</option><option value="all">All tasks</option></select></label>
+          <label>Assignee<select id="task-filter-assignee"><option value="all">All assignees</option></select></label>
+          <label>Due date<input id="task-filter-due" type="date"></label>
+          <label>Created by<select id="task-filter-created-by"><option value="all">Anyone</option></select></label>
+          <label>Created on<input id="task-filter-created-on" type="date"></label>
+          <label>Last modified on<input id="task-filter-modified-on" type="date"></label>
+          <label>Completed on<input id="task-filter-completed-on" type="date"></label>
+        </div>
+        <button class="btn btn-primary" id="btn-apply-task-filters">Apply filters</button>
+      </div>
+      <div class="task-table-wrap">
+        <div id="task-search-results-heading" class="task-search-results-heading hidden"></div>
+        <table class="task-table">
+          <thead>
+            <tr><th style="width:32px"></th><th>Task</th><th>Assignee</th><th>Due</th><th>Status</th></tr>
+          </thead>
+          <tbody id="task-list"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Empty state -->
+    <section id="view-empty" class="view">
+      <div class="empty-state">
+        <div class="empty-mark">📋</div>
+        <p>Pick a project on the left, or check Attendance up top.</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- Task detail drawer -->
+  <aside id="task-drawer" class="drawer hidden">
+    <div class="drawer-header">
+      <input id="drawer-title" class="drawer-title-input" placeholder="Task title">
+      <button class="btn btn-secondary btn-sm" id="btn-save-task" style="display:none;">Save changes</button>
+      <span id="drawer-save-state" class="drawer-save-state"></span>
+      <button class="icon-btn" id="drawer-close">✕</button>
+    </div>
+    <div class="drawer-body">
+      <div class="field-row">
+        <label>Assignee</label>
+        <select id="drawer-assignee"></select>
+      </div>
+      <div class="field-row">
+        <label>Due date</label>
+        <input type="date" id="drawer-due">
+      </div>
+      <div class="field-row">
+        <label>Created</label>
+        <span id="drawer-created" class="hint">—</span>
+      </div>
+      <div class="field-row">
+        <label>Status</label>
+        <select id="drawer-status">
+          <option value="open">Open</option>
+          <option value="done">Done</option>
+        </select>
+      </div>
+      <div class="field-block">
+        <label>Description</label>
+        <textarea id="drawer-desc" rows="4" placeholder="Add details…"></textarea>
+      </div>
+      <div class="field-block">
+        <div class="field-block-header">
+          <label>Subtasks</label>
+          <button class="link-btn" id="btn-add-subtask">+ add</button>
+        </div>
+        <div id="drawer-subtasks"></div>
+      </div>
+      <div class="field-block">
+        <label>Comments</label>
+        <div id="drawer-comments"></div>
+        <div id="comment-image-preview" class="comment-image-preview hidden"></div>
+        <div class="comment-input-row">
+          <input id="drawer-comment-input" placeholder="Write a comment…">
+          <input type="file" id="comment-file-input" accept="*/*" class="hidden">
+          <button class="icon-btn" id="btn-attach-image" title="Attach file (up to 50MB)">📎</button>
+          <button class="btn btn-secondary" id="btn-add-comment">Post</button>
+        </div>
+      </div>
+      <button class="btn btn-primary btn-block" id="btn-complete-task">✓ Complete task</button>
+      <button class="btn btn-danger btn-block" id="btn-delete-task">Delete task</button>
+    </div>
+  </aside>
+</div>
+
+<!-- Reimbursement detail drawer -->
+<aside id="reimbursement-drawer" class="drawer hidden">
+  <div class="drawer-header">
+    <b id="reimbursement-drawer-title">Reimbursement</b>
+    <button class="icon-btn" id="reimbursement-drawer-close">✕</button>
+  </div>
+  <div class="drawer-body">
+    <div class="field-row"><label>Employee</label><span id="reimbursement-detail-employee"></span></div>
+    <div class="field-row"><label>Department</label><span id="reimbursement-detail-department"></span></div>
+    <div class="field-row"><label>Submitted on</label><span id="reimbursement-detail-submitted" class="hint"></span></div>
+    <div class="field-row"><label>Expense date</label><span id="reimbursement-detail-expense-date"></span></div>
+    <div class="field-row"><label>Category</label><span id="reimbursement-detail-category"></span></div>
+    <div class="field-row"><label>Amount</label><b id="reimbursement-detail-amount"></b></div>
+    <div class="field-block"><label>Description</label><div id="reimbursement-detail-description" class="admin-block" style="margin:0; padding:12px;"></div></div>
+    <div class="field-row"><label>Status</label><span id="reimbursement-detail-status" class="tag"></span></div>
+    <div class="field-block"><label>Admin note</label><div id="reimbursement-detail-note" class="hint">No note</div></div>
+    <div class="field-block"><label>Receipt</label><div id="reimbursement-detail-receipt"></div></div>
+  </div>
+</aside>
+
+<!-- Generic modal -->
+<div id="modal-backdrop" class="modal-backdrop hidden">
+  <div class="modal" id="modal"></div>
+</div>
+
+<script src="/js/app.js?v=20260923-5"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', async () => {
+      try {
+        const registration = await navigator.serviceWorker.register('/service-worker.js?v=20260923-6');
+        await registration.update();
+      } catch (error) {
+        console.warn('Service worker update failed:', error);
+      }
+    });
+  }
+</script>
+</body>
+</html>

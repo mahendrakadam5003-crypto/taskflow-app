@@ -1,0 +1,14 @@
+{
+  "name": "TaskFlow",
+  "short_name": "TaskFlow",
+  "description": "Tasks, field attendance, and reimbursements",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#14213D",
+  "theme_color": "#14213D",
+  "orientation": "any",
+  "icons": [
+    { "src": "/icons/taskflow.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icons/taskflow-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
