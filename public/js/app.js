@@ -1802,22 +1802,27 @@ function isPhoneDevice() {
   return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 }
 
+function currentDeviceType() {
+  return isPhoneDevice() ? 'phone' : 'laptop';
+}
+
 async function renderPunchCard() {
   const card = $('#punch-card-container');
   if (!card) return;
-  if (!isPhoneDevice()) {
-    card.innerHTML = '<div class="admin-block attendance-phone-only"><b>Attendance is phone-only</b><p class="hint">Use TaskFlow on a phone to punch in or punch out. Location access is disabled on laptops.</p></div>';
-    return;
-  }
   try {
-    const status = await api('/attendance/today');
+    const [status, deviceAccess] = await Promise.all([api('/attendance/today'), api('/attendance/device-access/me')]);
+    if (!deviceAccess[`allow_${currentDeviceType()}`]) {
+      card.innerHTML = `<div class="admin-block attendance-phone-only"><b>Attendance is disabled on this device</b><p class="hint">Ask an administrator to allow punching from your ${currentDeviceType()}.</p></div>`;
+      return;
+    }
+    const devicePayload = { device_type: currentDeviceType() };
     if (!status) {
       card.innerHTML = `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`;
       $('#btn-punch-in').onclick = async () => {
         try {
           await verifyAttendanceIfRequired('in');
           const coords = await getLiveCoords();
-          await api('/attendance/punch-in', { method: 'POST', body: coords });
+          await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload } });
           reloadWithActionMessage('attendance', 'Punched in successfully.');
         } catch (err) { alert(err.message); }
       };
@@ -1827,7 +1832,7 @@ async function renderPunchCard() {
         try {
           await verifyAttendanceIfRequired('in');
           const coords = await getLiveCoords();
-          await api('/attendance/punch-in', { method: 'POST', body: coords });
+          await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload } });
           reloadWithActionMessage('attendance', 'Punched in successfully.');
         } catch (err) { alert(err.message); }
       };
@@ -1842,7 +1847,7 @@ async function renderPunchCard() {
         try {
           await verifyAttendanceIfRequired('out');
           const coords = await getLiveCoords();
-          await api('/attendance/punch-out', { method: 'POST', body: coords });
+          await api('/attendance/punch-out', { method: 'POST', body: { ...coords, ...devicePayload } });
           stopLiveTracking();
           reloadWithActionMessage('attendance', 'Punched out successfully.');
         } catch (err) { alert(err.message); }
@@ -1966,7 +1971,7 @@ async function loadTrackingTimeline(userId, selectedButton) {
 // ================= ADMINISTRATIVE CORE VIEW MODULE =================
 async function renderAdmin() {
   try {
-    const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess, paymentAccess] = await Promise.all([api('/auth/users'), api('/auth/settings'), api('/auth/departments'), api('/auth/reimbursement-access'), api('/auth/activity'), api('/attendance/tracking-access'), api('/attendance/verification-access'), api('/payment-history/access')]);
+    const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess, paymentAccess, deviceAccess, myDeviceAccess] = await Promise.all([api('/auth/users'), api('/auth/settings'), api('/auth/departments'), api('/auth/reimbursement-access'), api('/auth/activity'), api('/attendance/tracking-access'), api('/attendance/verification-access'), api('/payment-history/access'), api('/attendance/device-access'), api('/attendance/device-access/me')]);
     const verificationByUser = new Map(verificationAccess.map(person => [Number(person.id), Number(person.verification_required) === 1]));
     const wrap = $('#admin-content');
     if (!wrap) return;
@@ -2003,6 +2008,12 @@ async function renderAdmin() {
         <h3>Live tracking access</h3>
         <p class="hint">Allow selected employees to open the Tracking dashboard and view location timelines.</p>
         <div id="tracking-access-list"></div>
+      </div>
+
+      <div class="admin-block">
+        <h3>Attendance device access</h3>
+        <p class="hint">Choose whether each person may punch in and out from a phone, laptop, or both. Laptop punching still requires browser location permission.</p>
+        <div id="attendance-device-access-list"></div>
       </div>
 
       <div class="admin-block">
@@ -2133,6 +2144,36 @@ async function renderAdmin() {
       row.className = 'tracking-access-row';
       row.innerHTML = `<div><b>${escapeHtml(person.name)}</b><span class="tracking-username">${escapeHtml(person.username)}</span></div><span class="tracking-access-status ${person.allowed ? 'allowed' : 'denied'}">${person.allowed ? 'Allowed' : 'Denied'}</span><label class="tracking-toggle"><input type="checkbox" ${person.allowed ? 'checked' : ''} data-payment-access-user="${person.user_id}"><span>Allow payment history</span></label>`;
       paymentAccessList.appendChild(row);
+    });
+    const deviceAccessList = $('#attendance-device-access-list');
+    deviceAccess.forEach((person) => {
+      const row = document.createElement('div');
+      row.className = 'admin-form-row';
+      row.innerHTML = `<b style="min-width:180px;">${escapeHtml(person.name)}</b>
+        <label><input type="checkbox" data-device-phone="${person.id}" ${Number(person.allow_phone) === 1 ? 'checked' : ''}> Phone</label>
+        <label><input type="checkbox" data-device-laptop="${person.id}" ${Number(person.allow_laptop) === 1 ? 'checked' : ''}> Laptop</label>
+        <button class="btn btn-secondary btn-sm save-device-access" data-device-user="${person.id}">Save</button>`;
+      deviceAccessList.appendChild(row);
+    });
+    $$('[data-device-phone], [data-device-laptop]').forEach((checkbox) => {
+      checkbox.onchange = () => {
+        const row = checkbox.closest('.admin-form-row');
+        const phone = row?.querySelector(`[data-device-phone="${checkbox.dataset.devicePhone || checkbox.dataset.deviceLaptop}"]`);
+        const laptop = row?.querySelector(`[data-device-laptop="${checkbox.dataset.devicePhone || checkbox.dataset.deviceLaptop}"]`);
+        if (phone && laptop && !phone.checked && !laptop.checked) checkbox.checked = true;
+      };
+    });
+    $$('.save-device-access').forEach((button) => {
+      button.onclick = async () => {
+        const userId = button.dataset.deviceUser;
+        const row = button.closest('.admin-form-row');
+        const phone = row.querySelector(`[data-device-phone="${userId}"]`);
+        const laptop = row.querySelector(`[data-device-laptop="${userId}"]`);
+        try {
+          await api(`/attendance/device-access/${userId}`, { method: 'PUT', body: { allow_phone: phone.checked, allow_laptop: laptop.checked } });
+          showAppNotification('Attendance device access updated.');
+        } catch (error) { alert(error.message); }
+      };
     });
     $$('[data-payment-access-user]').forEach((checkbox) => {
       checkbox.onchange = async () => {
@@ -2266,6 +2307,7 @@ async function renderAdmin() {
 async function renderAdminAttendance(users, targetId = 'admin-attendance-content') {
   const wrap = $(`#${targetId}`);
   if (!wrap) return;
+  const myDeviceAccess = await api('/attendance/device-access/me');
   const today = todayISO();
   const employeeOptions = users.map(u => `<option value="${u.id}">${escapeHtml(u.name || u.NAME)}</option>`).join('');
   const departments = [...new Set(users.map(u => u.department || u.DEPARTMENT || '').filter(Boolean))].sort();
@@ -2312,9 +2354,10 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
         const name = row.user_name || row.name || '—';
         const departmentName = row.department || '—';
         const isToday = from === to && from === today;
+        const canAdminPunch = Boolean(myDeviceAccess[`allow_${currentDeviceType()}`]);
         const action = isToday ? (row.punch_in && !row.punch_out
-          ? (isPhoneDevice() ? `<button class="btn btn-danger btn-sm admin-punch" data-action="out" data-user-id="${row.user_id}">Punch out</button>` : '<span class="hint">Phone required</span>')
-          : !row.punch_in ? (isPhoneDevice() ? `<button class="btn btn-primary btn-sm admin-punch" data-action="in" data-user-id="${row.user_id}">Punch in</button>` : '<span class="hint">Phone required</span>') : '<span class="hint">Complete</span>') : '<span class="hint">—</span>';
+          ? (canAdminPunch ? `<button class="btn btn-danger btn-sm admin-punch" data-action="out" data-user-id="${row.user_id}">Punch out</button>` : '<span class="hint">Device not allowed</span>')
+          : !row.punch_in ? (canAdminPunch ? `<button class="btn btn-primary btn-sm admin-punch" data-action="in" data-user-id="${row.user_id}">Punch in</button>` : '<span class="hint">Device not allowed</span>') : '<span class="hint">Complete</span>') : '<span class="hint">—</span>';
         return `<tr>
           <td><b>${escapeHtml(name)}</b></td>
           <td>${escapeHtml(departmentName)}</td>
@@ -2332,7 +2375,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
           try {
             const coords = await getLiveCoords();
             await api(`/attendance/admin-punch-${button.dataset.action}`, {
-              method: 'POST', body: { user_id: Number(button.dataset.userId), ...coords }
+              method: 'POST', body: { user_id: Number(button.dataset.userId), ...coords, device_type: currentDeviceType() }
             });
             await renderRows();
           } catch (err) {

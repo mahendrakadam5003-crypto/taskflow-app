@@ -18,6 +18,16 @@ function todayStr() {
   return d.toISOString().slice(0, 10);
 }
 
+function normalizeDeviceType(value) {
+  return value === 'laptop' ? 'laptop' : 'phone';
+}
+
+async function canPunchFromDevice(userId, deviceType) {
+  const access = await db.prepare('SELECT allow_phone, allow_laptop FROM attendance_device_access WHERE user_id = ?').get(userId);
+  if (!access) return deviceType === 'phone';
+  return deviceType === 'laptop' ? Number(access.allow_laptop) === 1 : Number(access.allow_phone) === 1;
+}
+
 // Generates an instant, clickable Google Maps link from raw coordinates
 function makeMapLink(lat, lng) {
   if (lat == null || lng == null || isNaN(parseFloat(lat)) || isNaN(parseFloat(lng))) return '';
@@ -76,6 +86,33 @@ router.get('/verification-required', async (req, res) => {
   res.json({ required: !!access });
 });
 
+router.get('/device-access/me', async (req, res) => {
+  const row = await db.prepare('SELECT allow_phone, allow_laptop FROM attendance_device_access WHERE user_id = ?').get(req.session.userId);
+  res.json({ allow_phone: row ? Number(row.allow_phone) === 1 : true, allow_laptop: row ? Number(row.allow_laptop) === 1 : false });
+});
+
+router.get('/device-access', requireAdmin, async (req, res) => {
+  const rows = await db.prepare(`SELECT u.id, u.name, u.username,
+    COALESCE(ada.allow_phone, 1) AS allow_phone,
+    COALESCE(ada.allow_laptop, 0) AS allow_laptop
+    FROM users u LEFT JOIN attendance_device_access ada ON ada.user_id = u.id
+    WHERE u.active = 1 ORDER BY u.name`).all();
+  res.json(rows || []);
+});
+
+router.put('/device-access/:userId', requireAdmin, async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!userId) return res.status(400).json({ error: 'Valid user is required.' });
+  const allowPhone = req.body.allow_phone ? 1 : 0;
+  const allowLaptop = req.body.allow_laptop ? 1 : 0;
+  if (!allowPhone && !allowLaptop) return res.status(400).json({ error: 'Allow at least one device.' });
+  await db.prepare(`INSERT INTO attendance_device_access (user_id, allow_phone, allow_laptop, updated_by)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET allow_phone=excluded.allow_phone, allow_laptop=excluded.allow_laptop, updated_by=excluded.updated_by, updated_at=datetime('now')`)
+    .run(userId, allowPhone, allowLaptop, req.session.userId);
+  res.json({ ok: true });
+});
+
 router.get('/verification-access', requireAdmin, async (req, res) => {
   const rows = await db.prepare(`SELECT u.id, u.name, u.username, CASE WHEN ava.user_id IS NULL THEN 0 ELSE 1 END AS verification_required
     FROM users u LEFT JOIN attendance_verification_access ava ON ava.user_id = u.id WHERE u.active = 1 ORDER BY u.name`).all();
@@ -96,6 +133,8 @@ router.put('/verification-access/:userId', requireAdmin, async (req, res) => {
 // PUNCH IN ROUTE WITH AUTOMATIC LOCATION NAMING
 router.post('/punch-in', async (req, res) => {
   const { lat, lng } = req.body;
+  const deviceType = normalizeDeviceType(req.body.device_type);
+  if (!(await canPunchFromDevice(req.session.userId, deviceType))) return res.status(403).json({ error: 'Punching from this device is not allowed. Ask an admin to enable it.' });
   if (lat == null || lng == null) return res.status(400).json({ error: 'Location is required to punch in.' });
   
   const date = todayStr();
@@ -147,6 +186,8 @@ router.post('/location-update', async (req, res) => {
 // PUNCH OUT ROUTE WITH AUTOMATIC LOCATION NAMING
 router.post('/punch-out', async (req, res) => {
   const { lat, lng } = req.body;
+  const deviceType = normalizeDeviceType(req.body.device_type);
+  if (!(await canPunchFromDevice(req.session.userId, deviceType))) return res.status(403).json({ error: 'Punching from this device is not allowed. Ask an admin to enable it.' });
   if (lat == null || lng == null) return res.status(400).json({ error: 'Location is required to punch out.' });
   
   const date = todayStr();
@@ -195,6 +236,7 @@ router.get('/overview', requireAdmin, async (req, res) => {
 // admin: punch on behalf of an employee from the monitoring screen
 router.post('/admin-punch-in', requireAdmin, async (req, res) => {
   const { user_id, lat, lng } = req.body;
+  if (!(await canPunchFromDevice(req.session.userId, normalizeDeviceType(req.body.device_type)))) return res.status(403).json({ error: 'Punching from this device is not allowed for your admin account.' });
   if (!user_id || lat == null || lng == null) return res.status(400).json({ error: 'Employee and location are required.' });
   const date = todayStr();
   const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(user_id, date);
@@ -214,6 +256,7 @@ router.post('/admin-punch-in', requireAdmin, async (req, res) => {
 
 router.post('/admin-punch-out', requireAdmin, async (req, res) => {
   const { user_id, lat, lng } = req.body;
+  if (!(await canPunchFromDevice(req.session.userId, normalizeDeviceType(req.body.device_type)))) return res.status(403).json({ error: 'Punching from this device is not allowed for your admin account.' });
   if (!user_id || lat == null || lng == null) return res.status(400).json({ error: 'Employee and location are required.' });
   const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(user_id, todayStr());
   if (!existing || !existing.punch_in) return res.status(400).json({ error: 'This employee has not punched in today.' });

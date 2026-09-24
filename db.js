@@ -199,6 +199,14 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       enabled_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
 
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS attendance_device_access (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      allow_phone INTEGER NOT NULL DEFAULT 1,
+      allow_laptop INTEGER NOT NULL DEFAULT 0,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );`);
+
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS reimbursements (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id),
