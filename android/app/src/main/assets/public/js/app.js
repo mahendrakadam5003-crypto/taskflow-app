@@ -1295,8 +1295,6 @@ async function showNewTaskDrawer() {
   const totalAmount = $('#drawer-total-amount');
   const status = $('#drawer-status');
   const workMode = $('#drawer-work-mode');
-  const checkinUsers = $('#drawer-checkin-users');
-  const checkinUsersBlock = $('#drawer-checkin-users-block');
   const description = $('#drawer-desc');
   const created = $('#drawer-created');
   const saveButton = $('#btn-save-task');
@@ -1316,11 +1314,6 @@ async function showNewTaskDrawer() {
     workMode.value = 'office';
     workMode.disabled = ME.role !== 'admin';
   }
-  if (checkinUsers) {
-    checkinUsers.innerHTML = members.map(member => `<option value="${member.id}" ${String(member.id) === String(assignee.value || '') ? 'selected' : ''}>${escapeHtml(member.name)}</option>`).join('');
-    checkinUsers.disabled = ME.role !== 'admin';
-  }
-  if (checkinUsersBlock) checkinUsersBlock.style.display = 'none';
   if (description) description.value = '';
   if (description) {
     description.oninput = autoGrowDescription;
@@ -1347,22 +1340,10 @@ async function showNewTaskDrawer() {
         invoice_number: invoiceNumber.value.trim() || null,
         invoice_date: invoiceDate.value || null,
         total_amount: totalAmount.value || 0,
-        work_mode: workMode.value,
-        checkin_user_ids: Array.from(checkinUsers.selectedOptions).map(option => Number(option.value))
+        work_mode: workMode.value
       }});
       reloadWithActionMessage('project', 'Task created successfully.', CURRENT_PROJECT.id);
     } catch (err) { alert(err.message); }
-  };
-  workMode.onchange = () => {
-    checkinUsersBlock.style.display = workMode.value === 'on_field' ? '' : 'none';
-    if (workMode.value === 'on_field' && !checkinUsers.selectedOptions.length && assignee.value) {
-      Array.from(checkinUsers.options).filter(option => option.value === assignee.value).forEach(option => { option.selected = true; });
-    }
-  };
-  assignee.onchange = () => {
-    if (workMode.value === 'on_field' && !checkinUsers.selectedOptions.length && assignee.value) {
-      Array.from(checkinUsers.options).filter(option => option.value === assignee.value).forEach(option => { option.selected = true; });
-    }
   };
 }
 
@@ -1408,18 +1389,10 @@ async function openTaskDrawer(taskId) {
     $('#drawer-assignee').disabled = false;
     $('#drawer-assignee').value = task.assignee_id || '';
     const workModeInput = $('#drawer-work-mode');
-    const checkinUsersInput = $('#drawer-checkin-users');
-    const checkinUsersBlock = $('#drawer-checkin-users-block');
     if (workModeInput) {
       workModeInput.value = task.work_mode || 'office';
       workModeInput.disabled = ME.role !== 'admin';
     }
-    if (checkinUsersInput) {
-      const requiredUsers = new Set((task.checkin_users || []).map(user => String(user.id)));
-      checkinUsersInput.innerHTML = members.map(member => `<option value="${member.id}" ${requiredUsers.has(String(member.id)) ? 'selected' : ''}>${escapeHtml(member.name)}</option>`).join('');
-      checkinUsersInput.disabled = ME.role !== 'admin';
-    }
-    if (checkinUsersBlock) checkinUsersBlock.style.display = (task.work_mode || 'office') === 'on_field' ? '' : 'none';
     $('#drawer-due').value = task.due_date || '';
     $('#drawer-due').disabled = false;
     $('#drawer-customer-name').value = task.customer_name || '';
@@ -1539,8 +1512,7 @@ async function openTaskDrawer(taskId) {
       invoice_date: $('#drawer-invoice-date').value || null,
       total_amount: $('#drawer-total-amount').value || 0,
       status: $('#drawer-status').value,
-      work_mode: $('#drawer-work-mode').value,
-      checkin_user_ids: Array.from($('#drawer-checkin-users').selectedOptions).map(option => Number(option.value))
+      work_mode: $('#drawer-work-mode').value
     });
     let savedTaskDraftKey = getTaskDraftKey();
     const saveChanges = async () => {
@@ -1561,7 +1533,6 @@ async function openTaskDrawer(taskId) {
       };
       if (ME.role === 'admin') {
         body.work_mode = $('#drawer-work-mode').value;
-        body.checkin_user_ids = Array.from($('#drawer-checkin-users').selectedOptions).map(option => Number(option.value));
       }
       await api(`/tasks/${taskId}`, { method: 'PUT', body });
       savedTaskDraftKey = draftKey;
@@ -1597,11 +1568,7 @@ async function openTaskDrawer(taskId) {
     $('#drawer-invoice-date').onchange = queueAutosave;
     $('#drawer-total-amount').onchange = queueAutosave;
     $('#drawer-status').onchange = queueAutosave;
-    $('#drawer-work-mode').onchange = () => {
-      $('#drawer-checkin-users-block').style.display = $('#drawer-work-mode').value === 'on_field' ? '' : 'none';
-      queueAutosave();
-    };
-    $('#drawer-checkin-users').onchange = queueAutosave;
+    $('#drawer-work-mode').onchange = queueAutosave;
     $('#btn-save-task').onclick = async () => {
       clearTimeout(autosaveTimer);
       await saveChanges();
@@ -2100,7 +2067,7 @@ async function loadTrackingTimeline(userId, selectedButton) {
 // ================= ADMINISTRATIVE CORE VIEW MODULE =================
 async function renderAdmin() {
   try {
-    const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess, paymentAccess, deviceAccess, myDeviceAccess, projectActionAccess] = await Promise.all([api('/auth/users'), api('/auth/settings'), api('/auth/departments'), api('/auth/reimbursement-access'), api('/auth/activity'), api('/attendance/tracking-access'), api('/attendance/verification-access'), api('/payment-history/access'), api('/attendance/device-access'), api('/attendance/device-access/me'), api('/project-action-access')]);
+    const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess, paymentAccess, deviceAccess, myDeviceAccess, projectActionAccess, taskCheckinAccess] = await Promise.all([api('/auth/users'), api('/auth/settings'), api('/auth/departments'), api('/auth/reimbursement-access'), api('/auth/activity'), api('/attendance/tracking-access'), api('/attendance/verification-access'), api('/payment-history/access'), api('/attendance/device-access'), api('/attendance/device-access/me'), api('/project-action-access'), api('/task-checkin-access')]);
     const verificationByUser = new Map(verificationAccess.map(person => [Number(person.id), Number(person.verification_required) === 1]));
     const wrap = $('#admin-content');
     if (!wrap) return;
@@ -2143,6 +2110,12 @@ async function renderAdmin() {
         <h3>Attendance device access</h3>
         <p class="hint">Choose whether each person may punch in and out from a phone, laptop, or both. Laptop punching still requires browser location permission.</p>
         <div id="attendance-device-access-list"></div>
+      </div>
+
+      <div class="admin-block">
+        <h3>Task check-in / check-out access</h3>
+        <p class="hint">Enable employees who must use GPS check-in and check-out when they are assigned an on-field task.</p>
+        <div id="task-checkin-access-list"></div>
       </div>
 
       <div class="admin-block">
@@ -2292,6 +2265,21 @@ async function renderAdmin() {
       row.className = 'tracking-access-row';
       row.innerHTML = `<div><b>${escapeHtml(person.name)}</b><span class="tracking-username">${escapeHtml(person.username)}</span></div><span class="tracking-access-status ${person.allowed ? 'allowed' : 'denied'}">${person.allowed ? 'Allowed' : 'Denied'}</span><label class="tracking-toggle"><input type="checkbox" ${person.allowed ? 'checked' : ''} data-payment-access-user="${person.user_id}"><span>Allow payment history</span></label>`;
       paymentAccessList.appendChild(row);
+    });
+    const taskCheckinAccessList = $('#task-checkin-access-list');
+    taskCheckinAccess.forEach((person) => {
+      const row = document.createElement('div');
+      row.className = 'tracking-access-row';
+      row.innerHTML = `<div><b>${escapeHtml(person.name)}</b><span class="tracking-username">${escapeHtml(person.username)}</span></div><label class="tracking-toggle"><input type="checkbox" ${Number(person.checkin_required) === 1 ? 'checked' : ''} data-task-checkin-user="${person.id}"><span>Require task GPS check-in/out</span></label>`;
+      taskCheckinAccessList.appendChild(row);
+    });
+    $$('[data-task-checkin-user]').forEach((checkbox) => {
+      checkbox.onchange = async () => {
+        try {
+          await api(`/task-checkin-access/${checkbox.dataset.taskCheckinUser}`, { method: 'PUT', body: { enabled: checkbox.checked } });
+          showAppNotification('Task check-in access updated.');
+        } catch (error) { checkbox.checked = !checkbox.checked; alert(error.message); }
+      };
     });
     const projectActionList = $('#project-action-access-list');
     const projectActionLabels = { create_project: 'Create projects', edit_project: 'Rename/edit projects', delete_project: 'Delete projects', create_task: 'Add tasks', edit_task: 'Edit tasks', delete_task: 'Delete tasks', complete_task: 'Complete tasks' };

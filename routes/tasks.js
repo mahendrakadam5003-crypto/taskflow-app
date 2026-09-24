@@ -430,6 +430,25 @@ router.get('/project-action-access/me', async (req, res) => {
   res.json(Object.fromEntries(PROJECT_ACTIONS.map(action => [action, row ? Number(row[action]) === 1 : true])));
 });
 
+router.get('/task-checkin-access', requireAdmin, async (req, res) => {
+  const rows = await db.prepare(`SELECT u.id, u.name, u.username,
+    CASE WHEN a.user_id IS NULL THEN 0 ELSE 1 END AS checkin_required
+    FROM users u LEFT JOIN task_checkin_access a ON a.user_id=u.id
+    WHERE u.active=1 ORDER BY u.name`).all();
+  res.json(rows || []);
+});
+
+router.put('/task-checkin-access/:userId', requireAdmin, async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!userId) return res.status(400).json({ error: 'Valid user is required.' });
+  if (req.body.enabled) {
+    await db.prepare('INSERT OR REPLACE INTO task_checkin_access (user_id, enabled_by) VALUES (?, ?)').run(userId, req.session.userId);
+  } else {
+    await db.prepare('DELETE FROM task_checkin_access WHERE user_id=?').run(userId);
+  }
+  res.json({ ok: true });
+});
+
 router.put('/project-action-access/:userId', requireAdmin, async (req, res) => {
   const userId = Number(req.params.userId);
   if (!userId) return res.status(400).json({ error: 'Valid user is required.' });
@@ -542,13 +561,9 @@ router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     const workMode = req.body.work_mode === 'on_field' ? 'on_field' : 'office';
     if (!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
     if (assignee_id && !(await canAccessProject(req.params.id, Number(assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
-    const requestedCheckinUsers = Array.isArray(req.body.checkin_user_ids) ? [...new Set(req.body.checkin_user_ids.map(Number).filter(Boolean))] : [];
-    const checkinUserIds = workMode === 'on_field' ? (requestedCheckinUsers.length ? requestedCheckinUsers : [Number(assignee_id || req.session.userId)]) : [];
-    for (const userId of checkinUserIds) if (!(await canAccessProject(req.params.id, userId, false))) return res.status(400).json({ error: 'Every required check-in user must be a project member.' });
     const normalizedInvoiceNumber = String(invoice_number || '').trim() || null;
     const info = await db.prepare(`INSERT INTO tasks(project_id,title,description,created_by,assignee_id,due_date,invoice_number,invoice_date,customer_name,total_amount,work_mode)
       VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(req.params.id, title.trim(), String(description || '').trim(), req.session.userId, assignee_id || null, due_date || null, normalizedInvoiceNumber, invoice_date || null, String(customer_name || '').trim(), Math.max(0, Number(total_amount) || 0), workMode);
-    for (const userId of checkinUserIds) await db.prepare('INSERT INTO task_checkin_users (task_id, user_id) VALUES (?, ?)').run(info.lastInsertRowid, userId);
     if (assignee_id && normalizedInvoiceNumber) {
       await db.prepare('UPDATE tasks SET payment_member_id = COALESCE(payment_member_id, ?) WHERE id = ?').run(Number(assignee_id), info.lastInsertRowid);
     }
@@ -568,21 +583,22 @@ router.put('/tasks/:id', async (req, res) => {
   try {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
     if (req.body.status !== undefined && !(await canProjectAction(req, 'complete_task'))) return res.status(403).json({ error: 'You do not have permission to complete tasks.' });
-    const workModeChangeRequested = req.body.work_mode !== undefined || req.body.checkin_user_ids !== undefined;
-    if (workModeChangeRequested && req.session.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can change the task work location or required check-in users.' });
-    if (Object.keys(req.body).some(key => !['status', 'work_mode', 'checkin_user_ids'].includes(key)) && !(await canProjectAction(req, 'edit_task'))) return res.status(403).json({ error: 'You do not have permission to edit tasks.' });
+    const workModeChangeRequested = req.body.work_mode !== undefined;
+    if (workModeChangeRequested && req.session.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can change the task work location.' });
+    if (Object.keys(req.body).some(key => !['status', 'work_mode'].includes(key)) && !(await canProjectAction(req, 'edit_task'))) return res.status(403).json({ error: 'You do not have permission to edit tasks.' });
     const taskBefore = await db.prepare('SELECT title, description, status, assignee_id, due_date, payment_member_id, invoice_number, work_mode, project_id FROM tasks WHERE id=?').get(req.params.id);
     if (taskBefore.work_mode === 'on_field' && req.session.role !== 'admin' && Object.keys(req.body).some(key => !['status'].includes(key))) {
-      const activeCheckin = await db.prepare(`SELECT c.id FROM task_checkin_users r
-        JOIN task_checkins c ON c.task_id=r.task_id AND c.user_id=r.user_id
-        WHERE r.task_id=? AND r.user_id=? AND c.check_in_at IS NOT NULL AND c.check_out_at IS NULL`).get(req.params.id, req.session.userId);
+      const activeCheckin = await db.prepare(`SELECT c.id FROM task_checkin_access a
+        JOIN task_checkins c ON c.task_id=? AND c.user_id=a.user_id
+        WHERE a.user_id=? AND c.check_in_at IS NOT NULL AND c.check_out_at IS NULL`).get(req.params.id, req.session.userId);
       if (!activeCheckin) return res.status(403).json({ error: 'Check in to this on-field task before editing or updating it.' });
     }
     const nextWorkMode = req.body.work_mode === 'on_field' ? 'on_field' : (req.body.work_mode === 'office' ? 'office' : taskBefore.work_mode || 'office');
     if (req.body.status === 'done' && taskBefore.work_mode === 'on_field') {
-      const incomplete = await db.prepare(`SELECT COUNT(*) AS count FROM task_checkin_users u
-        LEFT JOIN task_checkins c ON c.task_id=u.task_id AND c.user_id=u.user_id
-        WHERE u.task_id=? AND (c.check_in_at IS NULL OR c.check_out_at IS NULL)`).get(req.params.id);
+      const incomplete = await db.prepare(`SELECT CASE WHEN t.assignee_id IS NOT NULL
+        AND EXISTS (SELECT 1 FROM task_checkin_access a WHERE a.user_id=t.assignee_id)
+        AND (c.check_in_at IS NULL OR c.check_out_at IS NULL) THEN 1 ELSE 0 END AS count
+        FROM tasks t LEFT JOIN task_checkins c ON c.task_id=t.id AND c.user_id=t.assignee_id WHERE t.id=?`).get(req.params.id);
       if (Number(incomplete?.count || 0) > 0) return res.status(400).json({ error: 'Every required user must check in and check out before completing this on-field task.' });
     }
     if (workModeChangeRequested && nextWorkMode === 'on_field') {
@@ -606,11 +622,6 @@ router.put('/tasks/:id', async (req, res) => {
     if (req.body.assignee_id !== undefined) {
       if (req.body.assignee_id && !(await canAccessProject((await db.prepare('SELECT project_id FROM tasks WHERE id=?').get(req.params.id)).project_id, Number(req.body.assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
       updates.push('assignee_id=?'); values.push(req.body.assignee_id || null);
-    }
-    if (req.body.checkin_user_ids !== undefined) {
-      const ids = nextWorkMode === 'on_field' ? [...new Set(req.body.checkin_user_ids.map(Number).filter(Boolean))] : [];
-      await db.prepare('DELETE FROM task_checkin_users WHERE task_id=?').run(req.params.id);
-      for (const userId of ids) await db.prepare('INSERT INTO task_checkin_users (task_id, user_id) VALUES (?, ?)').run(req.params.id, userId);
     }
     if (!updates.length) return res.json({ ok: true });
     updates.push("updated_at=datetime('now')");
@@ -658,10 +669,11 @@ router.get('/tasks/:id/history', async (req, res) => {
 });
 
 async function getTaskForCheckin(taskId, userId, admin) {
-  const task = await db.prepare('SELECT id, project_id, title, work_mode FROM tasks WHERE id=?').get(taskId);
+  const task = await db.prepare('SELECT id, project_id, title, assignee_id, work_mode FROM tasks WHERE id=?').get(taskId);
   if (!task || !(await canAccessTask(taskId, userId, admin))) return null;
   if (task.work_mode !== 'on_field') return { error: 'Check-in and check-out are only required for on-field tasks.' };
-  const required = await db.prepare('SELECT user_id FROM task_checkin_users WHERE task_id=? AND user_id=?').get(taskId, userId);
+  if (!admin && Number(task.assignee_id) !== Number(userId)) return { error: 'Only the assigned employee can check in and check out for this task.' };
+  const required = await db.prepare('SELECT user_id FROM task_checkin_access WHERE user_id=?').get(userId);
   if (!required) return { error: 'You are not required to check in and out for this task.' };
   return task;
 }
@@ -712,10 +724,10 @@ router.get('/tasks/:id', async (req, res) => {
     task.history = await db.prepare(`SELECT h.*, u.name AS actor_name
       FROM task_history h LEFT JOIN users u ON u.id = h.actor_id
       WHERE h.task_id = ? ORDER BY h.created_at ASC, h.id ASC`).all(task.id);
-    task.checkin_users = await db.prepare(`SELECT u.id, u.name, c.check_in_at, c.check_in_lat, c.check_in_lng, c.check_out_at, c.check_out_lat, c.check_out_lng
-      FROM task_checkin_users r JOIN users u ON u.id=r.user_id
-      LEFT JOIN task_checkins c ON c.task_id=r.task_id AND c.user_id=r.user_id
-      WHERE r.task_id=? ORDER BY u.name`).all(task.id);
+    task.checkin_users = task.assignee_id ? await db.prepare(`SELECT u.id, u.name, c.check_in_at, c.check_in_lat, c.check_in_lng, c.check_out_at, c.check_out_lat, c.check_out_lng
+      FROM users u LEFT JOIN task_checkin_access r ON r.user_id=u.id
+      LEFT JOIN task_checkins c ON c.task_id=? AND c.user_id=u.id
+      WHERE u.id=? AND r.user_id IS NOT NULL`).all(task.id, task.assignee_id) : [];
     res.json(task);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
