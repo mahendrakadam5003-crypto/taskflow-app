@@ -147,6 +147,27 @@ function confirmModal(title, body, confirmLabel = 'Delete', danger = true) {
   });
 }
 
+function rejectionModal() {
+  return new Promise((resolve) => {
+    showModal(`
+      <h3>Reject reimbursement?</h3>
+      <p class="hint">Are you sure you want to reject this reimbursement?</p>
+      <label>Reason <span class="hint">(optional)</span>
+        <textarea id="rejection-reason" rows="3" placeholder="Add a reason if helpful"></textarea>
+      </label>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="rejection-cancel">Cancel</button>
+        <button class="btn btn-danger" id="rejection-confirm">Reject</button>
+      </div>`);
+    $('#rejection-cancel').onclick = () => { closeModal(); resolve(null); };
+    $('#rejection-confirm').onclick = () => {
+      const reason = $('#rejection-reason').value.trim();
+      closeModal();
+      resolve(reason);
+    };
+  });
+}
+
 function closeDrawer() {
   const drawer = $('#task-drawer');
   if (drawer) drawer.classList.add('hidden');
@@ -874,7 +895,9 @@ async function renderReimbursements() {
         button.onclick = async (event) => {
           event.stopPropagation();
           if (button.dataset.status === 'approved' && !await confirmModal('Approve reimbursement?', 'Are you sure you want to approve this reimbursement?', 'Approve', false)) return;
-          const note = button.dataset.status === 'rejected' ? prompt('Reason for rejection (optional):') || '' : '';
+          const rejectionReason = button.dataset.status === 'rejected' ? await rejectionModal() : '';
+          if (button.dataset.status === 'rejected' && rejectionReason === null) return;
+          const note = rejectionReason || '';
           await api(`/reimbursements/${button.dataset.id}/status`, { method: 'PUT', body: { status: button.dataset.status, admin_note: note } });
           if (button.dataset.status === 'approved') {
             showAppNotification('Expense has been approved successfully.');
