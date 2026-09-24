@@ -1294,6 +1294,9 @@ async function showNewTaskDrawer() {
   const invoiceDate = $('#drawer-invoice-date');
   const totalAmount = $('#drawer-total-amount');
   const status = $('#drawer-status');
+  const workMode = $('#drawer-work-mode');
+  const checkinUsers = $('#drawer-checkin-users');
+  const checkinUsersBlock = $('#drawer-checkin-users-block');
   const description = $('#drawer-desc');
   const created = $('#drawer-created');
   const saveButton = $('#btn-save-task');
@@ -1309,6 +1312,15 @@ async function showNewTaskDrawer() {
   if (due) due.removeAttribute('min');
   if (created) created.textContent = 'Created when saved';
   if (status) { status.value = 'open'; status.disabled = true; }
+  if (workMode) {
+    workMode.value = 'office';
+    workMode.disabled = !PROJECT_ACTION_ACCESS.manage_task_work_mode;
+  }
+  if (checkinUsers) {
+    checkinUsers.innerHTML = members.map(member => `<option value="${member.id}" ${String(member.id) === String(assignee.value || '') ? 'selected' : ''}>${escapeHtml(member.name)}</option>`).join('');
+    checkinUsers.disabled = !PROJECT_ACTION_ACCESS.manage_task_work_mode;
+  }
+  if (checkinUsersBlock) checkinUsersBlock.style.display = 'none';
   if (description) description.value = '';
   if (description) {
     description.oninput = autoGrowDescription;
@@ -1334,10 +1346,23 @@ async function showNewTaskDrawer() {
         customer_name: customerName.value.trim(),
         invoice_number: invoiceNumber.value.trim() || null,
         invoice_date: invoiceDate.value || null,
-        total_amount: totalAmount.value || 0
+        total_amount: totalAmount.value || 0,
+        work_mode: workMode.value,
+        checkin_user_ids: Array.from(checkinUsers.selectedOptions).map(option => Number(option.value))
       }});
       reloadWithActionMessage('project', 'Task created successfully.', CURRENT_PROJECT.id);
     } catch (err) { alert(err.message); }
+  };
+  workMode.onchange = () => {
+    checkinUsersBlock.style.display = workMode.value === 'on_field' ? '' : 'none';
+    if (workMode.value === 'on_field' && !checkinUsers.selectedOptions.length && assignee.value) {
+      Array.from(checkinUsers.options).filter(option => option.value === assignee.value).forEach(option => { option.selected = true; });
+    }
+  };
+  assignee.onchange = () => {
+    if (workMode.value === 'on_field' && !checkinUsers.selectedOptions.length && assignee.value) {
+      Array.from(checkinUsers.options).filter(option => option.value === assignee.value).forEach(option => { option.selected = true; });
+    }
   };
 }
 
@@ -1382,6 +1407,19 @@ async function openTaskDrawer(taskId) {
     $('#drawer-assignee').innerHTML = '<option value="">No assignee</option>' + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
     $('#drawer-assignee').disabled = false;
     $('#drawer-assignee').value = task.assignee_id || '';
+    const workModeInput = $('#drawer-work-mode');
+    const checkinUsersInput = $('#drawer-checkin-users');
+    const checkinUsersBlock = $('#drawer-checkin-users-block');
+    if (workModeInput) {
+      workModeInput.value = task.work_mode || 'office';
+      workModeInput.disabled = !PROJECT_ACTION_ACCESS.manage_task_work_mode;
+    }
+    if (checkinUsersInput) {
+      const requiredUsers = new Set((task.checkin_users || []).map(user => String(user.id)));
+      checkinUsersInput.innerHTML = members.map(member => `<option value="${member.id}" ${requiredUsers.has(String(member.id)) ? 'selected' : ''}>${escapeHtml(member.name)}</option>`).join('');
+      checkinUsersInput.disabled = !PROJECT_ACTION_ACCESS.manage_task_work_mode;
+    }
+    if (checkinUsersBlock) checkinUsersBlock.style.display = (task.work_mode || 'office') === 'on_field' ? '' : 'none';
     $('#drawer-due').value = task.due_date || '';
     $('#drawer-due').disabled = false;
     $('#drawer-customer-name').value = task.customer_name || '';
@@ -1500,7 +1538,9 @@ async function openTaskDrawer(taskId) {
       invoice_number: $('#drawer-invoice-number').value.trim() || null,
       invoice_date: $('#drawer-invoice-date').value || null,
       total_amount: $('#drawer-total-amount').value || 0,
-      status: $('#drawer-status').value
+      status: $('#drawer-status').value,
+      work_mode: $('#drawer-work-mode').value,
+      checkin_user_ids: Array.from($('#drawer-checkin-users').selectedOptions).map(option => Number(option.value))
     });
     let savedTaskDraftKey = getTaskDraftKey();
     const saveChanges = async () => {
@@ -1508,7 +1548,7 @@ async function openTaskDrawer(taskId) {
       if (draftKey === savedTaskDraftKey) return;
       const saveState = $('#drawer-save-state');
       if (saveState) { saveState.textContent = 'Saving...'; saveState.className = 'drawer-save-state'; }
-      await api(`/tasks/${taskId}`, { method: 'PUT', body: {
+      const body = {
         title: $('#drawer-title').value.trim(),
         description: $('#drawer-desc').value,
         assignee_id: $('#drawer-assignee').value || null,
@@ -1518,7 +1558,12 @@ async function openTaskDrawer(taskId) {
         invoice_date: $('#drawer-invoice-date').value || null,
         total_amount: $('#drawer-total-amount').value || 0,
         status: $('#drawer-status').value
-      }});
+      };
+      if (PROJECT_ACTION_ACCESS.manage_task_work_mode) {
+        body.work_mode = $('#drawer-work-mode').value;
+        body.checkin_user_ids = Array.from($('#drawer-checkin-users').selectedOptions).map(option => Number(option.value));
+      }
+      await api(`/tasks/${taskId}`, { method: 'PUT', body });
       savedTaskDraftKey = draftKey;
       await renderTasks();
       taskHistory = await api(`/tasks/${taskId}/history`);
@@ -1552,10 +1597,39 @@ async function openTaskDrawer(taskId) {
     $('#drawer-invoice-date').onchange = queueAutosave;
     $('#drawer-total-amount').onchange = queueAutosave;
     $('#drawer-status').onchange = queueAutosave;
+    $('#drawer-work-mode').onchange = () => {
+      $('#drawer-checkin-users-block').style.display = $('#drawer-work-mode').value === 'on_field' ? '' : 'none';
+      queueAutosave();
+    };
+    $('#drawer-checkin-users').onchange = queueAutosave;
     $('#btn-save-task').onclick = async () => {
       clearTimeout(autosaveTimer);
       await saveChanges();
     };
+    const checkinControls = $('#task-checkin-controls');
+    const currentCheckin = (task.checkin_users || []).find(user => Number(user.id) === Number(ME?.id));
+    if (checkinControls) {
+      if (task.work_mode !== 'on_field' || !currentCheckin) {
+        checkinControls.innerHTML = task.work_mode === 'on_field' ? '<div class="hint">You are not required to check in/out for this task.</div>' : '';
+      } else if (!currentCheckin.check_in_at) {
+        checkinControls.innerHTML = '<button class="btn btn-secondary btn-block" id="btn-task-check-in">📍 Check in to task</button>';
+      } else if (!currentCheckin.check_out_at) {
+        checkinControls.innerHTML = `<div class="hint">Checked in at ${escapeHtml(fmtDateTime(currentCheckin.check_in_at))}</div><button class="btn btn-secondary btn-block" id="btn-task-check-out">📍 Check out of task</button>`;
+      } else {
+        checkinControls.innerHTML = `<div class="hint">Checked in ${escapeHtml(fmtDateTime(currentCheckin.check_in_at))} and out ${escapeHtml(fmtDateTime(currentCheckin.check_out_at))}.</div>`;
+      }
+      const checkInButton = $('#btn-task-check-in');
+      const checkOutButton = $('#btn-task-check-out');
+      const recordTaskLocation = async (path, message) => {
+        try {
+          const coords = await getLiveCoords();
+          await api(`/tasks/${taskId}/${path}`, { method: 'POST', body: coords });
+          await openTaskDrawer(taskId);
+        } catch (error) { alert(error.message); }
+      };
+      if (checkInButton) checkInButton.onclick = () => recordTaskLocation('check-in', 'Task check-in recorded.');
+      if (checkOutButton) checkOutButton.onclick = () => recordTaskLocation('check-out', 'Task check-out recorded.');
+    }
     const isCompleted = task.status === 'done';
     $('#btn-complete-task').onclick = async () => {
       await api(`/tasks/${taskId}`, { method: 'PUT', body: { status: isCompleted ? 'open' : 'done' } });
@@ -2207,7 +2281,7 @@ async function renderAdmin() {
       paymentAccessList.appendChild(row);
     });
     const projectActionList = $('#project-action-access-list');
-    const projectActionLabels = { create_project: 'Create projects', edit_project: 'Rename/edit projects', delete_project: 'Delete projects', create_task: 'Add tasks', edit_task: 'Edit tasks', delete_task: 'Delete tasks', complete_task: 'Complete tasks' };
+    const projectActionLabels = { create_project: 'Create projects', edit_project: 'Rename/edit projects', delete_project: 'Delete projects', create_task: 'Add tasks', edit_task: 'Edit tasks', delete_task: 'Delete tasks', complete_task: 'Complete tasks', manage_task_work_mode: 'Change office/on-field tasks' };
     projectActionAccess.forEach((person) => {
       const row = document.createElement('div');
       row.className = 'admin-form-row';

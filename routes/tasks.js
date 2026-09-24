@@ -157,12 +157,12 @@ async function canViewPaymentHistory(req) {
   if (req.session.role === 'admin') return true;
   return !!(await db.prepare('SELECT 1 FROM payment_history_access WHERE user_id=?').get(req.session.userId));
 }
-const PROJECT_ACTIONS = ['create_project', 'edit_project', 'delete_project', 'create_task', 'edit_task', 'delete_task', 'complete_task'];
+const PROJECT_ACTIONS = ['create_project', 'edit_project', 'delete_project', 'create_task', 'edit_task', 'delete_task', 'complete_task', 'manage_task_work_mode'];
 async function canProjectAction(req, action) {
   if (req.session.role === 'admin') return true;
   if (!PROJECT_ACTIONS.includes(action)) return false;
   const row = await db.prepare(`SELECT ${action} AS allowed FROM project_action_access WHERE user_id=?`).get(req.session.userId);
-  return row ? Number(row.allowed) === 1 : true;
+  return row ? Number(row.allowed) === 1 : action === 'manage_task_work_mode' ? false : true;
 }
 async function canAccessTask(taskId, userId, admin = false) {
   if (admin) return true;
@@ -539,11 +539,17 @@ router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
   try {
     if (!(await canProjectAction(req, 'create_task'))) return res.status(403).json({ error: 'You do not have permission to create tasks.' });
     const { title, description, assignee_id, due_date, invoice_number, invoice_date, customer_name, total_amount } = req.body;
+    const workMode = req.body.work_mode === 'on_field' ? 'on_field' : 'office';
+    if (workMode === 'on_field' && !(await canProjectAction(req, 'manage_task_work_mode'))) return res.status(403).json({ error: 'Only an administrator or an authorized user can create on-field tasks.' });
     if (!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
     if (assignee_id && !(await canAccessProject(req.params.id, Number(assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
+    const requestedCheckinUsers = Array.isArray(req.body.checkin_user_ids) ? [...new Set(req.body.checkin_user_ids.map(Number).filter(Boolean))] : [];
+    const checkinUserIds = workMode === 'on_field' ? (requestedCheckinUsers.length ? requestedCheckinUsers : [Number(assignee_id || req.session.userId)]) : [];
+    for (const userId of checkinUserIds) if (!(await canAccessProject(req.params.id, userId, false))) return res.status(400).json({ error: 'Every required check-in user must be a project member.' });
     const normalizedInvoiceNumber = String(invoice_number || '').trim() || null;
-    const info = await db.prepare(`INSERT INTO tasks(project_id,title,description,created_by,assignee_id,due_date,invoice_number,invoice_date,customer_name,total_amount)
-      VALUES(?,?,?,?,?,?,?,?,?,?)`).run(req.params.id, title.trim(), String(description || '').trim(), req.session.userId, assignee_id || null, due_date || null, normalizedInvoiceNumber, invoice_date || null, String(customer_name || '').trim(), Math.max(0, Number(total_amount) || 0));
+    const info = await db.prepare(`INSERT INTO tasks(project_id,title,description,created_by,assignee_id,due_date,invoice_number,invoice_date,customer_name,total_amount,work_mode)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(req.params.id, title.trim(), String(description || '').trim(), req.session.userId, assignee_id || null, due_date || null, normalizedInvoiceNumber, invoice_date || null, String(customer_name || '').trim(), Math.max(0, Number(total_amount) || 0), workMode);
+    for (const userId of checkinUserIds) await db.prepare('INSERT INTO task_checkin_users (task_id, user_id) VALUES (?, ?)').run(info.lastInsertRowid, userId);
     if (assignee_id && normalizedInvoiceNumber) {
       await db.prepare('UPDATE tasks SET payment_member_id = COALESCE(payment_member_id, ?) WHERE id = ?').run(Number(assignee_id), info.lastInsertRowid);
     }
@@ -563,8 +569,24 @@ router.put('/tasks/:id', async (req, res) => {
   try {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
     if (req.body.status !== undefined && !(await canProjectAction(req, 'complete_task'))) return res.status(403).json({ error: 'You do not have permission to complete tasks.' });
-    if (Object.keys(req.body).some(key => key !== 'status') && !(await canProjectAction(req, 'edit_task'))) return res.status(403).json({ error: 'You do not have permission to edit tasks.' });
-    const taskBefore = await db.prepare('SELECT title, description, status, assignee_id, due_date, payment_member_id, invoice_number FROM tasks WHERE id=?').get(req.params.id);
+    const workModeChangeRequested = req.body.work_mode !== undefined || req.body.checkin_user_ids !== undefined;
+    if (workModeChangeRequested && !(await canProjectAction(req, 'manage_task_work_mode'))) return res.status(403).json({ error: 'Only an administrator or an authorized user can change task work mode.' });
+    if (Object.keys(req.body).some(key => !['status', 'work_mode', 'checkin_user_ids'].includes(key)) && !(await canProjectAction(req, 'edit_task'))) return res.status(403).json({ error: 'You do not have permission to edit tasks.' });
+    const taskBefore = await db.prepare('SELECT title, description, status, assignee_id, due_date, payment_member_id, invoice_number, work_mode, project_id FROM tasks WHERE id=?').get(req.params.id);
+    const nextWorkMode = req.body.work_mode === 'on_field' ? 'on_field' : (req.body.work_mode === 'office' ? 'office' : taskBefore.work_mode || 'office');
+    if (req.body.status === 'done' && taskBefore.work_mode === 'on_field') {
+      const incomplete = await db.prepare(`SELECT COUNT(*) AS count FROM task_checkin_users u
+        LEFT JOIN task_checkins c ON c.task_id=u.task_id AND c.user_id=u.user_id
+        WHERE u.task_id=? AND (c.check_in_at IS NULL OR c.check_out_at IS NULL)`).get(req.params.id);
+      if (Number(incomplete?.count || 0) > 0) return res.status(400).json({ error: 'Every required user must check in and check out before completing this on-field task.' });
+    }
+    if (workModeChangeRequested && nextWorkMode === 'on_field') {
+      const requestedCheckinUsers = Array.isArray(req.body.checkin_user_ids) ? [...new Set(req.body.checkin_user_ids.map(Number).filter(Boolean))] : [];
+      const existingUsers = await db.prepare('SELECT user_id FROM task_checkin_users WHERE task_id=?').all(req.params.id);
+      const checkinUserIds = requestedCheckinUsers.length ? requestedCheckinUsers : existingUsers.map(row => Number(row.user_id));
+      if (!checkinUserIds.length) return res.status(400).json({ error: 'Select at least one user who must check in and out.' });
+      for (const userId of checkinUserIds) if (!(await canAccessProject(taskBefore.project_id, userId, false))) return res.status(400).json({ error: 'Every required check-in user must be a project member.' });
+    }
     const updates = [];
     const values = [];
     if (req.body.status !== undefined) { updates.push('status=?'); values.push(req.body.status === 'done' ? 'done' : 'open'); updates.push('completed_at=?'); values.push(req.body.status === 'done' ? new Date().toISOString() : null); }
@@ -575,9 +597,15 @@ router.put('/tasks/:id', async (req, res) => {
     if (req.body.invoice_date !== undefined) { updates.push('invoice_date=?'); values.push(req.body.invoice_date || null); }
     if (req.body.customer_name !== undefined) { updates.push('customer_name=?'); values.push(String(req.body.customer_name || '').trim()); }
     if (req.body.total_amount !== undefined) { updates.push('total_amount=?'); values.push(Math.max(0, Number(req.body.total_amount) || 0)); }
+    if (req.body.work_mode !== undefined) { updates.push('work_mode=?'); values.push(nextWorkMode); }
     if (req.body.assignee_id !== undefined) {
       if (req.body.assignee_id && !(await canAccessProject((await db.prepare('SELECT project_id FROM tasks WHERE id=?').get(req.params.id)).project_id, Number(req.body.assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
       updates.push('assignee_id=?'); values.push(req.body.assignee_id || null);
+    }
+    if (req.body.checkin_user_ids !== undefined) {
+      const ids = nextWorkMode === 'on_field' ? [...new Set(req.body.checkin_user_ids.map(Number).filter(Boolean))] : [];
+      await db.prepare('DELETE FROM task_checkin_users WHERE task_id=?').run(req.params.id);
+      for (const userId of ids) await db.prepare('INSERT INTO task_checkin_users (task_id, user_id) VALUES (?, ?)').run(req.params.id, userId);
     }
     if (!updates.length) return res.json({ ok: true });
     updates.push("updated_at=datetime('now')");
@@ -624,6 +652,47 @@ router.get('/tasks/:id/history', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+async function getTaskForCheckin(taskId, userId, admin) {
+  const task = await db.prepare('SELECT id, project_id, title, work_mode FROM tasks WHERE id=?').get(taskId);
+  if (!task || !(await canAccessTask(taskId, userId, admin))) return null;
+  if (task.work_mode !== 'on_field') return { error: 'Check-in and check-out are only required for on-field tasks.' };
+  const required = await db.prepare('SELECT user_id FROM task_checkin_users WHERE task_id=? AND user_id=?').get(taskId, userId);
+  if (!required) return { error: 'You are not required to check in and out for this task.' };
+  return task;
+}
+
+router.post('/tasks/:id/check-in', async (req, res) => {
+  try {
+    const task = await getTaskForCheckin(req.params.id, req.session.userId, req.session.role === 'admin');
+    if (!task) return res.status(403).json({ error: 'You do not have access to this task.' });
+    if (task.error) return res.status(400).json({ error: task.error });
+    const lat = Number(req.body.lat), lng = Number(req.body.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: 'Location is required to check in.' });
+    const existing = await db.prepare('SELECT * FROM task_checkins WHERE task_id=? AND user_id=?').get(req.params.id, req.session.userId);
+    if (existing?.check_in_at) return res.status(400).json({ error: 'You are already checked in for this task.' });
+    const now = new Date().toISOString();
+    if (existing) await db.prepare('UPDATE task_checkins SET check_in_at=?, check_in_lat=?, check_in_lng=?, check_out_at=NULL, check_out_lat=NULL, check_out_lng=NULL WHERE id=?').run(now, lat, lng, existing.id);
+    else await db.prepare('INSERT INTO task_checkins (task_id,user_id,check_in_at,check_in_lat,check_in_lng) VALUES (?,?,?,?,?)').run(req.params.id, req.session.userId, now, lat, lng);
+    res.json({ ok: true, check_in_at: now });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/tasks/:id/check-out', async (req, res) => {
+  try {
+    const task = await getTaskForCheckin(req.params.id, req.session.userId, req.session.role === 'admin');
+    if (!task) return res.status(403).json({ error: 'You do not have access to this task.' });
+    if (task.error) return res.status(400).json({ error: task.error });
+    const lat = Number(req.body.lat), lng = Number(req.body.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: 'Location is required to check out.' });
+    const existing = await db.prepare('SELECT * FROM task_checkins WHERE task_id=? AND user_id=?').get(req.params.id, req.session.userId);
+    if (!existing?.check_in_at) return res.status(400).json({ error: 'Check in before checking out.' });
+    if (existing.check_out_at) return res.status(400).json({ error: 'You are already checked out for this task.' });
+    const now = new Date().toISOString();
+    await db.prepare('UPDATE task_checkins SET check_out_at=?, check_out_lat=?, check_out_lng=? WHERE id=?').run(now, lat, lng, existing.id);
+    res.json({ ok: true, check_out_at: now });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 router.get('/tasks/:id', async (req, res) => {
   try {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
@@ -638,6 +707,10 @@ router.get('/tasks/:id', async (req, res) => {
     task.history = await db.prepare(`SELECT h.*, u.name AS actor_name
       FROM task_history h LEFT JOIN users u ON u.id = h.actor_id
       WHERE h.task_id = ? ORDER BY h.created_at ASC, h.id ASC`).all(task.id);
+    task.checkin_users = await db.prepare(`SELECT u.id, u.name, c.check_in_at, c.check_in_lat, c.check_in_lng, c.check_out_at, c.check_out_lat, c.check_out_lng
+      FROM task_checkin_users r JOIN users u ON u.id=r.user_id
+      LEFT JOIN task_checkins c ON c.task_id=r.task_id AND c.user_id=r.user_id
+      WHERE r.task_id=? ORDER BY u.name`).all(task.id);
     res.json(task);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

@@ -109,9 +109,14 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       edit_task INTEGER NOT NULL DEFAULT 1,
       delete_task INTEGER NOT NULL DEFAULT 0,
       complete_task INTEGER NOT NULL DEFAULT 1,
+      manage_task_work_mode INTEGER NOT NULL DEFAULT 0,
       updated_by INTEGER REFERENCES users(id),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
+    const actionAccessColumns = await dbDriverInterface.prepare('PRAGMA table_info(project_action_access)').all();
+    if (!(actionAccessColumns || []).some(row => (row.name || row.NAME) === 'manage_task_work_mode')) {
+      await dbDriverInterface.exec('ALTER TABLE project_action_access ADD COLUMN manage_task_work_mode INTEGER NOT NULL DEFAULT 0');
+    }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,6 +134,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       payment_status TEXT NOT NULL DEFAULT 'not_received',
       payment_received_date TEXT,
       amount_received REAL NOT NULL DEFAULT 0,
+      work_mode TEXT NOT NULL DEFAULT 'office',
       status TEXT NOT NULL DEFAULT 'open',
       position INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -145,6 +151,27 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     if (!taskSchemaColumnNames.includes('payment_status')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN payment_status TEXT NOT NULL DEFAULT 'not_received'");
     if (!taskSchemaColumnNames.includes('payment_received_date')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN payment_received_date TEXT');
     if (!taskSchemaColumnNames.includes('amount_received')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN amount_received REAL NOT NULL DEFAULT 0');
+    if (!taskSchemaColumnNames.includes('work_mode')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN work_mode TEXT NOT NULL DEFAULT 'office'");
+
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS task_checkin_users (
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      added_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (task_id, user_id)
+    );`);
+
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS task_checkins (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      check_in_at TEXT NOT NULL,
+      check_in_lat REAL NOT NULL,
+      check_in_lng REAL NOT NULL,
+      check_out_at TEXT,
+      check_out_lat REAL,
+      check_out_lng REAL,
+      UNIQUE (task_id, user_id)
+    );`);
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS subtasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
