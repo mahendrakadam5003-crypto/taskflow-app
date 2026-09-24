@@ -1251,17 +1251,18 @@ async function renderTasks() {
     if (sort === 'created') tasks.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
     list.innerHTML = tasks.length ? tasks.map(task => `
       <tr class="task-row ${search ? 'search-result ' : ''}${task.status === 'done' ? 'done' : ''}" data-task-id="${task.id}">
-        <td><button class="row-complete" data-task-id="${task.id}" title="${task.status === 'done' ? 'Completed' : 'Complete task'}" ${task.status === 'done' ? 'disabled' : ''}>✓</button></td>
+        <td><button class="row-complete ${task.status === 'done' ? 'row-reopen' : ''}" data-task-id="${task.id}" title="${task.status === 'done' ? 'Reopen task' : 'Complete task'}">${task.status === 'done' ? '↻' : '✓'}</button></td>
         <td class="task-title-cell"><b>${escapeHtml(task.title)}</b>${search && task.project_name ? `<div class="task-result-project">Project: ${escapeHtml(task.project_name)}</div>` : ''}</td>
         <td class="task-assignee-cell"><span class="assignee-chip">${escapeHtml(task.assignee_name || 'Unassigned')}</span></td>
         <td>${escapeHtml(task.invoice_number || '—')}</td><td>${escapeHtml(task.customer_name || '—')}</td><td>${task.total_amount ? Number(task.total_amount).toFixed(2) : '—'}</td>
         <td class="task-due-cell"><span class="task-due ${getDueState(task.due_date).className}">${escapeHtml(getDueState(task.due_date).label)}</span></td>
         <td class="task-status-cell"><span class="task-status ${task.status === 'done' ? 'task-status-done' : 'task-status-open'}">${task.status === 'done' ? 'Completed' : 'Open'}</span></td>
       </tr>`).join('') : '<tr><td colspan="8" class="hint" style="padding:15px;">No open tasks yet.</td></tr>';
-    $$('.row-complete:not(:disabled)').forEach(button => {
+    $$('.row-complete').forEach(button => {
       button.onclick = async () => {
-        await api(`/tasks/${button.dataset.taskId}`, { method: 'PUT', body: { status: 'done' } });
-        reloadWithActionMessage('project', 'Task completed successfully.', CURRENT_PROJECT.id);
+        const reopening = button.classList.contains('row-reopen');
+        await api(`/tasks/${button.dataset.taskId}`, { method: 'PUT', body: { status: reopening ? 'open' : 'done' } });
+        reloadWithActionMessage('project', reopening ? 'Task reopened successfully.' : 'Task completed successfully.', CURRENT_PROJECT.id);
       };
     });
     $$('.task-row').forEach(row => {
@@ -1483,9 +1484,9 @@ async function openTaskDrawer(taskId) {
     $('#btn-save-task').style.display = PROJECT_ACTION_ACCESS.edit_task ? '' : 'none';
     $('#btn-save-task').className = 'btn btn-secondary btn-sm';
     $('#btn-complete-task').style.display = PROJECT_ACTION_ACCESS.complete_task ? '' : 'none';
-    $('#btn-complete-task').textContent = task.status === 'done' ? 'Completed' : '✓ Complete task';
-    $('#btn-complete-task').disabled = task.status === 'done';
-    $('#btn-complete-task').className = task.status === 'done' ? 'btn btn-secondary btn-block' : 'btn btn-primary btn-block';
+    $('#btn-complete-task').textContent = task.status === 'done' ? '↻ Reopen task' : '✓ Complete task';
+    $('#btn-complete-task').disabled = false;
+    $('#btn-complete-task').className = 'btn btn-primary btn-block';
     $('#btn-delete-task').style.display = PROJECT_ACTION_ACCESS.delete_task ? '' : 'none';
     drawer.classList.remove('hidden');
     $('#app').classList.add('drawer-open');
@@ -1555,9 +1556,10 @@ async function openTaskDrawer(taskId) {
       clearTimeout(autosaveTimer);
       await saveChanges();
     };
+    const isCompleted = task.status === 'done';
     $('#btn-complete-task').onclick = async () => {
-      await api(`/tasks/${taskId}`, { method: 'PUT', body: { status: 'done' } });
-      reloadWithActionMessage('project', 'Task completed successfully.', CURRENT_PROJECT.id);
+      await api(`/tasks/${taskId}`, { method: 'PUT', body: { status: isCompleted ? 'open' : 'done' } });
+      reloadWithActionMessage('project', isCompleted ? 'Task reopened successfully.' : 'Task completed successfully.', CURRENT_PROJECT.id);
     };
     $('#btn-delete-task').onclick = async () => {
       if (!confirm('Delete this task permanently?')) return;
