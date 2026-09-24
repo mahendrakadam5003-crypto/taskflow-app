@@ -230,6 +230,7 @@ function autoGrowComment() {
 // ---------- state ----------
 let ME = null;
 let PROJECTS = [];
+let PROJECT_ACTION_ACCESS = {};
 let PEOPLE = [];
 let CURRENT_PROJECT = null;
 let CURRENT_TASK_ID = null;
@@ -612,7 +613,10 @@ function renderProjectsDirectory() {
   directory.innerHTML = PROJECTS.length ? PROJECTS.map(project => `<button class="dashboard-project projects-directory-card" data-directory-project="${project.id}"><b>${project.locked ? '🔒 ' : ''}${escapeHtml(project.name)}</b><span>Open project workspace</span></button>`).join('') : '<div class="hint">No projects yet.</div>';
   $$('.dashboard-project[data-directory-project]').forEach(button => button.onclick = () => openProject(Number(button.dataset.directoryProject)));
   const newProject = $('#projects-new-project');
-  if (newProject) newProject.onclick = () => document.querySelector('#btn-new-project')?.click();
+   if (newProject) {
+  newProject.style.display = PROJECT_ACTION_ACCESS.create_project ? '' : 'none';
+  newProject.onclick = () => document.querySelector('#btn-new-project')?.click();
+   }
 }
 
 async function enterApp() {
@@ -636,6 +640,7 @@ async function enterApp() {
     const rawPeople = await api('/auth/users/directory');
     PEOPLE = Array.isArray(rawPeople) ? rawPeople.flat(5) : [];
     const paymentAccess = await api('/payment-history/access/me');
+    PROJECT_ACTION_ACCESS = await api('/project-action-access/me');
     const paymentAllowed = ME.role === 'admin' || paymentAccess.allowed;
     $('#nav-payment-history')?.style.setProperty('display', paymentAllowed ? '' : 'none');
     $('#dashboard-payment-history-card')?.style.setProperty('display', paymentAllowed ? '' : 'none');
@@ -973,7 +978,7 @@ function renderProjectList() {
     row.className = 'project-item-row';
     row.innerHTML = `
       <button class="project-item" data-id="${p.id}">${p.locked ? '<span class="lock">🔒</span> ' : ''}${escapeHtml(p.name)}</button>
-      ${ME.role === 'admin' ? `<button class="project-del" data-id="${p.id}" title="Delete project">✕</button>` : ''}`;
+      ${PROJECT_ACTION_ACCESS.delete_project ? `<button class="project-del" data-id="${p.id}" title="Delete project">✕</button>` : ''}`;
     list.appendChild(row);
   });
   $$('.project-item').forEach((btn) => btn.addEventListener('click', () => {
@@ -1005,6 +1010,7 @@ function renderProjectList() {
 
 const btnNewProject = $('#btn-new-project');
 if (btnNewProject) {
+btnNewProject.style.display = PROJECT_ACTION_ACCESS.create_project ? '' : 'none';
   btnNewProject.addEventListener('click', () => {
     showModal(`
       <h3>New project</h3>
@@ -1069,6 +1075,22 @@ async function enterProjectView(project) {
   $$('.project-item').forEach((b) => b.classList.toggle('active', Number(b.dataset.id) === project.id));
   const pTitle = $('#project-title');
   if (pTitle) pTitle.textContent = project.name;
+  const renameProjectButton = $('#btn-rename-project');
+  if (renameProjectButton) {
+    renameProjectButton.style.display = PROJECT_ACTION_ACCESS.edit_project ? '' : 'none';
+    renameProjectButton.onclick = async () => {
+      const name = prompt('New project name:', project.name);
+      if (!name || !name.trim() || name.trim() === project.name) return;
+      try {
+        await api(`/projects/${project.id}`, { method: 'PUT', body: { name: name.trim() } });
+        project.name = name.trim();
+        if (pTitle) pTitle.textContent = project.name;
+        renderProjectList();
+        renderProjectsDirectory();
+        showAppNotification('Project renamed.');
+      } catch (error) { alert(error.message); }
+    };
+  }
   const searchInput = $('#task-search');
   const suggestions = $('#task-search-suggestions');
   if (searchInput) {
@@ -1080,12 +1102,18 @@ async function enterProjectView(project) {
   await renderTaskAssigneeFilter();
   setupTaskFilters();
   await renderTasks();
-  const newTaskButton = $('#btn-new-task');
-  if (newTaskButton) newTaskButton.onclick = () => showNewTaskDrawer();
+   const newTaskButton = $('#btn-new-task');
+   if (newTaskButton) {
+  newTaskButton.style.display = PROJECT_ACTION_ACCESS.create_task ? '' : 'none';
+  newTaskButton.onclick = () => showNewTaskDrawer();
+   }
   const manageMembersButton = $('#btn-manage-members');
   if (manageMembersButton) manageMembersButton.onclick = () => showMembersModal();
   const newProjectButton = $('#project-new-project');
-  if (newProjectButton) newProjectButton.onclick = () => document.querySelector('#btn-new-project')?.click();
+  if (newProjectButton) {
+    newProjectButton.style.display = PROJECT_ACTION_ACCESS.create_project ? '' : 'none';
+    newProjectButton.onclick = () => document.querySelector('#btn-new-project')?.click();
+  }
 }
 
 function renderFocusedProjectSwitcher() {
@@ -1427,13 +1455,13 @@ async function openTaskDrawer(taskId) {
     $('#drawer-comment-input').value = '';
     $('#drawer-comment-input').oninput = autoGrowComment;
     autoGrowComment();
-    $('#btn-save-task').style.display = '';
+    $('#btn-save-task').style.display = PROJECT_ACTION_ACCESS.edit_task ? '' : 'none';
     $('#btn-save-task').className = 'btn btn-secondary btn-sm';
-    $('#btn-complete-task').style.display = '';
+    $('#btn-complete-task').style.display = PROJECT_ACTION_ACCESS.complete_task ? '' : 'none';
     $('#btn-complete-task').textContent = task.status === 'done' ? 'Completed' : '✓ Complete task';
     $('#btn-complete-task').disabled = task.status === 'done';
     $('#btn-complete-task').className = task.status === 'done' ? 'btn btn-secondary btn-block' : 'btn btn-primary btn-block';
-    $('#btn-delete-task').style.display = ME && ME.role === 'admin' ? '' : 'none';
+    $('#btn-delete-task').style.display = PROJECT_ACTION_ACCESS.delete_task ? '' : 'none';
     drawer.classList.remove('hidden');
     $('#app').classList.add('drawer-open');
     $('#drawer-close').onclick = closeDrawer;
@@ -1971,7 +1999,7 @@ async function loadTrackingTimeline(userId, selectedButton) {
 // ================= ADMINISTRATIVE CORE VIEW MODULE =================
 async function renderAdmin() {
   try {
-    const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess, paymentAccess, deviceAccess, myDeviceAccess] = await Promise.all([api('/auth/users'), api('/auth/settings'), api('/auth/departments'), api('/auth/reimbursement-access'), api('/auth/activity'), api('/attendance/tracking-access'), api('/attendance/verification-access'), api('/payment-history/access'), api('/attendance/device-access'), api('/attendance/device-access/me')]);
+    const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess, paymentAccess, deviceAccess, myDeviceAccess, projectActionAccess] = await Promise.all([api('/auth/users'), api('/auth/settings'), api('/auth/departments'), api('/auth/reimbursement-access'), api('/auth/activity'), api('/attendance/tracking-access'), api('/attendance/verification-access'), api('/payment-history/access'), api('/attendance/device-access'), api('/attendance/device-access/me'), api('/project-action-access')]);
     const verificationByUser = new Map(verificationAccess.map(person => [Number(person.id), Number(person.verification_required) === 1]));
     const wrap = $('#admin-content');
     if (!wrap) return;
@@ -2020,6 +2048,12 @@ async function renderAdmin() {
         <h3>Payment History access</h3>
         <p class="hint">Allow selected employees to view and update invoice payment history.</p>
         <div id="payment-history-access-list"></div>
+      </div>
+
+      <div class="admin-block">
+        <h3>Project and task permissions</h3>
+        <p class="hint">Choose which project and task actions each user may perform. Admins always retain full access.</p>
+        <div id="project-action-access-list"></div>
       </div>
 
       <div class="admin-block">
@@ -2144,6 +2178,26 @@ async function renderAdmin() {
       row.className = 'tracking-access-row';
       row.innerHTML = `<div><b>${escapeHtml(person.name)}</b><span class="tracking-username">${escapeHtml(person.username)}</span></div><span class="tracking-access-status ${person.allowed ? 'allowed' : 'denied'}">${person.allowed ? 'Allowed' : 'Denied'}</span><label class="tracking-toggle"><input type="checkbox" ${person.allowed ? 'checked' : ''} data-payment-access-user="${person.user_id}"><span>Allow payment history</span></label>`;
       paymentAccessList.appendChild(row);
+    });
+    const projectActionList = $('#project-action-access-list');
+    const projectActionLabels = { create_project: 'Create projects', edit_project: 'Rename/edit projects', delete_project: 'Delete projects', create_task: 'Add tasks', edit_task: 'Edit tasks', delete_task: 'Delete tasks', complete_task: 'Complete tasks' };
+    projectActionAccess.forEach((person) => {
+      const row = document.createElement('div');
+      row.className = 'admin-form-row';
+      row.innerHTML = `<b style="min-width:180px;">${escapeHtml(person.name)}</b><div style="display:flex;flex-wrap:wrap;gap:10px;">${Object.entries(projectActionLabels).map(([action, label]) => `<label><input type="checkbox" data-project-action="${action}" data-project-user="${person.user_id}" ${Number(person[action]) === 1 ? 'checked' : ''}> ${label}</label>`).join('')}</div><button class="btn btn-secondary btn-sm save-project-actions" data-project-user="${person.user_id}">Save</button>`;
+      projectActionList.appendChild(row);
+    });
+    $$('.save-project-actions').forEach((button) => {
+      button.onclick = async () => {
+        const userId = button.dataset.projectUser;
+        const row = button.closest('.admin-form-row');
+        const body = {};
+        row.querySelectorAll('[data-project-action]').forEach(input => { body[input.dataset.projectAction] = input.checked; });
+        try {
+          await api(`/project-action-access/${userId}`, { method: 'PUT', body });
+          showAppNotification('Project and task permissions updated.');
+        } catch (error) { alert(error.message); }
+      };
     });
     const deviceAccessList = $('#attendance-device-access-list');
     deviceAccess.forEach((person) => {

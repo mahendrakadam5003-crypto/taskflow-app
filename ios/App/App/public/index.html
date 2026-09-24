@@ -7,15 +7,17 @@
 <meta name="theme-color" content="#14213D">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="TaskFlow">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/taskflow.svg">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📋</text></svg>">
-<link rel="stylesheet" href="/css/style.css?v=20260923-2">
+<link rel="stylesheet" href="/css/style.css?v=20260924-1">
 </head>
 <body>
 
 <!-- LOGIN SCREEN -->
-<div id="login-screen" class="login-screen hidden">
+<div id="login-screen" class="login-screen">
   <div class="login-card">
     <div class="login-mark">TaskFlow</div>
     <p class="login-sub">Internal workspace — tasks &amp; attendance</p>
@@ -44,6 +46,7 @@
       <button class="nav-item" data-view="attendance">🕒 Attendance</button>
       <button class="nav-item" data-view="reimbursements">💳 Reimbursements</button>
       <button class="nav-item" data-view="mytasks">✓ My Tasks</button>
+      <button class="nav-item" id="nav-payment-history" data-view="payment-history" style="display:none">💰 Payment History</button>
       <button class="nav-item" data-view="notifications">🔔 Notifications</button>
       <button class="nav-item" id="nav-admin" data-view="admin" style="display:none">⚙️ Admin</button>
     </nav>
@@ -86,6 +89,7 @@
         <button class="dashboard-card dashboard-card-primary" data-dashboard-view="reimbursements"><span>💳</span><b>Reimbursements</b><small>Submit and review expenses</small></button>
         <button class="dashboard-card" data-dashboard-view="attendance"><span>🕒</span><b>Attendance</b><small>Punch in and view history</small></button>
         <button class="dashboard-card" data-dashboard-view="mytasks"><span>✓</span><b>My Tasks</b><small>See tasks assigned to you</small></button>
+        <button class="dashboard-card" id="dashboard-payment-history-card" data-dashboard-view="payment-history" style="display:none"><span>💰</span><b>Payment History</b><small id="dashboard-payment-history-hint">Track invoices and payments</small></button>
         <button class="dashboard-card" data-dashboard-view="notifications"><span>🔔</span><b>Notifications</b><small>Recent workspace changes</small></button>
         <button class="dashboard-card" data-dashboard-view="projects"><span>▦</span><b>Projects</b><small>Open your project workspace</small></button>
         <button class="dashboard-card" id="dashboard-tracking-card" data-dashboard-view="tracking" style="display:none"><span>🗺️</span><b>Tracking</b><small>View live employee locations</small></button>
@@ -131,6 +135,10 @@
       <div class="task-table-wrap"><table class="task-table"><thead><tr><th style="width:32px"></th><th>Task</th><th>Project</th><th>Due</th></tr></thead><tbody id="my-task-list"></tbody></table></div>
     </section>
 
+    <section id="view-payment-history" class="view hidden">
+      <div id="payment-history-content"></div>
+    </section>
+
     <!-- Notifications view -->
     <section id="view-notifications" class="view hidden">
       <div class="project-header"><div><h1>Notifications</h1><div class="hint">Changes affecting you and recent actions in your workspace.</div></div></div>
@@ -152,7 +160,7 @@
     <section id="view-project" class="view hidden">
       <div class="project-switcher-bar" id="project-switcher-bar"><span class="eyebrow">Projects</span><div id="focused-project-list" class="focused-project-list"></div><button class="btn btn-secondary btn-sm" id="project-new-project">+ New project</button></div>
       <div class="project-header">
-        <div><h1 id="project-title">—</h1><div id="project-members-hint" class="hint"></div></div>
+        <div><h1 id="project-title">—</h1><button class="link-btn" id="btn-rename-project" type="button">Rename project</button><div id="project-members-hint" class="hint"></div></div>
         <div class="project-header-actions"><button class="btn btn-secondary" id="btn-manage-members">Members</button><button class="btn btn-primary" id="btn-new-task">+ Add task</button></div>
       </div>
       <div class="task-toolbar">
@@ -186,7 +194,7 @@
         <div id="task-search-results-heading" class="task-search-results-heading hidden"></div>
         <table class="task-table">
           <thead>
-            <tr><th style="width:32px"></th><th>Task</th><th>Assignee</th><th>Due</th><th>Status</th></tr>
+            <tr><th style="width:32px"></th><th>Task</th><th>Assignee</th><th>Invoice</th><th>Customer</th><th>Total</th><th>Due</th><th>Status</th></tr>
           </thead>
           <tbody id="task-list"></tbody>
         </table>
@@ -219,20 +227,33 @@
         <label>Due date</label>
         <input type="date" id="drawer-due">
       </div>
-      <div class="field-row">
-        <label>Created</label>
-        <span id="drawer-created" class="hint">—</span>
+      <div class="field-block billing-details-box">
+        <label>Billing description</label>
+        <div class="billing-details-fields">
+          <div class="field-row"><label>Customer</label><input type="text" id="drawer-customer-name" placeholder="Customer name"></div>
+          <div class="field-row"><label>Invoice number</label><input type="text" id="drawer-invoice-number" placeholder="Invoice number"></div>
+          <div class="field-row"><label>Invoice date</label><input type="date" id="drawer-invoice-date"></div>
+          <div class="field-row"><label>Total amount</label><input type="number" id="drawer-total-amount" min="0" step="0.01" placeholder="0.00"></div>
+        </div>
       </div>
-      <div class="field-row">
-        <label>Status</label>
-        <select id="drawer-status">
-          <option value="open">Open</option>
-          <option value="done">Done</option>
-        </select>
-      </div>
+      <div class="hidden"><span id="drawer-created">—</span><select id="drawer-status"><option value="open">Open</option><option value="done">Done</option></select></div>
       <div class="field-block">
         <label>Description</label>
         <textarea id="drawer-desc" rows="4" placeholder="Add details…"></textarea>
+      </div>
+      <div class="field-block">
+        <label>Comments</label>
+        <div id="drawer-comments"></div>
+        <div id="comment-image-preview" class="comment-image-preview hidden"></div>
+        <div class="comment-input-row">
+          <div class="comment-composer">
+            <textarea id="drawer-comment-input" rows="1" placeholder="Write a comment…"></textarea>
+            <div id="comment-mention-suggestions" class="comment-mention-suggestions hidden"></div>
+          </div>
+          <input type="file" id="comment-file-input" accept="*/*" class="hidden">
+          <button class="icon-btn" id="btn-attach-image" title="Attach file (up to 50MB)">📎</button>
+          <button class="btn btn-secondary" id="btn-add-comment">Post</button>
+        </div>
       </div>
       <div class="field-block">
         <div class="field-block-header">
@@ -240,17 +261,6 @@
           <button class="link-btn" id="btn-add-subtask">+ add</button>
         </div>
         <div id="drawer-subtasks"></div>
-      </div>
-      <div class="field-block">
-        <label>Comments</label>
-        <div id="drawer-comments"></div>
-        <div id="comment-image-preview" class="comment-image-preview hidden"></div>
-        <div class="comment-input-row">
-          <input id="drawer-comment-input" placeholder="Write a comment…">
-          <input type="file" id="comment-file-input" accept="*/*" class="hidden">
-          <button class="icon-btn" id="btn-attach-image" title="Attach file (up to 50MB)">📎</button>
-          <button class="btn btn-secondary" id="btn-add-comment">Post</button>
-        </div>
       </div>
       <button class="btn btn-primary btn-block" id="btn-complete-task">✓ Complete task</button>
       <button class="btn btn-danger btn-block" id="btn-delete-task">Delete task</button>
@@ -262,7 +272,8 @@
 <aside id="reimbursement-drawer" class="drawer hidden">
   <div class="drawer-header">
     <b id="reimbursement-drawer-title">Reimbursement</b>
-    <button class="icon-btn" id="reimbursement-drawer-close">✕</button>
+    <button class="btn btn-secondary btn-sm" id="reimbursement-drawer-back" type="button">Back</button>
+    <button class="btn btn-secondary btn-sm" id="reimbursement-drawer-close" type="button">Close</button>
   </div>
   <div class="drawer-body">
     <div class="field-row"><label>Employee</label><span id="reimbursement-detail-employee"></span></div>
@@ -283,12 +294,12 @@
   <div class="modal" id="modal"></div>
 </div>
 
-<script src="/js/app.js?v=20260923-5"></script>
+<script src="/js/app.js?v=20260924-1"></script>
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', async () => {
       try {
-        const registration = await navigator.serviceWorker.register('/service-worker.js?v=20260923-6');
+        const registration = await navigator.serviceWorker.register('/service-worker.js?v=20260924-1');
         await registration.update();
       } catch (error) {
         console.warn('Service worker update failed:', error);

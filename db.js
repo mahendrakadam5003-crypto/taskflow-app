@@ -100,6 +100,19 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       PRIMARY KEY (project_id, user_id)
     );`);
 
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS project_action_access (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      create_project INTEGER NOT NULL DEFAULT 1,
+      edit_project INTEGER NOT NULL DEFAULT 1,
+      delete_project INTEGER NOT NULL DEFAULT 0,
+      create_task INTEGER NOT NULL DEFAULT 1,
+      edit_task INTEGER NOT NULL DEFAULT 1,
+      delete_task INTEGER NOT NULL DEFAULT 0,
+      complete_task INTEGER NOT NULL DEFAULT 1,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );`);
+
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

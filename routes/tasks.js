@@ -157,6 +157,13 @@ async function canViewPaymentHistory(req) {
   if (req.session.role === 'admin') return true;
   return !!(await db.prepare('SELECT 1 FROM payment_history_access WHERE user_id=?').get(req.session.userId));
 }
+const PROJECT_ACTIONS = ['create_project', 'edit_project', 'delete_project', 'create_task', 'edit_task', 'delete_task', 'complete_task'];
+async function canProjectAction(req, action) {
+  if (req.session.role === 'admin') return true;
+  if (!PROJECT_ACTIONS.includes(action)) return false;
+  const row = await db.prepare(`SELECT ${action} AS allowed FROM project_action_access WHERE user_id=?`).get(req.session.userId);
+  return row ? Number(row.allowed) === 1 : true;
+}
 async function canAccessTask(taskId, userId, admin = false) {
   if (admin) return true;
   const row = await db.prepare('SELECT project_id, assignee_id FROM tasks WHERE id=?').get(taskId);
@@ -371,6 +378,7 @@ router.put('/payment-history/:id', async (req, res) => {
 
 router.post('/projects', async (req, res) => {
   try {
+    if (!(await canProjectAction(req, 'create_project'))) return res.status(403).json({ error: 'You do not have permission to create projects.' });
     const { name, pin, member_ids = [] } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
     const pinHash = pin ? bcrypt.hashSync(String(pin), 10) : null;
@@ -402,6 +410,47 @@ router.put('/projects/:id/members', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+router.get('/project-action-access', requireAdmin, async (req, res) => {
+  const rows = await db.prepare(`SELECT u.id AS user_id, u.name, u.username,
+    COALESCE(paa.create_project, 1) AS create_project,
+    COALESCE(paa.edit_project, 1) AS edit_project,
+    COALESCE(paa.delete_project, 0) AS delete_project,
+    COALESCE(paa.create_task, 1) AS create_task,
+    COALESCE(paa.edit_task, 1) AS edit_task,
+    COALESCE(paa.delete_task, 0) AS delete_task,
+    COALESCE(paa.complete_task, 1) AS complete_task
+    FROM users u LEFT JOIN project_action_access paa ON paa.user_id=u.id
+    WHERE u.active=1 ORDER BY u.name`).all();
+  res.json(rows || []);
+});
+
+router.get('/project-action-access/me', async (req, res) => {
+  if (req.session.role === 'admin') return res.json(Object.fromEntries(PROJECT_ACTIONS.map(action => [action, true])));
+  const row = await db.prepare(`SELECT ${PROJECT_ACTIONS.join(', ')} FROM project_action_access WHERE user_id=?`).get(req.session.userId);
+  res.json(Object.fromEntries(PROJECT_ACTIONS.map(action => [action, row ? Number(row[action]) === 1 : true])));
+});
+
+router.put('/project-action-access/:userId', requireAdmin, async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!userId) return res.status(400).json({ error: 'Valid user is required.' });
+  const values = PROJECT_ACTIONS.map(action => req.body[action] ? 1 : 0);
+  await db.prepare(`INSERT INTO project_action_access (user_id, ${PROJECT_ACTIONS.join(', ')}, updated_by)
+    VALUES (?, ${PROJECT_ACTIONS.map(() => '?').join(', ')}, ?)
+    ON CONFLICT(user_id) DO UPDATE SET ${PROJECT_ACTIONS.map(action => `${action}=excluded.${action}`).join(', ')}, updated_by=excluded.updated_by, updated_at=datetime('now')}`)
+    .run(userId, ...values, req.session.userId);
+  res.json({ ok: true });
+});
+
+router.put('/projects/:id', async (req, res) => {
+  if (!(await canProjectAction(req, 'edit_project'))) return res.status(403).json({ error: 'You do not have permission to edit projects.' });
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Project name is required.' });
+  const project = await db.prepare('SELECT id FROM projects WHERE id=?').get(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  await db.prepare('UPDATE projects SET name=? WHERE id=?').run(name, req.params.id);
+  res.json({ ok: true });
+});
+
 router.post('/projects/:id/unlock', requireProjectAccess, async (req, res) => {
   try {
     const project = await db.prepare('SELECT * FROM projects WHERE id=?').get(req.params.id);
@@ -411,8 +460,9 @@ router.post('/projects/:id/unlock', requireProjectAccess, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.delete('/projects/:id', requireAdmin, async (req, res) => {
+router.delete('/projects/:id', async (req, res) => {
   try {
+    if (!(await canProjectAction(req, 'delete_project'))) return res.status(403).json({ error: 'You do not have permission to delete projects.' });
     await db.prepare('DELETE FROM projects WHERE id=?').run(req.params.id);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -487,6 +537,7 @@ router.get('/tasks/search', async (req, res) => {
 
 router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
   try {
+    if (!(await canProjectAction(req, 'create_task'))) return res.status(403).json({ error: 'You do not have permission to create tasks.' });
     const { title, description, assignee_id, due_date, invoice_number, invoice_date, customer_name, total_amount } = req.body;
     if (!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
     if (assignee_id && !(await canAccessProject(req.params.id, Number(assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
@@ -511,6 +562,8 @@ router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
 router.put('/tasks/:id', async (req, res) => {
   try {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
+    if (req.body.status !== undefined && !(await canProjectAction(req, 'complete_task'))) return res.status(403).json({ error: 'You do not have permission to complete tasks.' });
+    if (Object.keys(req.body).some(key => key !== 'status') && !(await canProjectAction(req, 'edit_task'))) return res.status(403).json({ error: 'You do not have permission to edit tasks.' });
     const taskBefore = await db.prepare('SELECT title, description, status, assignee_id, due_date, payment_member_id, invoice_number FROM tasks WHERE id=?').get(req.params.id);
     const updates = [];
     const values = [];
@@ -589,8 +642,9 @@ router.get('/tasks/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.delete('/tasks/:id', requireAdmin, async (req, res) => {
+router.delete('/tasks/:id', async (req, res) => {
   try {
+    if (!(await canProjectAction(req, 'delete_task'))) return res.status(403).json({ error: 'You do not have permission to delete tasks.' });
     await db.prepare('DELETE FROM tasks WHERE id=?').run(req.params.id);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
