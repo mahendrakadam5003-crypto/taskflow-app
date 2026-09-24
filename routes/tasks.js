@@ -157,17 +157,6 @@ async function canViewPaymentHistory(req) {
   if (req.session.role === 'admin') return true;
   return !!(await db.prepare('SELECT 1 FROM payment_history_access WHERE user_id=?').get(req.session.userId));
 }
-
-function invoiceCandidatePredicate(tableAlias = 't') {
-  const prefix = tableAlias ? `${tableAlias}.` : '';
-  return `(${['invoice_number', 'customer_name', 'total_amount', 'amount_received', 'payment_status'].map(field => {
-    if (field === 'invoice_number' || field === 'customer_name' || field === 'payment_status') {
-      return `COALESCE(NULLIF(trim(COALESCE(${prefix}${field}, '')), ''), NULL) IS NOT NULL`;
-    }
-    return `COALESCE(${prefix}${field}, 0) > 0`;
-  }).join(' OR ')})`;
-}
-
 async function canAccessTask(taskId, userId, admin = false) {
   if (admin) return true;
   const row = await db.prepare('SELECT project_id, assignee_id FROM tasks WHERE id=?').get(taskId);
@@ -280,7 +269,7 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
     const paymentAccess = await canViewPaymentHistory(req);
     const paymentAlerts = paymentAccess ? await db.prepare(`SELECT t.id, t.invoice_number, t.invoice_date, t.customer_name, t.total_amount, t.amount_received, p.name AS project_name
       FROM tasks t JOIN projects p ON p.id=t.project_id
-      WHERE (${invoiceCandidatePredicate()})
+      WHERE t.invoice_number IS NOT NULL AND trim(t.invoice_number) <> ''
         AND COALESCE(t.payment_status, 'not_received') <> 'received'
         AND t.invoice_date IS NOT NULL AND date(t.invoice_date, '+30 days') < date('now')
       ORDER BY t.invoice_date ASC`).all() : [];
@@ -323,12 +312,15 @@ router.put('/payment-history/access/:userId', requireAdmin, async (req, res) => 
 router.get('/payment-history', async (req, res) => {
   if (!(await canViewPaymentHistory(req))) return res.status(403).json({ error: 'You do not have payment-history access.' });
   const params = [];
+  const invoiceCondition = `((t.invoice_number IS NOT NULL AND trim(t.invoice_number) <> '')
+    OR (t.customer_name IS NOT NULL AND trim(t.customer_name) <> '')
+    OR COALESCE(t.total_amount, 0) > 0)`;
   let sql = `SELECT t.id, t.project_id, t.title, t.invoice_number, t.invoice_date, t.customer_name,
     t.total_amount, t.payment_status, t.payment_received_date, t.amount_received,
     COALESCE(t.payment_member_id, t.assignee_id) AS payment_member_id,
     p.name AS project_name, member.name AS payment_member_name
     FROM tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN users member ON member.id=COALESCE(t.payment_member_id, t.assignee_id)
-    WHERE ${invoiceCandidatePredicate()}`;
+    WHERE ${invoiceCondition}`;
   if (req.query.from) { sql += ' AND (t.invoice_date IS NULL OR t.invoice_date >= ?)'; params.push(req.query.from); }
   if (req.query.to) { sql += ' AND (t.invoice_date IS NULL OR t.invoice_date <= ?)'; params.push(req.query.to); }
   if (req.query.status) { sql += ' AND t.payment_status = ?'; params.push(req.query.status); }
@@ -341,7 +333,9 @@ router.get('/payment-history', async (req, res) => {
 
 router.get('/payment-history/summary', async (req, res) => {
   if (!(await canViewPaymentHistory(req))) return res.status(403).json({ error: 'You do not have payment-history access.' });
-  const conditions = [invoiceCandidatePredicate()];
+  const conditions = [`((t.invoice_number IS NOT NULL AND trim(t.invoice_number) <> '')
+    OR (t.customer_name IS NOT NULL AND trim(t.customer_name) <> '')
+    OR COALESCE(t.total_amount, 0) > 0)`];
   const params = [];
   if (req.query.from || req.query.to) {
     conditions.push('t.invoice_date >= ?', 't.invoice_date <= ?');
@@ -362,7 +356,10 @@ router.put('/payment-history/:id', async (req, res) => {
   if (!(await canViewPaymentHistory(req))) return res.status(403).json({ error: 'You do not have payment-history access.' });
   const status = ['received', 'not_received', 'pending'].includes(req.body.payment_status) ? req.body.payment_status : null;
   if (!status) return res.status(400).json({ error: 'Invalid payment status.' });
-  const task = await db.prepare(`SELECT id FROM tasks WHERE id=? AND ${invoiceCandidatePredicate('')}`).get(req.params.id);
+  const task = await db.prepare(`SELECT id FROM tasks
+    WHERE id=? AND ((invoice_number IS NOT NULL AND trim(invoice_number) <> '')
+      OR (customer_name IS NOT NULL AND trim(customer_name) <> '')
+      OR COALESCE(total_amount, 0) > 0)`).get(req.params.id);
   if (!task) return res.status(404).json({ error: 'Invoice task not found.' });
   const received = Math.max(0, Number(req.body.amount_received) || 0);
   const memberId = req.body.payment_member_id ? Number(req.body.payment_member_id) : null;

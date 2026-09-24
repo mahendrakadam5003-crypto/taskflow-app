@@ -11,6 +11,13 @@ async function api(path, opts = {}) {
   });
   let data = null;
   try { data = await res.json(); } catch (e) { /* no body */ }
+  if (res.status === 401 && path !== '/auth/login') {
+    ME = null;
+    $('#app')?.classList.add('hidden');
+    $('#login-screen')?.classList.remove('hidden');
+    const loginError = $('#login-error');
+    if (loginError) loginError.textContent = 'Your session expired. Please sign in again.';
+  }
   if (!res.ok) throw new Error((data && data.error) || 'Request failed');
   return data;
 }
@@ -79,7 +86,7 @@ async function refreshNotificationsAfterAction() {
 
 function escapeHtml(str) {
   if (!str) return '';
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
 function attachmentTypeLabel(type, name) {
@@ -97,7 +104,7 @@ function renderCommentAttachment(entry) {
   const name = entry.attachment_name || 'Telegram attachment';
   const type = attachmentTypeLabel(entry.attachment_type, name);
   if (String(entry.attachment_type || '').toLowerCase().startsWith('image/')) {
-    return `<a class="comment-attachment" href="${entry.image_path}" target="_blank" rel="noopener"><img class="comment-image" src="${entry.image_path}" alt="${escapeHtml(name)}"><span>${escapeHtml(name)}</span></a>`;
+    return `<a class="comment-attachment" href="${entry.image_path}" target="_blank" rel="noopener"><img class="comment-image" src="${entry.image_path}" loading="lazy" decoding="async" alt="${escapeHtml(name)}"><span>${escapeHtml(name)}</span></a>`;
   }
   return `<a class="comment-file-card" href="${entry.image_path}" target="_blank" rel="noopener"><span class="comment-file-icon">▦</span><span><b>${escapeHtml(name)}</b><small>${escapeHtml(type)} · Download</small></span></a>`;
 }
@@ -162,12 +169,47 @@ function openReimbursementDrawer(row) {
   $('#reimbursement-detail-description').textContent = row.description || '—';
   $('#reimbursement-detail-status').textContent = row.status || '—';
   $('#reimbursement-detail-note').textContent = row.admin_note || 'No note';
-  $('#reimbursement-detail-receipt').innerHTML = row.receipt_url
-    ? `<a href="${row.receipt_url}" target="_blank" rel="noopener">View receipt</a>`
+  const receiptItems = (row.receipt_items || []).filter(item => item.url);
+  const imageReceiptItems = receiptItems.filter(item => String(item.mime_type || '').startsWith('image/'));
+  $('#reimbursement-detail-receipt').innerHTML = receiptItems.length
+    ? `<div class="receipt-gallery">${receiptItems.map((item, index) => `<div class="receipt-item"><div class="receipt-storage-label">${escapeHtml(item.storage || 'Stored attachment')}</div>${String(item.mime_type || '').startsWith('image/')
+      ? `<button type="button" class="receipt-preview-button" data-receipt-index="${imageReceiptItems.indexOf(item)}" title="Open receipt"><img src="${item.url}" alt="${escapeHtml(item.original_name || `Receipt ${index + 1}`)}"></button>`
+      : `<a class="receipt-document-link" href="${item.url}" target="_blank" rel="noopener">${escapeHtml(item.original_name || 'View receipt document')}</a>`}</div>`).join('')}</div>`
     : (row.receipt_expired ? '<span class="hint">Attachment expired</span>' : '<span class="hint">No receipt</span>');
+  $$('.receipt-preview-button').forEach(button => {
+    button.onclick = () => openReceiptPreview(imageReceiptItems.map(item => item.url), Number(button.dataset.receiptIndex));
+  });
   drawer.classList.remove('hidden');
   $('#app').classList.add('drawer-open');
   $('#reimbursement-drawer-close').onclick = closeDrawer;
+  $('#reimbursement-drawer-back').onclick = closeDrawer;
+}
+
+function openReceiptPreview(urls, initialIndex = 0) {
+  if (!urls.length) return;
+  let index = Math.max(0, Math.min(initialIndex, urls.length - 1));
+  let scale = 1;
+  const render = () => {
+    showModal(`
+      <div class="receipt-preview-modal">
+        <div class="receipt-preview-toolbar">
+          <span>Receipt ${index + 1} of ${urls.length}</span>
+          <div>
+            <button class="btn btn-secondary btn-sm" id="receipt-zoom-out" type="button">−</button>
+            <button class="btn btn-secondary btn-sm" id="receipt-zoom-in" type="button">+</button>
+            <button class="btn btn-secondary btn-sm" id="receipt-preview-close" type="button">Close</button>
+          </div>
+        </div>
+        <div class="receipt-preview-stage"><img id="receipt-preview-image" src="${urls[index]}" alt="Receipt preview" style="transform:scale(${scale})"></div>
+        ${urls.length > 1 ? `<div class="receipt-preview-navigation"><button class="btn btn-secondary btn-sm" id="receipt-prev" type="button" ${index === 0 ? 'disabled' : ''}>Previous</button><button class="btn btn-secondary btn-sm" id="receipt-next" type="button" ${index === urls.length - 1 ? 'disabled' : ''}>Next</button></div>` : ''}
+      </div>`);
+    $('#receipt-preview-close').onclick = closeModal;
+    $('#receipt-zoom-out').onclick = () => { scale = Math.max(.5, scale - .25); render(); };
+    $('#receipt-zoom-in').onclick = () => { scale = Math.min(3, scale + .25); render(); };
+    $('#receipt-prev')?.addEventListener('click', () => { index -= 1; scale = 1; render(); });
+    $('#receipt-next')?.addEventListener('click', () => { index += 1; scale = 1; render(); });
+  };
+  render();
 }
 
 function autoGrowDescription() {
@@ -175,6 +217,14 @@ function autoGrowDescription() {
   if (!description) return;
   description.style.height = 'auto';
   description.style.height = `${Math.max(description.scrollHeight, 180)}px`;
+}
+
+function autoGrowComment() {
+  const comment = $('#drawer-comment-input');
+  if (!comment) return;
+  comment.style.height = 'auto';
+  comment.style.height = `${Math.min(comment.scrollHeight, 180)}px`;
+  comment.style.overflowY = comment.scrollHeight > 180 ? 'auto' : 'hidden';
 }
 
 // ---------- state ----------
@@ -186,6 +236,9 @@ let CURRENT_TASK_ID = null;
 const unlockedProjects = new Set();
 let attendancePollTimer = null;
 let notificationsPollTimer = null;
+let taskListPollTimer = null;
+let taskListPollBusy = false;
+let taskListVisibilityHandler = null;
 let latestNotificationId = null;
 let pendingSearchTaskId = null;
 let liveTrackingTimer = null;
@@ -271,6 +324,40 @@ function stopNotificationsPolling() {
   }
 }
 
+function startTaskListPolling() {
+  stopTaskListPolling();
+  const refreshVisibleTaskList = async () => {
+    if (document.hidden) return;
+    if (taskListPollBusy) return;
+    taskListPollBusy = true;
+    const activeView = currentViewName();
+    try {
+      if (activeView === 'mytasks') await renderMyTasks();
+      else if (CURRENT_PROJECT && document.querySelector('#view-project:not(.hidden)')) await renderTasks();
+    } catch (error) {
+      console.warn('Task list refresh failed:', error.message);
+    } finally {
+      taskListPollBusy = false;
+    }
+  };
+  taskListPollTimer = setInterval(refreshVisibleTaskList, 5000);
+  refreshVisibleTaskList();
+  taskListVisibilityHandler = refreshVisibleTaskList;
+  document.addEventListener('visibilitychange', taskListVisibilityHandler);
+}
+
+function stopTaskListPolling() {
+  if (taskListPollTimer) {
+    clearInterval(taskListPollTimer);
+    taskListPollTimer = null;
+  }
+  if (taskListVisibilityHandler) {
+    document.removeEventListener('visibilitychange', taskListVisibilityHandler);
+    taskListVisibilityHandler = null;
+  }
+  taskListPollBusy = false;
+}
+
 // ---------- boot backend authentication initialization ----------
 (async function init() {
   try {
@@ -314,6 +401,7 @@ if (btnLogout) {
     stopAttendancePolling();
     stopLiveTracking();
     stopNotificationsPolling();
+    stopTaskListPolling();
     await api('/auth/logout', { method: 'POST' });
     location.reload();
   });
@@ -331,7 +419,7 @@ if (mobileNavButton) mobileNavButton.onclick = () => {
   mobileNavBackdrop?.classList.remove('hidden');
 };
 if (mobileNavBackdrop) mobileNavBackdrop.onclick = closeMobileNav;
-const mobileViewTitles = { dashboard: 'TaskFlow', projects: 'Projects', attendance: 'Attendance', reimbursements: 'Reimbursements', mytasks: 'My Tasks', notifications: 'Notifications', admin: 'Admin', tracking: 'Tracking', project: 'Project' };
+const mobileViewTitles = { dashboard: 'TaskFlow', projects: 'Projects', attendance: 'Attendance', reimbursements: 'Reimbursements', mytasks: 'My Tasks', 'payment-history': 'Payment History', notifications: 'Notifications', admin: 'Admin', tracking: 'Tracking', project: 'Project' };
 const mobileBackButton = $('#btn-mobile-back');
 const dashboardLogoutButton = $('#dashboard-logout-btn');
 if (mobileBackButton) {
@@ -342,6 +430,7 @@ if (dashboardLogoutButton) {
     stopAttendancePolling();
     stopLiveTracking();
     stopNotificationsPolling();
+    stopTaskListPolling();
     await api('/auth/logout', { method: 'POST' });
     location.reload();
   });
@@ -416,6 +505,7 @@ async function renderDashboard() {
         <div class="dashboard-metric"><small>Open tasks</small><b>${summary.open_tasks}</b></div>
         <div class="dashboard-metric alert"><small>Overdue tasks</small><b>${summary.overdue_tasks}</b></div>
         <div class="dashboard-metric money"><small>Pending reimbursements</small><b>${summary.pending_reimbursements} · INR ${Number(summary.pending_reimbursement_amount).toFixed(2)}</b></div>
+        ${summary.payment_alerts?.length ? `<div class="dashboard-metric alert dashboard-payment-alert"><small>Overdue invoices</small><b>${summary.payment_alerts.length}</b>${summary.payment_alerts.slice(0, 3).map(invoice => `<span>${escapeHtml(invoice.invoice_number)} · ${escapeHtml(invoice.customer_name || 'No customer')} · pending ${Number(invoice.pending_amount || 0).toFixed(2)}</span>`).join('')}</div>` : ''}
         ${storageMetric}`;
     }
     if (storageCard && ME?.role === 'admin' && summary?.storage) {
@@ -438,10 +528,82 @@ async function renderDashboard() {
       }).join('') : '<div class="hint">No projects yet.</div>';
       $$('.dashboard-project').forEach(button => button.onclick = () => openProject(Number(button.dataset.dashboardProject)));
     }
+    const paymentHint = $('#dashboard-payment-history-hint');
+    if (paymentHint && Number(summary.payment_alert_count || 0)) paymentHint.textContent = `${summary.payment_alert_count} invoice${summary.payment_alert_count === 1 ? '' : 's'} overdue`;
   } catch (error) {
     const summaryPanel = $('#dashboard-summary');
     if (summaryPanel) summaryPanel.innerHTML = '<div class="hint">Dashboard metrics are temporarily unavailable.</div>';
   }
+
+}
+
+async function renderPaymentHistory() {
+    const wrap = $('#payment-history-content');
+    if (!wrap) return;
+    wrap.innerHTML = `<div class="project-header"><div><h1>Payment History</h1><div class="hint">Track invoices, received payments, and pending balances.</div></div></div>
+      <div class="admin-block">
+        <div class="payment-summary-period" id="payment-summary-period">Last 30 days</div>
+        <div class="payment-summary-cards">
+          <div class="payment-summary-card revenue"><span>Total revenue</span><b id="payment-summary-revenue">0.00</b><small id="payment-summary-invoices">0 invoices</small></div>
+          <div class="payment-summary-card received"><span>Payment received</span><b id="payment-summary-received">0.00</b></div>
+          <div class="payment-summary-card pending"><span>Payment pending</span><b id="payment-summary-pending">0.00</b></div>
+        </div>
+        <div class="attendance-filters">
+          <label>From <input type="date" id="payment-history-from"></label>
+          <label>To <input type="date" id="payment-history-to"></label>
+          <label>Member <select id="payment-history-assignee"><option value="">All members</option>${PEOPLE.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('')}</select></label>
+          <label>Status <select id="payment-history-status"><option value="">All statuses</option><option value="received">Received</option><option value="not_received">Not received</option><option value="pending">Pending</option></select></label>
+          <button class="btn btn-primary" id="payment-history-filter">Filter</button>
+        </div>
+          <div class="task-table-wrap" style="overflow-x:auto; margin-top:14px;"><table class="attn-table payment-history-table"><thead><tr><th>Member</th><th>Invoice</th><th>Invoice date</th><th>Customer</th><th>Task / project</th><th>Total</th><th>Status</th><th>Received date</th><th>Received</th><th>Pending</th><th>Save</th></tr></thead><tbody id="payment-history-table"></tbody></table></div>
+      </div>`;
+    const table = $('#payment-history-table');
+    const renderSummary = async () => {
+      const params = new URLSearchParams();
+      if ($('#payment-history-from').value) params.set('from', $('#payment-history-from').value);
+      if ($('#payment-history-to').value) params.set('to', $('#payment-history-to').value);
+      if ($('#payment-history-assignee').value) params.set('assignee_id', $('#payment-history-assignee').value);
+      const summary = await api(`/payment-history/summary?${params.toString()}`);
+      $('#payment-summary-revenue').textContent = Number(summary.total_revenue || 0).toFixed(2);
+      $('#payment-summary-received').textContent = Number(summary.payment_received || 0).toFixed(2);
+      $('#payment-summary-pending').textContent = Number(summary.payment_pending || 0).toFixed(2);
+      $('#payment-summary-invoices').textContent = `${summary.invoice_count} invoice${summary.invoice_count === 1 ? '' : 's'}`;
+      const selectedMember = $('#payment-history-assignee').selectedOptions[0]?.textContent;
+      $('#payment-summary-period').textContent = `${summary.from || summary.to ? `Selected period${summary.from ? ` from ${summary.from}` : ''}${summary.to ? ` to ${summary.to}` : ''}` : 'Last 30 days'}${summary.assignee_id ? ` · ${selectedMember}` : ''}`;
+    };
+    const renderRows = async () => {
+      const params = new URLSearchParams();
+      if ($('#payment-history-from').value) params.set('from', $('#payment-history-from').value);
+      if ($('#payment-history-to').value) params.set('to', $('#payment-history-to').value);
+      if ($('#payment-history-assignee').value) params.set('assignee_id', $('#payment-history-assignee').value);
+      if ($('#payment-history-status').value) params.set('status', $('#payment-history-status').value);
+      try {
+        const rows = await api(`/payment-history?${params.toString()}`);
+        table.innerHTML = rows.length ? rows.map(row => {
+          const selectedMemberId = row.payment_member_id ?? row.assignee_id ?? '';
+          return `<tr>
+          <td><select class="payment-row-member" data-id="${row.id}"><option value="">Unassigned</option>${PEOPLE.map(person => `<option value="${person.id}" ${Number(selectedMemberId) === Number(person.id) ? 'selected' : ''}>${escapeHtml(person.name || person.NAME)}</option>`).join('')}</select></td><td><b>${escapeHtml(row.invoice_number)}</b></td><td>${escapeHtml(row.invoice_date || '—')}</td><td>${escapeHtml(row.customer_name || '—')}</td>
+          <td>${escapeHtml(row.title)}<small class="hint">${escapeHtml(row.project_name || '')}</small></td><td>${Number(row.total_amount || 0).toFixed(2)}</td>
+          <td><select class="payment-row-status" data-id="${row.id}"><option value="received" ${row.payment_status === 'received' ? 'selected' : ''}>Received</option><option value="not_received" ${row.payment_status === 'not_received' ? 'selected' : ''}>Not received</option><option value="pending" ${row.payment_status === 'pending' ? 'selected' : ''}>Pending</option></select></td>
+          <td><input class="payment-row-date" data-id="${row.id}" type="date" value="${escapeHtml(row.payment_received_date || '')}"></td><td><input class="payment-row-received" data-id="${row.id}" type="number" min="0" step="0.01" value="${Number(row.amount_received || 0).toFixed(2)}"></td>
+          <td class="payment-pending" data-id="${row.id}">${Number(row.pending_amount || 0).toFixed(2)}</td><td><button class="btn btn-primary btn-sm payment-save" data-id="${row.id}">Save</button></td>
+        </tr>`;
+        }).join('') : '<tr><td colspan="10" class="hint" style="text-align:center;padding:15px;">No invoices found.</td></tr>';
+        $$('.payment-save').forEach(button => button.onclick = async () => {
+          const id = button.dataset.id;
+          const received = Number($(`.payment-row-received[data-id="${id}"]`).value || 0);
+          await api(`/payment-history/${id}`, { method: 'PUT', body: { payment_member_id: $(`.payment-row-member[data-id="${id}"]`).value || null, payment_status: $(`.payment-row-status[data-id="${id}"]`).value, payment_received_date: $(`.payment-row-date[data-id="${id}"]`).value || null, amount_received: received } });
+          await renderSummary();
+          await renderRows();
+          showAppNotification('Payment history updated.');
+        });
+      } catch (error) { table.innerHTML = `<tr><td colspan="11" class="form-error">${escapeHtml(error.message)}</td></tr>`; }
+    };
+    $('#payment-history-filter').onclick = async () => { await renderSummary(); await renderRows(); };
+    renderSummary().catch(error => console.warn('Payment summary refresh failed:', error.message));
+    renderRows().catch(error => {
+      table.innerHTML = `<tr><td colspan="11" class="form-error">${escapeHtml(error.message)}</td></tr>`;
+    });
 }
 
 function renderProjectsDirectory() {
@@ -471,8 +633,12 @@ async function enterApp() {
   if (ME.role === 'admin' && navAdmin) navAdmin.style.display = '';
   
   try {
-    const rawPeople = ME.role === 'admin' ? await api('/auth/users') : [ME];
+    const rawPeople = await api('/auth/users/directory');
     PEOPLE = Array.isArray(rawPeople) ? rawPeople.flat(5) : [];
+    const paymentAccess = await api('/payment-history/access/me');
+    const paymentAllowed = ME.role === 'admin' || paymentAccess.allowed;
+    $('#nav-payment-history')?.style.setProperty('display', paymentAllowed ? '' : 'none');
+    $('#dashboard-payment-history-card')?.style.setProperty('display', paymentAllowed ? '' : 'none');
     
     await loadProjects();
     await renderDashboard();
@@ -492,7 +658,12 @@ async function enterApp() {
     appEl?.classList.remove('booting');
     if (flashMessage) showAppNotification(flashMessage);
   } catch (err) {
-    console.error("App boot failure:", err);
+    console.error('App boot failure:', err);
+    appEl?.classList.remove('booting');
+    appEl?.classList.add('hidden');
+    loginScreen?.classList.remove('hidden');
+    const loginError = $('#login-error');
+    if (loginError) loginError.textContent = `Unable to start the app: ${err.message}`;
   }
 }
 
@@ -503,7 +674,7 @@ $$('.nav-item').forEach((btn) => {
 
 function showView(view) {
   if (mobilePageTitle) mobilePageTitle.textContent = view === 'dashboard' ? 'TaskFlow' : (mobileViewTitles[view] || 'TaskFlow');
-  const compactSidebarViews = new Set(['dashboard', 'attendance', 'reimbursements', 'mytasks', 'notifications', 'admin', 'tracking']);
+  const compactSidebarViews = new Set(['dashboard', 'attendance', 'reimbursements', 'mytasks', 'payment-history', 'notifications', 'admin', 'tracking']);
   const projectSidebarViews = new Set(['projects', 'project']);
   $('#app')?.classList.toggle('focused-view', compactSidebarViews.has(view));
   $('#app')?.classList.toggle('project-shell', projectSidebarViews.has(view));
@@ -521,13 +692,15 @@ function showView(view) {
   $$('.project-item').forEach((b) => b.classList.remove('active'));
   sessionStorage.setItem('taskflow_last_view', view);
   if (view === 'project' && CURRENT_PROJECT) sessionStorage.setItem('taskflow_last_project_id', String(CURRENT_PROJECT.id));
-  ['dashboard', 'projects', 'attendance', 'reimbursements', 'admin', 'tracking', 'project', 'mytasks', 'notifications', 'empty'].forEach((v) => {
+  ['dashboard', 'projects', 'attendance', 'reimbursements', 'admin', 'tracking', 'project', 'mytasks', 'payment-history', 'notifications', 'empty'].forEach((v) => {
     const el = $('#view-' + v);
     if (el) el.classList.add('hidden');
   });
   closeDrawer();
 
   if (view !== 'attendance') stopAttendancePolling();
+  if (view === 'project' || view === 'mytasks') startTaskListPolling();
+  else stopTaskListPolling();
 
   if (view === 'dashboard') {
     const viewDashboard = $('#view-dashboard');
@@ -559,6 +732,10 @@ function showView(view) {
     const viewMyTasks = $('#view-mytasks');
     if (viewMyTasks) viewMyTasks.classList.remove('hidden');
     renderMyTasks();
+  } else if (view === 'payment-history') {
+    const paymentView = $('#view-payment-history');
+    if (paymentView) paymentView.classList.remove('hidden');
+    renderPaymentHistory();
   } else if (view === 'notifications') {
     const viewNotifications = $('#view-notifications');
     if (viewNotifications) viewNotifications.classList.remove('hidden');
@@ -603,22 +780,33 @@ async function renderReimbursements() {
   const canPay = isAdmin || Number(access.can_pay) === 1;
   const peopleOptions = PEOPLE.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('');
   const categoryOptions = ['Travel', 'Fuel', 'Meals', 'Lodging', 'Supplies', 'Other'].map(category => `<option>${category}</option>`).join('');
+  let allEmployeeRows = [];
 
   wrap.innerHTML = `
     <div class="project-header"><div><h1>Reimbursements</h1><div class="hint">Submit field expenses with receipts and track approval status.</div></div></div>
     ${!isAdmin ? `<div class="admin-block">
-      <h3>Submit expense</h3>
+      <div id="employee-reimbursement-overview">
+        <div class="reimbursement-summary">
+          <div class="reimbursement-summary-card"><span>Total claims</span><b id="reimbursement-total-amount">INR 0.00</b><small id="reimbursement-total-count">0 claims</small></div>
+          <div class="reimbursement-summary-card"><span>Pending</span><b class="pending" id="reimbursement-pending-amount">INR 0.00</b></div>
+          <div class="reimbursement-summary-card"><span>Approved</span><b class="approved" id="reimbursement-approved-amount">INR 0.00</b></div>
+        </div>
+        <div class="reimbursement-section-heading"><h3>Recent expenses</h3><button class="btn btn-primary" id="reimbursement-new-expense" type="button">+ New expense</button></div>
+      </div>
+      <div id="employee-reimbursement-form" class="hidden">
+        <div class="reimbursement-section-heading"><h3>Submit expense</h3><button class="btn btn-secondary" id="reimbursement-cancel-new" type="button">Back to expenses</button></div>
       <form id="reimbursement-form" class="admin-form-row">
         <input id="reimbursement-amount" type="number" min="0.01" step="0.01" placeholder="Amount" required>
         <select id="reimbursement-currency"><option>INR</option><option>USD</option><option>EUR</option></select>
         <select id="reimbursement-category">${categoryOptions}</select>
         <input id="reimbursement-date" type="date" value="${todayISO()}" required>
         <input id="reimbursement-description" placeholder="Description" required>
-        <input id="reimbursement-receipt" type="file" accept="image/*,.pdf" capture="environment" aria-label="Take a receipt photo or choose a file">
+        <input id="reimbursement-receipt" type="file" accept="image/*,.pdf" multiple aria-label="Choose receipt photos or files">
         <button class="btn btn-primary" type="submit">Submit claim</button>
       </form>
       <div id="reimbursement-form-error" class="form-error"></div>
       <div id="reimbursement-form-success" style="color:#25602a; font-size:13px; min-height:16px;"></div>
+      </div>
     </div>` : ''}
     <div class="admin-block">
       <h3>${canReview ? 'Expense approvals' : 'My expense claims'}</h3>
@@ -641,6 +829,21 @@ async function renderReimbursements() {
     </div>`;
 
   const table = $('#reimbursements-table');
+  const renderEmployeeSummary = () => {
+    if (isAdmin) return;
+    const total = allEmployeeRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const pending = allEmployeeRows.filter(row => ['submitted', 'approved_level_1'].includes(row.status)).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const approved = allEmployeeRows.filter(row => ['approved', 'paid'].includes(row.status)).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    $('#reimbursement-total-amount').textContent = `INR ${total.toFixed(2)}`;
+    $('#reimbursement-total-count').textContent = `${allEmployeeRows.length} claim${allEmployeeRows.length === 1 ? '' : 's'}`;
+    $('#reimbursement-pending-amount').textContent = `INR ${pending.toFixed(2)}`;
+    $('#reimbursement-approved-amount').textContent = `INR ${approved.toFixed(2)}`;
+  };
+  const refreshEmployeeSummary = async () => {
+    if (isAdmin) return;
+    allEmployeeRows = await api('/reimbursements');
+    renderEmployeeSummary();
+  };
   const renderRows = async () => {
     const params = new URLSearchParams();
     if (canReview && $('#reimbursement-user')?.value) params.set('user_id', $('#reimbursement-user').value);
@@ -667,10 +870,7 @@ async function renderReimbursements() {
           const note = button.dataset.status === 'rejected' ? prompt('Reason for rejection (optional):') || '' : '';
           await api(`/reimbursements/${button.dataset.id}/status`, { method: 'PUT', body: { status: button.dataset.status, admin_note: note } });
           if (button.dataset.status === 'approved') {
-            sessionStorage.setItem('taskflow_return_view', 'reimbursements');
-            sessionStorage.setItem('taskflow_flash_message', 'Expense has been approved successfully.');
-            window.location.reload();
-            return;
+            showAppNotification('Expense has been approved successfully.');
           }
           await renderRows();
           await refreshNotificationsAfterAction();
@@ -699,9 +899,9 @@ async function renderReimbursements() {
         if (!ids.length) return alert('Select at least one reimbursement to approve.');
         if (!await confirmModal('Approve selected reimbursements?', `Are you sure you want to approve ${ids.length} reimbursement${ids.length === 1 ? '' : 's'}?`, 'Approve all', false)) return;
         await api('/reimbursements/bulk-status', { method: 'PUT', body: { ids } });
-        sessionStorage.setItem('taskflow_return_view', 'reimbursements');
-        sessionStorage.setItem('taskflow_flash_message', 'Expenses have been approved successfully.');
-        window.location.reload();
+        showAppNotification('Expenses have been approved successfully.');
+        await renderRows();
+        await refreshNotificationsAfterAction();
       };
     } catch (err) {
       table.innerHTML = `<tr><td colspan="9" class="form-error">${escapeHtml(err.message)}</td></tr>`;
@@ -709,6 +909,17 @@ async function renderReimbursements() {
   };
 
   if (!isAdmin) {
+    $('#reimbursement-new-expense').onclick = () => {
+      $('#employee-reimbursement-overview').classList.add('hidden');
+      $('#employee-reimbursement-form').classList.remove('hidden');
+      $('#reimbursement-form-error').textContent = '';
+      $('#reimbursement-form-success').textContent = '';
+      $('#reimbursement-amount').focus();
+    };
+    $('#reimbursement-cancel-new').onclick = () => {
+      $('#employee-reimbursement-form').classList.add('hidden');
+      $('#employee-reimbursement-overview').classList.remove('hidden');
+    };
     $('#reimbursement-form').onsubmit = async (event) => {
       event.preventDefault();
       const formData = new FormData();
@@ -717,14 +928,16 @@ async function renderReimbursements() {
       formData.append('category', $('#reimbursement-category').value);
       formData.append('expense_date', $('#reimbursement-date').value);
       formData.append('description', $('#reimbursement-description').value.trim());
-      const receipt = $('#reimbursement-receipt').files[0];
-      if (receipt) formData.append('receipt', receipt);
+      Array.from($('#reimbursement-receipt').files || []).forEach(receipt => formData.append('receipt', receipt));
       const response = await fetch('/api/reimbursements', { method: 'POST', body: formData, credentials: 'same-origin' });
       const result = await response.json();
       if (!response.ok) { $('#reimbursement-form-error').textContent = result.error || 'Unable to submit claim.'; return; }
-      sessionStorage.setItem('taskflow_return_view', 'reimbursements');
-      sessionStorage.setItem('taskflow_flash_message', 'Expense submitted successfully.');
-      window.location.reload();
+      $('#reimbursement-form-success').textContent = 'Expense submitted successfully.';
+      $('#employee-reimbursement-form').classList.add('hidden');
+      $('#employee-reimbursement-overview').classList.remove('hidden');
+      await refreshEmployeeSummary();
+      await renderRows();
+      showAppNotification('Expense submitted successfully.');
     };
   }
   $('#reimbursement-filter').onclick = renderRows;
@@ -737,6 +950,7 @@ async function renderReimbursements() {
     window.open(`/api/reimbursements/export.csv?${params.toString()}`, '_blank');
   };
   renderRows();
+  refreshEmployeeSummary().catch(error => console.warn('Expense summary refresh failed:', error.message));
 }
 
 // ================= PROJECTS MODULE =================
@@ -771,9 +985,21 @@ function renderProjectList() {
     const p = PROJECTS.find((x) => x.id === Number(btn.dataset.id));
     const ok = await confirmModal('Delete project?', `"${escapeHtml(p.name)}" and all its tasks will be permanently deleted.`);
     if (!ok) return;
-    await api(`/projects/${p.id}`, { method: 'DELETE' });
-    if (CURRENT_PROJECT && CURRENT_PROJECT.id === p.id) showView('empty');
-    await loadProjects();
+    try {
+      await api(`/projects/${p.id}`, { method: 'DELETE' });
+      const deletedCurrentProject = CURRENT_PROJECT && CURRENT_PROJECT.id === p.id;
+      if (deletedCurrentProject) {
+        CURRENT_PROJECT = null;
+        closeDrawer();
+      }
+      await loadProjects();
+      if (deletedCurrentProject) {
+        if (PROJECTS.length) await openProject(Number(PROJECTS[0].id));
+        else showView('projects');
+      }
+    } catch (error) {
+      showAppNotification(`Unable to delete project: ${error.message}`);
+    }
   }));
 }
 
@@ -785,6 +1011,7 @@ if (btnNewProject) {
       <input id="np-name" placeholder="Project name" autofocus>
       <input id="np-pin" placeholder="Optional PIN (leave blank for none)" type="text" inputmode="numeric">
       <p class="hint">A PIN adds light in-app privacy — anyone opening this project on this device will be asked for it.</p>
+      <div id="np-error" class="form-error"></div>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="m-cancel">Cancel</button>
         <button class="btn btn-primary" id="m-ok">Create</button>
@@ -794,9 +1021,14 @@ if (btnNewProject) {
       const name = $('#np-name').value.trim();
       if (!name) return;
       const pin = $('#np-pin').value.trim();
-      await api('/projects', { method: 'POST', body: { name, pin: pin || null } });
-      closeModal();
-      await loadProjects();
+      try {
+        await api('/projects', { method: 'POST', body: { name, pin: pin || null } });
+        closeModal();
+        await loadProjects();
+      } catch (error) {
+        const errorMessage = $('#np-error');
+        if (errorMessage) errorMessage.textContent = error.message;
+      }
     };
   });
 }
@@ -969,9 +1201,10 @@ async function renderTasks() {
         <td><button class="row-complete" data-task-id="${task.id}" title="${task.status === 'done' ? 'Completed' : 'Complete task'}" ${task.status === 'done' ? 'disabled' : ''}>✓</button></td>
         <td class="task-title-cell"><b>${escapeHtml(task.title)}</b>${search && task.project_name ? `<div class="task-result-project">Project: ${escapeHtml(task.project_name)}</div>` : ''}</td>
         <td class="task-assignee-cell"><span class="assignee-chip">${escapeHtml(task.assignee_name || 'Unassigned')}</span></td>
+        <td>${escapeHtml(task.invoice_number || '—')}</td><td>${escapeHtml(task.customer_name || '—')}</td><td>${task.total_amount ? Number(task.total_amount).toFixed(2) : '—'}</td>
         <td class="task-due-cell"><span class="task-due ${getDueState(task.due_date).className}">${escapeHtml(getDueState(task.due_date).label)}</span></td>
         <td class="task-status-cell"><span class="task-status ${task.status === 'done' ? 'task-status-done' : 'task-status-open'}">${task.status === 'done' ? 'Completed' : 'Open'}</span></td>
-      </tr>`).join('') : '<tr><td colspan="5" class="hint" style="padding:15px;">No open tasks yet.</td></tr>';
+      </tr>`).join('') : '<tr><td colspan="8" class="hint" style="padding:15px;">No open tasks yet.</td></tr>';
     $$('.row-complete:not(:disabled)').forEach(button => {
       button.onclick = async () => {
         await api(`/tasks/${button.dataset.taskId}`, { method: 'PUT', body: { status: 'done' } });
@@ -990,7 +1223,7 @@ async function renderTasks() {
       await openTaskDrawer(taskId);
     }
   } catch (err) {
-    list.innerHTML = `<tr><td colspan="5" class="form-error">${escapeHtml(err.message)}</td></tr>`;
+    list.innerHTML = `<tr><td colspan="8" class="form-error">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
@@ -1002,6 +1235,10 @@ async function showNewTaskDrawer() {
   const title = $('#drawer-title');
   const assignee = $('#drawer-assignee');
   const due = $('#drawer-due');
+  const customerName = $('#drawer-customer-name');
+  const invoiceNumber = $('#drawer-invoice-number');
+  const invoiceDate = $('#drawer-invoice-date');
+  const totalAmount = $('#drawer-total-amount');
   const status = $('#drawer-status');
   const description = $('#drawer-desc');
   const created = $('#drawer-created');
@@ -1011,6 +1248,10 @@ async function showNewTaskDrawer() {
   if (title) title.value = '';
   if (assignee) assignee.innerHTML = '<option value="">No assignee</option>' + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
   if (due) due.value = '';
+  if (customerName) customerName.value = '';
+  if (invoiceNumber) invoiceNumber.value = '';
+  if (invoiceDate) invoiceDate.value = '';
+  if (totalAmount) totalAmount.value = '';
   if (due) due.removeAttribute('min');
   if (created) created.textContent = 'Created when saved';
   if (status) { status.value = 'open'; status.disabled = true; }
@@ -1035,30 +1276,70 @@ async function showNewTaskDrawer() {
         title: title.value.trim(),
         description: description.value.trim(),
         assignee_id: assignee.value || null,
-        due_date: due.value || null
+        due_date: due.value || null,
+        customer_name: customerName.value.trim(),
+        invoice_number: invoiceNumber.value.trim() || null,
+        invoice_date: invoiceDate.value || null,
+        total_amount: totalAmount.value || 0
       }});
       reloadWithActionMessage('project', 'Task created successfully.', CURRENT_PROJECT.id);
     } catch (err) { alert(err.message); }
   };
 }
 
+function showTaskDrawerLoading() {
+  const drawer = $('#task-drawer');
+  if (!drawer) return;
+  drawer.classList.add('loading');
+  drawer.classList.remove('hidden');
+  $('#app').classList.add('drawer-open');
+  $('#drawer-close').onclick = closeDrawer;
+  $('#drawer-title').value = 'Loading task...';
+  $('#drawer-title').disabled = true;
+  $('#drawer-assignee').innerHTML = '<option>Loading...</option>';
+  $('#drawer-assignee').disabled = true;
+  $('#drawer-due').value = '';
+  $('#drawer-due').disabled = true;
+  $('#drawer-created').textContent = 'Loading...';
+  $('#drawer-status').disabled = true;
+  $('#drawer-desc').value = '';
+  $('#drawer-desc').disabled = true;
+  $('#drawer-subtasks').innerHTML = '<div class="drawer-loading-line"></div><div class="drawer-loading-line short"></div>';
+  $('#drawer-comments').innerHTML = '<div class="drawer-loading-line"></div><div class="drawer-loading-line"></div><div class="drawer-loading-line short"></div>';
+  $('#btn-save-task').style.display = 'none';
+  $('#btn-complete-task').style.display = 'none';
+  $('#btn-delete-task').style.display = 'none';
+}
+
 async function openTaskDrawer(taskId) {
   const drawer = $('#task-drawer');
   if (!drawer) return;
+  showTaskDrawerLoading();
   try {
     const task = await api(`/tasks/${taskId}`);
-    let taskHistory = [];
-    try { taskHistory = await api(`/tasks/${taskId}/history`); } catch (historyError) { taskHistory = []; }
-    const members = await api(`/projects/${task.project_id}/members`);
+    const [taskHistoryResult, members] = await Promise.all([
+      api(`/tasks/${taskId}/history`).catch(() => []),
+      api(`/projects/${task.project_id}/members`)
+    ]);
+    const taskHistory = taskHistoryResult;
+    drawer.classList.remove('loading');
     $('#drawer-title').value = task.title || '';
+    $('#drawer-title').disabled = false;
     $('#drawer-assignee').innerHTML = '<option value="">No assignee</option>' + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
+    $('#drawer-assignee').disabled = false;
     $('#drawer-assignee').value = task.assignee_id || '';
     $('#drawer-due').value = task.due_date || '';
+    $('#drawer-due').disabled = false;
+    $('#drawer-customer-name').value = task.customer_name || '';
+    $('#drawer-invoice-number').value = task.invoice_number || '';
+    $('#drawer-invoice-date').value = task.invoice_date || '';
+    $('#drawer-total-amount').value = task.total_amount ? Number(task.total_amount).toFixed(2) : '';
     $('#drawer-due').removeAttribute('min');
     $('#drawer-created').textContent = fmtDateTime(task.created_at);
     $('#drawer-status').value = task.status || 'open';
     $('#drawer-status').disabled = false;
     $('#drawer-desc').value = task.description || '';
+    $('#drawer-desc').disabled = false;
     $('#drawer-desc').oninput = autoGrowDescription;
     autoGrowDescription();
     $('#drawer-subtasks').innerHTML = (task.subtasks || []).map(item => `<label class="subtask-row"><input type="checkbox" class="subtask-check" data-subtask-id="${item.id}" ${item.done ? 'checked' : ''}><span class="subtask-title ${item.done ? 'done' : ''}">${escapeHtml(item.title)}</span><button class="subtask-del" data-subtask-id="${item.id}" title="Delete subtask">✕</button></label>`).join('') || '<div class="hint">No subtasks yet.</div>';
@@ -1074,14 +1355,25 @@ async function openTaskDrawer(taskId) {
         openTaskDrawer(taskId);
       };
     });
+    const compactHistory = [];
+    (task.history || taskHistory || []).forEach(change => {
+      const previous = compactHistory[compactHistory.length - 1];
+      if (previous?.field_name === 'Description' && change.field_name === 'Description') {
+        previous.new_value = change.new_value;
+        previous.created_at = change.created_at;
+        previous.actor_name = change.actor_name;
+      } else {
+        compactHistory.push({ ...change });
+      }
+    });
     const activity = [
       ...(task.comments || []).map(comment => ({ ...comment, activityType: 'comment' })),
-      ...(task.history || taskHistory || []).map(change => ({ ...change, activityType: 'change' }))
+      ...compactHistory.map(change => ({ ...change, activityType: 'change' }))
     ].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     $('#drawer-comments').innerHTML = activity.length ? activity.map((entry, index) => {
-      if (entry.activityType === 'comment') return `<div class="comment">
-        <div class="comment-meta"><b>${escapeHtml(entry.user_name || 'User')}</b> · ${escapeHtml(fmtDateTime(entry.created_at))}</div>
-        ${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}
+      if (entry.activityType === 'comment') return `<div class="comment" data-comment-id="${entry.id}">
+        <div class="comment-meta"><b>${escapeHtml(entry.user_name || 'User')}</b> · ${escapeHtml(fmtDateTime(entry.created_at))}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
+        <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
         ${renderCommentAttachment(entry)}
       </div>`;
       const actor = escapeHtml(entry.actor_name || 'User');
@@ -1100,12 +1392,44 @@ async function openTaskDrawer(taskId) {
         button.textContent = expanded ? 'Show difference' : 'Hide difference';
       };
     });
+    $$('.comment-edit-button').forEach(button => {
+      button.onclick = () => {
+        const comment = (task.comments || []).find(item => Number(item.id) === Number(button.dataset.commentId));
+        const commentElement = button.closest('.comment');
+        const bodyElement = commentElement?.querySelector('.comment-body');
+        if (!comment || !bodyElement || commentElement.querySelector('.comment-edit-form')) return;
+        const originalBody = comment.body || '';
+        bodyElement.innerHTML = `<div class="comment-edit-form"><textarea rows="3"></textarea><div class="comment-edit-actions"><button type="button" class="btn btn-secondary btn-sm comment-edit-cancel">Cancel</button><button type="button" class="btn btn-primary btn-sm comment-edit-save">Save</button></div><div class="form-error comment-edit-error"></div></div>`;
+        const editor = bodyElement.querySelector('textarea');
+        const error = bodyElement.querySelector('.comment-edit-error');
+        editor.value = originalBody;
+        editor.focus();
+        bodyElement.querySelector('.comment-edit-cancel').onclick = () => { bodyElement.innerHTML = escapeHtml(originalBody).replace(/\n/g, '<br>'); };
+        bodyElement.querySelector('.comment-edit-save').onclick = async () => {
+          const nextBody = editor.value.trim();
+          if (!nextBody) { error.textContent = 'Comment cannot be empty.'; return; }
+          try {
+            const result = await api(`/comments/${comment.id}`, { method: 'PUT', body: { body: nextBody } });
+            comment.body = nextBody;
+            comment.edited_at = result.edited_at;
+            bodyElement.innerHTML = escapeHtml(nextBody).replace(/\n/g, '<br>');
+            const meta = commentElement.querySelector('.comment-meta');
+            const editButton = meta.querySelector('.comment-edit-button');
+            meta.innerHTML = `<b>${escapeHtml(comment.user_name || 'User')}</b> · ${escapeHtml(fmtDateTime(comment.created_at))} <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(result.edited_at))}</span>`;
+            meta.appendChild(editButton);
+          } catch (err) { error.textContent = err.message; }
+        };
+      };
+    });
     $('#comment-image-preview').innerHTML = '';
     $('#comment-image-preview').classList.add('hidden');
     $('#comment-file-input').value = '';
     $('#drawer-comment-input').value = '';
+    $('#drawer-comment-input').oninput = autoGrowComment;
+    autoGrowComment();
     $('#btn-save-task').style.display = '';
     $('#btn-save-task').className = 'btn btn-secondary btn-sm';
+    $('#btn-complete-task').style.display = '';
     $('#btn-complete-task').textContent = task.status === 'done' ? 'Completed' : '✓ Complete task';
     $('#btn-complete-task').disabled = task.status === 'done';
     $('#btn-complete-task').className = task.status === 'done' ? 'btn btn-secondary btn-block' : 'btn btn-primary btn-block';
@@ -1113,7 +1437,21 @@ async function openTaskDrawer(taskId) {
     drawer.classList.remove('hidden');
     $('#app').classList.add('drawer-open');
     $('#drawer-close').onclick = closeDrawer;
+    const getTaskDraftKey = () => JSON.stringify({
+      title: $('#drawer-title').value.trim(),
+      description: $('#drawer-desc').value,
+      assignee_id: $('#drawer-assignee').value || null,
+      due_date: $('#drawer-due').value || null,
+      customer_name: $('#drawer-customer-name').value.trim(),
+      invoice_number: $('#drawer-invoice-number').value.trim() || null,
+      invoice_date: $('#drawer-invoice-date').value || null,
+      total_amount: $('#drawer-total-amount').value || 0,
+      status: $('#drawer-status').value
+    });
+    let savedTaskDraftKey = getTaskDraftKey();
     const saveChanges = async () => {
+      const draftKey = getTaskDraftKey();
+      if (draftKey === savedTaskDraftKey) return;
       const saveState = $('#drawer-save-state');
       if (saveState) { saveState.textContent = 'Saving...'; saveState.className = 'drawer-save-state'; }
       await api(`/tasks/${taskId}`, { method: 'PUT', body: {
@@ -1121,8 +1459,13 @@ async function openTaskDrawer(taskId) {
         description: $('#drawer-desc').value,
         assignee_id: $('#drawer-assignee').value || null,
         due_date: $('#drawer-due').value || null,
+        customer_name: $('#drawer-customer-name').value.trim(),
+        invoice_number: $('#drawer-invoice-number').value.trim() || null,
+        invoice_date: $('#drawer-invoice-date').value || null,
+        total_amount: $('#drawer-total-amount').value || 0,
         status: $('#drawer-status').value
       }});
+      savedTaskDraftKey = draftKey;
       await renderTasks();
       taskHistory = await api(`/tasks/${taskId}/history`);
       await openTaskDrawer(taskId);
@@ -1138,9 +1481,22 @@ async function openTaskDrawer(taskId) {
       }), 500);
     };
     $('#drawer-title').oninput = queueAutosave;
-    $('#drawer-desc').oninput = queueAutosave;
+    $('#drawer-desc').onblur = async () => {
+      clearTimeout(autosaveTimer);
+      try {
+        await saveChanges();
+      } catch (err) {
+        const saveState = $('#drawer-save-state');
+        if (saveState) { saveState.textContent = 'Save failed'; saveState.className = 'drawer-save-state error'; }
+        console.error('Description save failed:', err);
+      }
+    };
     $('#drawer-assignee').onchange = queueAutosave;
     $('#drawer-due').onchange = queueAutosave;
+    $('#drawer-customer-name').onchange = queueAutosave;
+    $('#drawer-invoice-number').onchange = queueAutosave;
+    $('#drawer-invoice-date').onchange = queueAutosave;
+    $('#drawer-total-amount').onchange = queueAutosave;
     $('#drawer-status').onchange = queueAutosave;
     $('#btn-save-task').onclick = async () => {
       clearTimeout(autosaveTimer);
@@ -1174,8 +1530,61 @@ async function openTaskDrawer(taskId) {
       };
     };
     const commentInput = $('#drawer-comment-input');
+    const mentionSuggestions = $('#comment-mention-suggestions');
     const fileInput = $('#comment-file-input');
     const filePreview = $('#comment-image-preview');
+    let mentionRange = null;
+    let mentionIndex = 0;
+    const hideMentionSuggestions = () => {
+      mentionRange = null;
+      mentionSuggestions.classList.add('hidden');
+      mentionSuggestions.innerHTML = '';
+    };
+    const chooseMention = (member) => {
+      if (!mentionRange) return;
+      const before = commentInput.value.slice(0, mentionRange.start);
+      const after = commentInput.value.slice(mentionRange.end);
+      commentInput.value = `${before}@${member.name} ${after}`;
+      const cursor = before.length + member.name.length + 2;
+      commentInput.focus();
+      commentInput.setSelectionRange(cursor, cursor);
+      hideMentionSuggestions();
+      autoGrowComment();
+    };
+    const updateMentionSuggestions = () => {
+      const beforeCursor = commentInput.value.slice(0, commentInput.selectionStart);
+      const match = beforeCursor.match(/(?:^|\s)@([^\s@]*)$/);
+      if (!match) { hideMentionSuggestions(); return; }
+      const query = match[1].toLowerCase();
+      const start = beforeCursor.length - match[0].length + (match[0].startsWith('@') ? 0 : 1);
+      const matchingMembers = members.filter(member => String(member.name || '').toLowerCase().includes(query)).slice(0, 8);
+      if (!matchingMembers.length) { hideMentionSuggestions(); return; }
+      mentionRange = { start, end: commentInput.selectionStart };
+      mentionIndex = 0;
+      mentionSuggestions.innerHTML = matchingMembers.map((member, index) => `<button type="button" class="${index === 0 ? 'active' : ''}" data-member-id="${member.id}">${escapeHtml(member.name)}</button>`).join('');
+      mentionSuggestions.classList.remove('hidden');
+      mentionSuggestions.querySelectorAll('button').forEach(button => {
+        button.onmousedown = event => event.preventDefault();
+        button.onclick = () => chooseMention(matchingMembers.find(member => String(member.id) === button.dataset.memberId));
+      });
+    };
+    commentInput.oninput = () => { autoGrowComment(); updateMentionSuggestions(); };
+    commentInput.onkeydown = event => {
+      if (mentionSuggestions.classList.contains('hidden')) return;
+      const options = Array.from(mentionSuggestions.querySelectorAll('button'));
+      if (event.key === 'Escape') { hideMentionSuggestions(); return; }
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        mentionIndex = (mentionIndex + (event.key === 'ArrowDown' ? 1 : options.length - 1)) % options.length;
+        options.forEach((option, index) => option.classList.toggle('active', index === mentionIndex));
+      } else if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        const memberId = options[mentionIndex]?.dataset.memberId;
+        const member = members.find(item => String(item.id) === memberId);
+        if (member) chooseMention(member);
+      }
+    };
+    commentInput.onblur = () => setTimeout(hideMentionSuggestions, 120);
     $('#btn-attach-image').onclick = () => fileInput.click();
     fileInput.onchange = () => {
       const file = fileInput.files[0];
@@ -1183,20 +1592,80 @@ async function openTaskDrawer(taskId) {
       filePreview.innerHTML = `<span>${escapeHtml(file.name)}</span>`;
       filePreview.classList.remove('hidden');
     };
+    const uploadTaskComment = (url, formData, onProgress) => new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open('POST', url);
+      request.withCredentials = true;
+      request.upload.onprogress = event => {
+        if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100));
+      };
+      request.onload = () => {
+        let result = null;
+        try { result = JSON.parse(request.responseText); } catch (error) { }
+        if (request.status >= 200 && request.status < 300) resolve(result || {});
+        else reject(new Error(result?.error || 'Unable to post comment.'));
+      };
+      request.onerror = () => reject(new Error('Network error while uploading the attachment.'));
+      request.onabort = () => reject(new Error('Attachment upload was cancelled.'));
+      request.send(formData);
+    });
     $('#btn-add-comment').onclick = async () => {
-      const formData = new FormData();
-      formData.append('body', commentInput.value.trim());
-      if (fileInput.files[0]) formData.append('attachment', fileInput.files[0]);
-      const response = await fetch(`/api/tasks/${taskId}/comments`, { method: 'POST', body: formData, credentials: 'same-origin' });
-      const result = await response.json();
-      if (!response.ok) { alert(result.error || 'Unable to post comment.'); return; }
+      const body = commentInput.value.trim();
+      const attachment = fileInput.files[0];
+      if (!body && !attachment) return;
+      const attachmentPreviewUrl = attachment && attachment.type.startsWith('image/') ? URL.createObjectURL(attachment) : null;
+      const commentEntry = document.createElement('div');
+      commentEntry.className = 'comment comment-pending';
+      commentEntry.innerHTML = `
+        <div class="comment-meta"><b>${escapeHtml(ME?.name || 'You')}</b> · just now</div>
+        ${escapeHtml(body).replace(/\n/g, '<br>')}
+        ${attachmentPreviewUrl ? `<img class="comment-image comment-pending-attachment" src="${attachmentPreviewUrl}" alt="Uploading attachment">` : (attachment ? `<div class="hint comment-pending-attachment">${escapeHtml(attachment.name)}</div>` : '')}
+        ${attachment ? '<div class="hint comment-pending-status">Uploading attachment...</div>' : '<div class="hint comment-pending-status">Sending...</div>'}`;
+      $('#drawer-comments').appendChild(commentEntry);
+      commentEntry.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      const previousBody = body;
+      const previousAttachment = attachment;
       commentInput.value = '';
       fileInput.value = '';
       filePreview.innerHTML = '';
       filePreview.classList.add('hidden');
-      await openTaskDrawer(taskId);
+      hideMentionSuggestions();
+      autoGrowComment();
+      const postButton = $('#btn-add-comment');
+      if (postButton) postButton.disabled = true;
+      const formData = new FormData();
+      formData.append('body', body);
+      if (attachment) formData.append('attachment', attachment);
+      try {
+        const result = await uploadTaskComment(`/api/tasks/${taskId}/comments`, formData, percent => {
+          const pendingStatus = commentEntry.querySelector('.comment-pending-status');
+          if (pendingStatus) pendingStatus.textContent = `Uploading attachment... ${percent}%`;
+        });
+        const pendingStatus = commentEntry.querySelector('.comment-pending-status');
+        if (pendingStatus) pendingStatus.remove();
+        commentEntry.classList.remove('comment-pending');
+      } catch (error) {
+        commentEntry.remove();
+        if (attachmentPreviewUrl) URL.revokeObjectURL(attachmentPreviewUrl);
+        commentInput.value = previousBody;
+        if (previousAttachment) {
+          const restoredTransfer = new DataTransfer();
+          restoredTransfer.items.add(previousAttachment);
+          fileInput.files = restoredTransfer.files;
+          filePreview.innerHTML = `<span>${escapeHtml(previousAttachment.name)}</span>`;
+          filePreview.classList.remove('hidden');
+        }
+        autoGrowComment();
+        alert(error.message);
+      } finally {
+        if (postButton) postButton.disabled = false;
+      }
     };
-  } catch (err) { alert(err.message); }
+  } catch (err) {
+    drawer.classList.remove('loading');
+    $('#drawer-title').value = 'Unable to load task';
+    $('#drawer-comments').innerHTML = `<div class="form-error">${escapeHtml(err.message)}</div>`;
+  }
 }
 
 async function showNewTaskModal() {
@@ -1497,7 +1966,7 @@ async function loadTrackingTimeline(userId, selectedButton) {
 // ================= ADMINISTRATIVE CORE VIEW MODULE =================
 async function renderAdmin() {
   try {
-    const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess] = await Promise.all([api('/auth/users'), api('/auth/settings'), api('/auth/departments'), api('/auth/reimbursement-access'), api('/auth/activity'), api('/attendance/tracking-access'), api('/attendance/verification-access')]);
+    const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess, paymentAccess] = await Promise.all([api('/auth/users'), api('/auth/settings'), api('/auth/departments'), api('/auth/reimbursement-access'), api('/auth/activity'), api('/attendance/tracking-access'), api('/attendance/verification-access'), api('/payment-history/access')]);
     const verificationByUser = new Map(verificationAccess.map(person => [Number(person.id), Number(person.verification_required) === 1]));
     const wrap = $('#admin-content');
     if (!wrap) return;
@@ -1534,6 +2003,12 @@ async function renderAdmin() {
         <h3>Live tracking access</h3>
         <p class="hint">Allow selected employees to open the Tracking dashboard and view location timelines.</p>
         <div id="tracking-access-list"></div>
+      </div>
+
+      <div class="admin-block">
+        <h3>Payment History access</h3>
+        <p class="hint">Allow selected employees to view and update invoice payment history.</p>
+        <div id="payment-history-access-list"></div>
       </div>
 
       <div class="admin-block">
@@ -1651,6 +2126,24 @@ async function renderAdmin() {
       row.className = 'tracking-access-row';
       row.innerHTML = `<div><b>${escapeHtml(person.name)}</b><span class="tracking-username">${escapeHtml(person.username)}</span></div><span class="tracking-access-status ${person.tracking_allowed ? 'allowed' : 'denied'}">${person.tracking_allowed ? 'Allowed' : 'Denied'}</span><label class="tracking-toggle"><input type="checkbox" ${person.tracking_allowed ? 'checked' : ''} data-tracking-access-user="${person.id}"><span>Allow tracking view</span></label>`;
       trackingAccessList.appendChild(row);
+    });
+    const paymentAccessList = $('#payment-history-access-list');
+    paymentAccess.forEach((person) => {
+      const row = document.createElement('div');
+      row.className = 'tracking-access-row';
+      row.innerHTML = `<div><b>${escapeHtml(person.name)}</b><span class="tracking-username">${escapeHtml(person.username)}</span></div><span class="tracking-access-status ${person.allowed ? 'allowed' : 'denied'}">${person.allowed ? 'Allowed' : 'Denied'}</span><label class="tracking-toggle"><input type="checkbox" ${person.allowed ? 'checked' : ''} data-payment-access-user="${person.user_id}"><span>Allow payment history</span></label>`;
+      paymentAccessList.appendChild(row);
+    });
+    $$('[data-payment-access-user]').forEach((checkbox) => {
+      checkbox.onchange = async () => {
+        try {
+          await api(`/payment-history/access/${checkbox.dataset.paymentAccessUser}`, { method: 'PUT', body: { allowed: checkbox.checked } });
+          const row = checkbox.closest('.tracking-access-row');
+          const status = row?.querySelector('.tracking-access-status');
+          if (status) { status.textContent = checkbox.checked ? 'Allowed' : 'Denied'; status.classList.toggle('allowed', checkbox.checked); status.classList.toggle('denied', !checkbox.checked); }
+          showAppNotification(checkbox.checked ? 'Payment History access granted.' : 'Payment History access removed.');
+        } catch (error) { checkbox.checked = !checkbox.checked; alert(error.message); }
+      };
     });
     $$('[data-tracking-access-user]').forEach((checkbox) => {
       checkbox.onchange = async () => {

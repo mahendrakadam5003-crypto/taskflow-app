@@ -86,7 +86,7 @@ async function refreshNotificationsAfterAction() {
 
 function escapeHtml(str) {
   if (!str) return '';
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
 function attachmentTypeLabel(type, name) {
@@ -579,8 +579,7 @@ async function renderPaymentHistory() {
       if ($('#payment-history-status').value) params.set('status', $('#payment-history-status').value);
       try {
         const rows = await api(`/payment-history?${params.toString()}`);
-        const invoiceRows = Array.isArray(rows) ? rows : [];
-        table.innerHTML = invoiceRows.length ? invoiceRows.map(row => {
+        table.innerHTML = rows.length ? rows.map(row => {
           const selectedMemberId = row.payment_member_id ?? row.assignee_id ?? '';
           return `<tr>
           <td><select class="payment-row-member" data-id="${row.id}"><option value="">Unassigned</option>${PEOPLE.map(person => `<option value="${person.id}" ${Number(selectedMemberId) === Number(person.id) ? 'selected' : ''}>${escapeHtml(person.name || person.NAME)}</option>`).join('')}</select></td><td><b>${escapeHtml(row.invoice_number)}</b></td><td>${escapeHtml(row.invoice_date || '—')}</td><td>${escapeHtml(row.customer_name || '—')}</td>
@@ -602,7 +601,9 @@ async function renderPaymentHistory() {
     };
     $('#payment-history-filter').onclick = async () => { await renderSummary(); await renderRows(); };
     renderSummary().catch(error => console.warn('Payment summary refresh failed:', error.message));
-    renderRows();
+    renderRows().catch(error => {
+      table.innerHTML = `<tr><td colspan="11" class="form-error">${escapeHtml(error.message)}</td></tr>`;
+    });
 }
 
 function renderProjectsDirectory() {
