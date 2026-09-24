@@ -156,6 +156,7 @@ function closeDrawer() {
   if (app) app.classList.remove('drawer-open');
 }
 $('#reimbursement-drawer-floating-close')?.addEventListener('click', closeDrawer);
+$('#reimbursement-drawer-floating-close-label')?.addEventListener('click', closeDrawer);
 
 function openReimbursementDrawer(row) {
   const drawer = $('#reimbursement-drawer');
