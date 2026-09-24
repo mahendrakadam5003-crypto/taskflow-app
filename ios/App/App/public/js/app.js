@@ -1314,11 +1314,11 @@ async function showNewTaskDrawer() {
   if (status) { status.value = 'open'; status.disabled = true; }
   if (workMode) {
     workMode.value = 'office';
-    workMode.disabled = !PROJECT_ACTION_ACCESS.manage_task_work_mode;
+    workMode.disabled = ME.role !== 'admin';
   }
   if (checkinUsers) {
     checkinUsers.innerHTML = members.map(member => `<option value="${member.id}" ${String(member.id) === String(assignee.value || '') ? 'selected' : ''}>${escapeHtml(member.name)}</option>`).join('');
-    checkinUsers.disabled = !PROJECT_ACTION_ACCESS.manage_task_work_mode;
+    checkinUsers.disabled = ME.role !== 'admin';
   }
   if (checkinUsersBlock) checkinUsersBlock.style.display = 'none';
   if (description) description.value = '';
@@ -1412,12 +1412,12 @@ async function openTaskDrawer(taskId) {
     const checkinUsersBlock = $('#drawer-checkin-users-block');
     if (workModeInput) {
       workModeInput.value = task.work_mode || 'office';
-      workModeInput.disabled = !PROJECT_ACTION_ACCESS.manage_task_work_mode;
+      workModeInput.disabled = ME.role !== 'admin';
     }
     if (checkinUsersInput) {
       const requiredUsers = new Set((task.checkin_users || []).map(user => String(user.id)));
       checkinUsersInput.innerHTML = members.map(member => `<option value="${member.id}" ${requiredUsers.has(String(member.id)) ? 'selected' : ''}>${escapeHtml(member.name)}</option>`).join('');
-      checkinUsersInput.disabled = !PROJECT_ACTION_ACCESS.manage_task_work_mode;
+      checkinUsersInput.disabled = ME.role !== 'admin';
     }
     if (checkinUsersBlock) checkinUsersBlock.style.display = (task.work_mode || 'office') === 'on_field' ? '' : 'none';
     $('#drawer-due').value = task.due_date || '';
@@ -1559,7 +1559,7 @@ async function openTaskDrawer(taskId) {
         total_amount: $('#drawer-total-amount').value || 0,
         status: $('#drawer-status').value
       };
-      if (PROJECT_ACTION_ACCESS.manage_task_work_mode) {
+      if (ME.role === 'admin') {
         body.work_mode = $('#drawer-work-mode').value;
         body.checkin_user_ids = Array.from($('#drawer-checkin-users').selectedOptions).map(option => Number(option.value));
       }
@@ -2235,7 +2235,7 @@ async function renderAdmin() {
           <td style="padding:10px;"><b>${escapeHtml(u.name || u.NAME)}</b></td>
           <td style="padding:10px;">${escapeHtml(u.username || u.USERNAME)}</td>
           <td style="padding:10px;"><select class="admin-department" data-user-id="${u.id}" style="width:140px; padding:5px;"><option value="">No department</option>${departments.map(department => `<option value="${escapeHtml(department.name || department.NAME)}" ${String(u.department || u.DEPARTMENT || '') === String(department.name || department.NAME) ? 'selected' : ''}>${escapeHtml(department.name || department.NAME)}</option>`).join('')}</select><button class="btn btn-secondary btn-sm admin-save-department" data-user-id="${u.id}" style="margin-left:5px;">Save</button></td>
-          <td style="padding:10px;"><span class="badge" style="background:#e3f2fd; color:#0d47a1; padding:4px 8px; border-radius:4px; font-size:12px;">${escapeHtml(u.role || u.ROLE)}</span></td>
+          <td style="padding:10px;"><select class="admin-role" data-user-id="${u.id}" style="width:110px; padding:5px;" ${Number(u.id) === Number(ME.id) ? 'disabled' : ''}><option value="employee" ${String(u.role || u.ROLE) === 'employee' ? 'selected' : ''}>Employee</option><option value="admin" ${String(u.role || u.ROLE) === 'admin' ? 'selected' : ''}>Admin</option></select><button class="btn btn-secondary btn-sm admin-save-role" data-user-id="${u.id}" style="margin-left:5px;" ${Number(u.id) === Number(ME.id) ? 'disabled' : ''}>Save</button></td>
           <td style="padding:10px;"><span class="badge" style="background:#c8e6c9; color:#25602a; padding:4px 8px; border-radius:4px; font-size:12px;">${u.active || u.ACTIVE ? 'Active' : 'Disabled'}</span></td>
           <td style="padding:10px;"><label class="admin-biometric-toggle"><input type="checkbox" data-verification-user="${u.id}" ${verificationByUser.get(Number(u.id)) ? 'checked' : ''}><span>${verificationByUser.get(Number(u.id)) ? 'Required' : 'Off'}</span></label></td>
           <td style="padding:10px;">${actionsHtml}</td>
@@ -2243,6 +2243,17 @@ async function renderAdmin() {
         tbody.appendChild(tr);
       });
     }
+    $$('.admin-save-role').forEach(button => {
+      button.onclick = async () => {
+        const userId = button.dataset.userId;
+        const role = button.closest('td')?.querySelector('.admin-role')?.value;
+        try {
+          await api(`/auth/users/${userId}`, { method: 'PUT', body: { role } });
+          showAppNotification(`${role === 'admin' ? 'Admin access granted' : 'Admin access removed'} successfully.`);
+          await renderAdmin();
+        } catch (error) { alert(error.message); }
+      };
+    });
 
     const departmentList = $('#department-list');
     departments.forEach((department) => {
@@ -2281,7 +2292,7 @@ async function renderAdmin() {
       paymentAccessList.appendChild(row);
     });
     const projectActionList = $('#project-action-access-list');
-    const projectActionLabels = { create_project: 'Create projects', edit_project: 'Rename/edit projects', delete_project: 'Delete projects', create_task: 'Add tasks', edit_task: 'Edit tasks', delete_task: 'Delete tasks', complete_task: 'Complete tasks', manage_task_work_mode: 'Change office/on-field tasks' };
+    const projectActionLabels = { create_project: 'Create projects', edit_project: 'Rename/edit projects', delete_project: 'Delete projects', create_task: 'Add tasks', edit_task: 'Edit tasks', delete_task: 'Delete tasks', complete_task: 'Complete tasks' };
     projectActionAccess.forEach((person) => {
       const row = document.createElement('div');
       row.className = 'admin-form-row';

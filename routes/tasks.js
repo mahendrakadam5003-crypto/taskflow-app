@@ -157,12 +157,12 @@ async function canViewPaymentHistory(req) {
   if (req.session.role === 'admin') return true;
   return !!(await db.prepare('SELECT 1 FROM payment_history_access WHERE user_id=?').get(req.session.userId));
 }
-const PROJECT_ACTIONS = ['create_project', 'edit_project', 'delete_project', 'create_task', 'edit_task', 'delete_task', 'complete_task', 'manage_task_work_mode'];
+const PROJECT_ACTIONS = ['create_project', 'edit_project', 'delete_project', 'create_task', 'edit_task', 'delete_task', 'complete_task'];
 async function canProjectAction(req, action) {
   if (req.session.role === 'admin') return true;
   if (!PROJECT_ACTIONS.includes(action)) return false;
   const row = await db.prepare(`SELECT ${action} AS allowed FROM project_action_access WHERE user_id=?`).get(req.session.userId);
-  return row ? Number(row.allowed) === 1 : action === 'manage_task_work_mode' ? false : true;
+  return row ? Number(row.allowed) === 1 : true;
 }
 async function canAccessTask(taskId, userId, admin = false) {
   if (admin) return true;
@@ -540,7 +540,6 @@ router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     if (!(await canProjectAction(req, 'create_task'))) return res.status(403).json({ error: 'You do not have permission to create tasks.' });
     const { title, description, assignee_id, due_date, invoice_number, invoice_date, customer_name, total_amount } = req.body;
     const workMode = req.body.work_mode === 'on_field' ? 'on_field' : 'office';
-    if (workMode === 'on_field' && !(await canProjectAction(req, 'manage_task_work_mode'))) return res.status(403).json({ error: 'Only an administrator or an authorized user can create on-field tasks.' });
     if (!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
     if (assignee_id && !(await canAccessProject(req.params.id, Number(assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
     const requestedCheckinUsers = Array.isArray(req.body.checkin_user_ids) ? [...new Set(req.body.checkin_user_ids.map(Number).filter(Boolean))] : [];
@@ -570,9 +569,15 @@ router.put('/tasks/:id', async (req, res) => {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
     if (req.body.status !== undefined && !(await canProjectAction(req, 'complete_task'))) return res.status(403).json({ error: 'You do not have permission to complete tasks.' });
     const workModeChangeRequested = req.body.work_mode !== undefined || req.body.checkin_user_ids !== undefined;
-    if (workModeChangeRequested && !(await canProjectAction(req, 'manage_task_work_mode'))) return res.status(403).json({ error: 'Only an administrator or an authorized user can change task work mode.' });
+    if (workModeChangeRequested && req.session.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can change the task work location or required check-in users.' });
     if (Object.keys(req.body).some(key => !['status', 'work_mode', 'checkin_user_ids'].includes(key)) && !(await canProjectAction(req, 'edit_task'))) return res.status(403).json({ error: 'You do not have permission to edit tasks.' });
     const taskBefore = await db.prepare('SELECT title, description, status, assignee_id, due_date, payment_member_id, invoice_number, work_mode, project_id FROM tasks WHERE id=?').get(req.params.id);
+    if (taskBefore.work_mode === 'on_field' && req.session.role !== 'admin' && Object.keys(req.body).some(key => !['status'].includes(key))) {
+      const activeCheckin = await db.prepare(`SELECT c.id FROM task_checkin_users r
+        JOIN task_checkins c ON c.task_id=r.task_id AND c.user_id=r.user_id
+        WHERE r.task_id=? AND r.user_id=? AND c.check_in_at IS NOT NULL AND c.check_out_at IS NULL`).get(req.params.id, req.session.userId);
+      if (!activeCheckin) return res.status(403).json({ error: 'Check in to this on-field task before editing or updating it.' });
+    }
     const nextWorkMode = req.body.work_mode === 'on_field' ? 'on_field' : (req.body.work_mode === 'office' ? 'office' : taskBefore.work_mode || 'office');
     if (req.body.status === 'done' && taskBefore.work_mode === 'on_field') {
       const incomplete = await db.prepare(`SELECT COUNT(*) AS count FROM task_checkin_users u
