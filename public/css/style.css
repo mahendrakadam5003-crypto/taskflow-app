@@ -271,6 +271,9 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .drawer-header { min-height: 56px; flex-shrink: 0; position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--line); }
 .drawer-header > b { margin-right: auto; }
 .drawer-header .icon-btn { flex-shrink: 0; font-size: 18px; }
+.drawer-floating-close { position: absolute; top: 10px; right: 14px; z-index: 5; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--navy); font-size: 24px; line-height: 1; cursor: pointer; }
+.drawer-floating-close:hover { background: var(--bg); color: var(--red); }
+.drawer-floating-close + .drawer-header { padding-right: 58px; }
 .drawer-title-input { flex: 1; border: none; font-size: 17px; font-weight: 700; outline: none; }
 .drawer-save-state { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .drawer-save-state.saved { color: var(--green); }
