@@ -325,7 +325,7 @@ router.get('/payment-history', async (req, res) => {
   if (req.query.to) { sql += ' AND (t.invoice_date IS NULL OR t.invoice_date <= ?)'; params.push(req.query.to); }
   if (req.query.status) { sql += ' AND t.payment_status = ?'; params.push(req.query.status); }
   if (req.query.assignee_id) { sql += ' AND COALESCE(t.payment_member_id, t.assignee_id) = ?'; params.push(Number(req.query.assignee_id)); }
-  sql += ' ORDER BY COALESCE(t.invoice_date, "9999-12-31") DESC, t.id DESC';
+  sql += " ORDER BY COALESCE(t.invoice_date, '9999-12-31') DESC, t.id DESC";
   if (!req.query.from && !req.query.to) sql += ' LIMIT 25';
   const rows = await db.prepare(sql).all(...params);
   res.json(rows.map(row => ({ ...row, pending_amount: Math.max(0, Number(row.total_amount || 0) - Number(row.amount_received || 0)) })));
