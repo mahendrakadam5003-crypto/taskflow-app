@@ -2168,8 +2168,10 @@ async function renderAdmin() {
 
     wrap.querySelectorAll('.admin-block').forEach((section) => {
       section.classList.add('is-collapsible');
-      const isTeamMembersSection = section.querySelector('h3')?.textContent.includes('Team members');
-      if (!isTeamMembersSection) section.classList.add('is-collapsed');
+      const sectionTitle = section.querySelector('h3')?.textContent || '';
+      const isExpandedByDefault = sectionTitle.includes('Team members')
+        || sectionTitle.includes('Task check-in / check-out access');
+      if (!isExpandedByDefault) section.classList.add('is-collapsed');
       const heading = section.querySelector('h3');
       if (!heading || heading.querySelector('.admin-section-toggle')) return;
       const toggle = document.createElement('button');
