@@ -274,8 +274,9 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .drawer-floating-close { position: absolute; top: 10px; right: 14px; z-index: 5; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--navy); font-size: 24px; line-height: 1; cursor: pointer; }
 .drawer-floating-close:hover { background: var(--bg); color: var(--red); }
 .drawer-floating-close + .drawer-header { padding-right: 58px; }
-.drawer-floating-close-label { position: absolute; top: 52px; right: 14px; z-index: 5; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--navy); padding: 6px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
-.drawer-floating-close-label:hover { background: var(--bg); color: var(--red); }
+.drawer-footer { flex-shrink: 0; display: flex; justify-content: flex-end; padding: 14px 16px; background: var(--surface); border-top: 1px solid var(--line); }
+.drawer-bottom-close { min-width: 120px; padding: 11px 24px; border: 0; border-radius: 7px; background: #2563eb; color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; }
+.drawer-bottom-close:hover { background: #1d4ed8; }
 .drawer-title-input { flex: 1; border: none; font-size: 17px; font-weight: 700; outline: none; }
 .drawer-save-state { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .drawer-save-state.saved { color: var(--green); }
