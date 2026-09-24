@@ -2164,7 +2164,7 @@ async function renderAdmin() {
       </div>
 
       <div class="admin-block">
-        <h3>Team members</h3>
+        <h3>Team members &amp; admin access</h3>
         <div class="admin-form-row" style="margin-bottom: 20px;">
           <input id="u-name" placeholder="Full name">
           <input id="u-username" placeholder="Username">
@@ -2195,15 +2195,17 @@ async function renderAdmin() {
 
     wrap.querySelectorAll('.admin-block').forEach((section) => {
       section.classList.add('is-collapsible');
-      section.classList.add('is-collapsed');
+      const isTeamMembersSection = section.querySelector('h3')?.textContent.includes('Team members');
+      if (!isTeamMembersSection) section.classList.add('is-collapsed');
       const heading = section.querySelector('h3');
       if (!heading || heading.querySelector('.admin-section-toggle')) return;
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'admin-section-toggle';
-      toggle.textContent = '+';
-      toggle.title = 'Expand section';
-      toggle.setAttribute('aria-label', 'Expand section');
+      const initiallyCollapsed = section.classList.contains('is-collapsed');
+      toggle.textContent = initiallyCollapsed ? '+' : '−';
+      toggle.title = initiallyCollapsed ? 'Expand section' : 'Collapse section';
+      toggle.setAttribute('aria-label', initiallyCollapsed ? 'Expand section' : 'Collapse section');
       toggle.onclick = () => {
         const collapsed = section.classList.toggle('is-collapsed');
         toggle.textContent = collapsed ? '+' : '−';
