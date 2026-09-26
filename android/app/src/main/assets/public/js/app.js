@@ -2211,9 +2211,12 @@ async function renderAdmin() {
     wrap.querySelectorAll('.admin-block').forEach((section) => {
       section.classList.add('is-collapsible');
       const sectionTitle = section.querySelector('h3')?.textContent || '';
+      const storageKey = `taskflow-admin-section:${sectionTitle.trim()}`;
+      const savedState = localStorage.getItem(storageKey);
       const isExpandedByDefault = sectionTitle.includes('Team members')
         || sectionTitle.includes('Task check-in / check-out access');
-      if (!isExpandedByDefault) section.classList.add('is-collapsed');
+      const isCollapsed = savedState ? savedState === 'collapsed' : !isExpandedByDefault;
+      section.classList.toggle('is-collapsed', isCollapsed);
       const heading = section.querySelector('h3');
       if (!heading || heading.querySelector('.admin-section-toggle')) return;
       const toggle = document.createElement('button');
@@ -2225,6 +2228,7 @@ async function renderAdmin() {
       toggle.setAttribute('aria-label', initiallyCollapsed ? 'Expand section' : 'Collapse section');
       toggle.onclick = () => {
         const collapsed = section.classList.toggle('is-collapsed');
+        localStorage.setItem(storageKey, collapsed ? 'collapsed' : 'expanded');
         toggle.textContent = collapsed ? '+' : '−';
         toggle.title = collapsed ? 'Expand section' : 'Collapse section';
         toggle.setAttribute('aria-label', collapsed ? 'Expand section' : 'Collapse section');
