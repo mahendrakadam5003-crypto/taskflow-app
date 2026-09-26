@@ -369,32 +369,121 @@ router.get('/tracking/:userId/timeline', async (req, res) => {
   const rows = await db.prepare(`SELECT al.recorded_at, al.latitude, al.longitude, al.distance_meters, al.place_changed, u.name AS user_name
     FROM attendance_locations al JOIN users u ON u.id = al.user_id JOIN attendance a ON a.id = al.attendance_id
     WHERE al.user_id = ? AND a.date = ? ORDER BY al.recorded_at ASC`).all(req.params.userId, selectedDate);
-  const attendance = await db.prepare(`SELECT a.punch_in, a.in_lat, a.in_lng, u.name AS user_name
+  const attendance = await db.prepare(`SELECT a.punch_in, a.punch_out, a.in_lat, a.in_lng, a.out_lat, a.out_lng,
+      a.in_location_text, a.out_location_text, u.name AS user_name
     FROM attendance a JOIN users u ON u.id = a.user_id
-    WHERE a.user_id = ? AND a.date = ? AND a.in_lat IS NOT NULL AND a.in_lng IS NOT NULL`).get(req.params.userId, selectedDate);
+    WHERE a.user_id = ? AND a.date = ?`).get(req.params.userId, selectedDate);
+  const taskCheckins = await db.prepare(`SELECT c.check_in_at, c.check_in_lat, c.check_in_lng,
+      c.check_out_at, c.check_out_lat, c.check_out_lng,
+      t.title AS task_title, t.customer_name, p.name AS project_name
+    FROM task_checkins c
+    JOIN tasks t ON t.id = c.task_id
+    JOIN projects p ON p.id = t.project_id
+    WHERE c.user_id = ?
+      AND (substr(c.check_in_at, 1, 10) = ? OR substr(c.check_out_at, 1, 10) = ?)
+    ORDER BY c.check_in_at ASC`).all(req.params.userId, selectedDate, selectedDate);
   const points = [...(rows || [])];
+  const events = [];
+  const addEvent = (event) => {
+    if (!event.recorded_at || event.recorded_at.slice(0, 10) !== selectedDate) return;
+    events.push(event);
+  };
   if (attendance?.punch_in) {
-    const punchInTime = new Date(attendance.punch_in).getTime();
-    const hasPunchInPoint = points.some(point => {
-      const pointTime = new Date(point.recorded_at).getTime();
-      return Number(point.latitude) === Number(attendance.in_lat)
-        && Number(point.longitude) === Number(attendance.in_lng)
-        && Math.abs(pointTime - punchInTime) <= 60_000;
+    addEvent({
+      type: 'attendance',
+      action: 'Punched in',
+      recorded_at: attendance.punch_in,
+      latitude: attendance.in_lat,
+      longitude: attendance.in_lng,
+      location: attendance.in_location_text || ''
     });
-    if (!hasPunchInPoint) {
-      points.push({
-        recorded_at: attendance.punch_in,
-        latitude: attendance.in_lat,
-        longitude: attendance.in_lng,
-        distance_meters: 0,
-        place_changed: 0,
-        user_name: attendance.user_name
+    if (attendance.in_lat != null && attendance.in_lng != null) {
+      const punchInTime = new Date(attendance.punch_in).getTime();
+      const hasPunchInPoint = points.some(point => {
+        const pointTime = new Date(point.recorded_at).getTime();
+        return Number(point.latitude) === Number(attendance.in_lat)
+          && Number(point.longitude) === Number(attendance.in_lng)
+          && Math.abs(pointTime - punchInTime) <= 60_000;
+      });
+      if (!hasPunchInPoint) {
+        points.push({
+          recorded_at: attendance.punch_in,
+          latitude: attendance.in_lat,
+          longitude: attendance.in_lng,
+          distance_meters: 0,
+          place_changed: 0,
+          user_name: attendance.user_name
+        });
+      }
+    }
+  }
+  if (attendance?.punch_out) {
+    addEvent({
+      type: 'attendance',
+      action: 'Punched out',
+      recorded_at: attendance.punch_out,
+      latitude: attendance.out_lat,
+      longitude: attendance.out_lng,
+      location: attendance.out_location_text || ''
+    });
+  }
+  for (const checkin of taskCheckins || []) {
+    const taskDetails = {
+      task_title: checkin.task_title,
+      customer_name: checkin.customer_name,
+      project_name: checkin.project_name
+    };
+    addEvent({
+      ...taskDetails,
+      type: 'task',
+      action: 'Checked in to task',
+      recorded_at: checkin.check_in_at,
+      latitude: checkin.check_in_lat,
+      longitude: checkin.check_in_lng
+    });
+    if (checkin.check_out_at) {
+      addEvent({
+        ...taskDetails,
+        type: 'task',
+        action: 'Checked out of task',
+        recorded_at: checkin.check_out_at,
+        latitude: checkin.check_out_lat,
+        longitude: checkin.check_out_lng
       });
     }
   }
+  events.sort((first, second) => new Date(first.recorded_at) - new Date(second.recorded_at));
   points.sort((first, second) => new Date(first.recorded_at) - new Date(second.recorded_at));
-  const totalDistance = points.reduce((total, row) => total + Number(row.distance_meters || 0), 0);
-  res.json({ points, total_distance_meters: totalDistance, place_changes: points.filter(row => Number(row.place_changed) === 1).length });
+  const routePoints = [...points];
+  events.forEach(event => {
+    if (event.latitude != null && event.longitude != null
+      && Number.isFinite(Number(event.latitude)) && Number.isFinite(Number(event.longitude))) {
+      routePoints.push({ recorded_at: event.recorded_at, latitude: event.latitude, longitude: event.longitude });
+    }
+  });
+  routePoints.sort((first, second) => new Date(first.recorded_at) - new Date(second.recorded_at));
+  const uniqueRoutePoints = routePoints.filter((point, index, all) => {
+    if (index === 0) return true;
+    const previous = all[index - 1];
+    return Number(point.latitude) !== Number(previous.latitude)
+      || Number(point.longitude) !== Number(previous.longitude)
+      || Math.abs(new Date(point.recorded_at) - new Date(previous.recorded_at)) > 60_000;
+  });
+  const totalDistance = uniqueRoutePoints.slice(1).reduce((total, point, index) => (
+    total + distanceBetweenPoints(
+      Number(uniqueRoutePoints[index].latitude),
+      Number(uniqueRoutePoints[index].longitude),
+      Number(point.latitude),
+      Number(point.longitude)
+    )
+  ), 0);
+  res.json({
+    points,
+    events,
+    route_points: uniqueRoutePoints,
+    total_distance_meters: totalDistance,
+    place_changes: points.filter(row => Number(row.place_changed) === 1).length
+  });
 });
 
 // admin: CSV export

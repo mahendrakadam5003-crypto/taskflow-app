@@ -2069,10 +2069,36 @@ async function loadTrackingTimeline(userId, selectedButton, selectedDate = today
   try {
     const trackingData = await api(`/attendance/tracking/${userId}/timeline?date=${encodeURIComponent(selectedDate)}`);
     const timeline = trackingData.points || [];
-    const latest = timeline[timeline.length - 1];
+    const events = trackingData.events || [];
+    const routePoints = trackingData.route_points || timeline;
+    const latest = routePoints[routePoints.length - 1] || timeline[timeline.length - 1];
     const totalDistanceKm = Number(trackingData.total_distance_meters || 0) / 1000;
     const distanceLabel = totalDistanceKm >= 1 ? `${totalDistanceKm.toFixed(2)} km` : `${Number(trackingData.total_distance_meters || 0).toFixed(0)} m`;
-    detail.innerHTML = `<div class="tracking-detail-header"><div><span class="eyebrow">Location timeline · ${escapeHtml(selectedDate)}</span><h2>${escapeHtml(selectedButton?.querySelector('b')?.textContent || 'Employee')}</h2></div><span class="hint">${timeline.length} points · ${distanceLabel} · ${trackingData.place_changes || 0} place changes</span></div>
+    const routeWaypoints = routePoints.length > 2
+      ? routePoints.slice(1, -1).filter((_, index, middle) => index % Math.max(1, Math.ceil(middle.length / 8)) === 0).slice(0, 8)
+      : [];
+    const routeUrl = routePoints.length > 1
+      ? `https://www.google.com/maps/dir/?api=1&origin=${routePoints[0].latitude},${routePoints[0].longitude}&destination=${routePoints[routePoints.length - 1].latitude},${routePoints[routePoints.length - 1].longitude}${routeWaypoints.length ? `&waypoints=${routeWaypoints.map(point => `${point.latitude},${point.longitude}`).join('%7C')}` : ''}`
+      : '';
+    const eventTimeline = events.length ? events.map(event => {
+      const hasLocation = event.latitude != null && event.longitude != null;
+      const locationUrl = hasLocation ? `https://www.google.com/maps?q=${event.latitude},${event.longitude}` : '';
+      const location = event.location || (hasLocation ? `${Number(event.latitude).toFixed(6)}, ${Number(event.longitude).toFixed(6)}` : 'Location unavailable');
+      const details = event.type === 'task'
+        ? `<b>${escapeHtml(event.customer_name || 'Customer not specified')}</b><span>${escapeHtml(event.task_title || 'Task')}${event.project_name ? ` · ${escapeHtml(event.project_name)}` : ''}</span>`
+        : `<span>${escapeHtml(location)}</span>`;
+      return `<article class="tracking-event ${event.type === 'task' ? 'tracking-event-task' : 'tracking-event-attendance'}">
+        <div class="tracking-event-time">${escapeHtml(fmtTime(event.recorded_at))}<small>${escapeHtml(fmtDate(event.recorded_at))}</small></div>
+        <div class="tracking-event-marker" aria-hidden="true">${event.type === 'task' ? 'T' : 'A'}</div>
+        <div class="tracking-event-content"><b class="tracking-event-action">${escapeHtml(event.action)}</b>${details}
+          ${event.type === 'task' ? `<span>${escapeHtml(location)}</span>` : ''}
+          ${locationUrl ? `<a href="${locationUrl}" target="_blank" rel="noopener">View location on map</a>` : ''}
+        </div>
+      </article>`;
+    }).join('') : `<div class="hint">No attendance or task check-in/out events for ${escapeHtml(selectedDate)}.</div>`;
+    detail.innerHTML = `<div class="tracking-detail-header"><div><span class="eyebrow">Location timeline · ${escapeHtml(selectedDate)}</span><h2>${escapeHtml(selectedButton?.querySelector('b')?.textContent || 'Employee')}</h2></div><span class="hint">${events.length} events · ${routePoints.length} GPS points · ${distanceLabel} travel</span></div>
+      <div class="tracking-event-timeline">${eventTimeline}</div>
+      ${routeUrl ? `<div class="tracking-route-link"><a class="btn btn-secondary btn-sm" href="${routeUrl}" target="_blank" rel="noopener">View travel route in Google Maps</a><span class="hint">${routePoints.length} GPS points · estimated ${distanceLabel}</span></div>` : ''}
       ${latest ? `<iframe class="tracking-map" title="Latest employee location" src="https://www.google.com/maps?q=${latest.latitude},${latest.longitude}&output=embed" loading="lazy"></iframe>` : '<div class="tracking-map tracking-map-empty">No location points recorded yet.</div>'}
       <div class="tracking-timeline">${timeline.length ? timeline.map((point, index) => `<a class="tracking-point" href="https://www.google.com/maps?q=${point.latitude},${point.longitude}" target="_blank" rel="noopener"><b>${index + 1}. ${escapeHtml(fmtDateTime(point.recorded_at))}${Number(point.place_changed) ? ' · Place changed' : ''}</b><span>+${Number(point.distance_meters || 0).toFixed(0)} m · ${Number(point.latitude).toFixed(6)}, ${Number(point.longitude).toFixed(6)}</span></a>`).join('') : `<div class="hint">No location records for ${escapeHtml(selectedDate)}. If the employee punched in, confirm their GPS punch-in was saved.</div>`}</div>`;
   } catch (error) {
