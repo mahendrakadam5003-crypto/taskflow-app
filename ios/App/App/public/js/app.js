@@ -1357,8 +1357,16 @@ async function showNewTaskDrawer() {
         total_amount: totalAmount.value || 0
       };
       if (workModeAccess.allowed) body.work_mode = workMode.value;
-      await api(`/projects/${CURRENT_PROJECT.id}/tasks`, { method: 'POST', body });
-      reloadWithActionMessage('project', 'Task created successfully.', CURRENT_PROJECT.id);
+      const createdTask = await api(`/projects/${CURRENT_PROJECT.id}/tasks`, { method: 'POST', body });
+      closeDrawer();
+      showAppNotification('Task created successfully.');
+      try {
+        await renderTasks();
+        if (createdTask?.id) await openTaskDrawer(Number(createdTask.id));
+      } catch (refreshError) {
+        console.error('Task created, but the task view could not refresh:', refreshError);
+        showAppNotification('Task created, but the task view could not refresh.');
+      }
     } catch (err) { alert(err.message); }
   };
 }
@@ -1397,7 +1405,7 @@ async function openTaskDrawer(taskId) {
       api(`/tasks/${taskId}/history`).catch(() => []),
       api(`/projects/${task.project_id}/members`)
     ]);
-    const taskHistory = taskHistoryResult;
+    let taskHistory = taskHistoryResult;
     drawer.classList.remove('loading');
     $('#drawer-title').value = task.title || '';
     $('#drawer-title').disabled = false;
@@ -1563,10 +1571,15 @@ async function openTaskDrawer(taskId) {
       await api(`/tasks/${taskId}`, { method: 'PUT', body });
       savedTaskDraft = draft;
       savedTaskDraftKey = draftKey;
-      await renderTasks();
-      taskHistory = await api(`/tasks/${taskId}/history`);
-      await openTaskDrawer(taskId);
       if (saveState) { saveState.textContent = 'Saved'; saveState.className = 'drawer-save-state saved'; saveState.title = ''; }
+      try {
+        await renderTasks();
+        taskHistory = await api(`/tasks/${taskId}/history`);
+        await openTaskDrawer(taskId);
+      } catch (refreshError) {
+        console.error('Task saved, but the task view could not refresh:', refreshError);
+        showAppNotification('Task saved, but the task view could not refresh.');
+      }
     };
     let autosaveTimer = null;
     const queueAutosave = () => {
