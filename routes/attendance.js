@@ -352,28 +352,49 @@ router.put('/tracking-access/:userId', requireAdmin, async (req, res) => {
 
 router.get('/tracking/people', async (req, res) => {
   if (!(await canViewTracking(req))) return res.status(403).json({ error: 'Tracking access has not been granted to this account.' });
+  const selectedDate = req.query.date || todayStr();
   const rows = await db.prepare(`SELECT u.id AS user_id, u.name AS user_name, u.department,
       a.punch_in, a.punch_out, a.in_lat, a.in_lng,
       (SELECT al.latitude FROM attendance_locations al WHERE al.attendance_id = a.id ORDER BY al.recorded_at DESC LIMIT 1) AS latest_lat,
       (SELECT al.longitude FROM attendance_locations al WHERE al.attendance_id = a.id ORDER BY al.recorded_at DESC LIMIT 1) AS latest_lng,
       (SELECT al.recorded_at FROM attendance_locations al WHERE al.attendance_id = a.id ORDER BY al.recorded_at DESC LIMIT 1) AS latest_at
     FROM users u LEFT JOIN attendance a ON a.user_id = u.id AND a.date = ?
-    WHERE u.active = 1 ORDER BY u.name`).all(todayStr());
+    WHERE u.active = 1 ORDER BY u.name`).all(selectedDate);
   res.json(rows || []);
 });
 
 router.get('/tracking/:userId/timeline', async (req, res) => {
   if (!(await canViewTracking(req))) return res.status(403).json({ error: 'Tracking access has not been granted to this account.' });
-  let rows = await db.prepare(`SELECT al.recorded_at, al.latitude, al.longitude, u.name AS user_name
+  const selectedDate = req.query.date || todayStr();
+  const rows = await db.prepare(`SELECT al.recorded_at, al.latitude, al.longitude, al.distance_meters, al.place_changed, u.name AS user_name
     FROM attendance_locations al JOIN users u ON u.id = al.user_id JOIN attendance a ON a.id = al.attendance_id
-    WHERE al.user_id = ? AND a.date = ? ORDER BY al.recorded_at ASC`).all(req.params.userId, req.query.date || todayStr());
-  if (!rows.length) {
-    const initial = await db.prepare(`SELECT a.punch_in AS recorded_at, a.in_lat AS latitude, a.in_lng AS longitude, u.name AS user_name
-      FROM attendance a JOIN users u ON u.id = a.user_id
-      WHERE a.user_id = ? AND a.date = ? AND a.in_lat IS NOT NULL AND a.in_lng IS NOT NULL`).get(req.params.userId, req.query.date || todayStr());
-    if (initial) rows = [initial];
+    WHERE al.user_id = ? AND a.date = ? ORDER BY al.recorded_at ASC`).all(req.params.userId, selectedDate);
+  const attendance = await db.prepare(`SELECT a.punch_in, a.in_lat, a.in_lng, u.name AS user_name
+    FROM attendance a JOIN users u ON u.id = a.user_id
+    WHERE a.user_id = ? AND a.date = ? AND a.in_lat IS NOT NULL AND a.in_lng IS NOT NULL`).get(req.params.userId, selectedDate);
+  const points = [...(rows || [])];
+  if (attendance?.punch_in) {
+    const punchInTime = new Date(attendance.punch_in).getTime();
+    const hasPunchInPoint = points.some(point => {
+      const pointTime = new Date(point.recorded_at).getTime();
+      return Number(point.latitude) === Number(attendance.in_lat)
+        && Number(point.longitude) === Number(attendance.in_lng)
+        && Math.abs(pointTime - punchInTime) <= 60_000;
+    });
+    if (!hasPunchInPoint) {
+      points.push({
+        recorded_at: attendance.punch_in,
+        latitude: attendance.in_lat,
+        longitude: attendance.in_lng,
+        distance_meters: 0,
+        place_changed: 0,
+        user_name: attendance.user_name
+      });
+    }
   }
-  res.json(rows || []);
+  points.sort((first, second) => new Date(first.recorded_at) - new Date(second.recorded_at));
+  const totalDistance = points.reduce((total, row) => total + Number(row.distance_meters || 0), 0);
+  res.json({ points, total_distance_meters: totalDistance, place_changes: points.filter(row => Number(row.place_changed) === 1).length });
 });
 
 // admin: CSV export

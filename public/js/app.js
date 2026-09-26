@@ -267,6 +267,7 @@ let latestNotificationId = null;
 let pendingSearchTaskId = null;
 let liveTrackingTimer = null;
 let liveTrackingBusy = false;
+let selectedTrackingUserId = null;
 
 // ---------- live tracking data synchronization ----------
 function startAttendancePolling() {
@@ -2029,36 +2030,51 @@ async function renderHistory() {
 async function renderTracking() {
   const peoplePanel = $('#tracking-people');
   const detail = $('#tracking-detail');
+  const dateInput = $('#tracking-date-filter');
   if (!peoplePanel || !detail) return;
+  const selectedDate = dateInput?.value || todayISO();
+  if (dateInput) dateInput.value = selectedDate;
+  if (dateInput) dateInput.onchange = () => {
+    if (!dateInput.value) dateInput.value = todayISO();
+    renderTracking();
+  };
   try {
-    const people = await api('/attendance/tracking/people');
+    const people = await api(`/attendance/tracking/people?date=${encodeURIComponent(selectedDate)}`);
     peoplePanel.innerHTML = people.length ? people.map(person => `
       <button class="tracking-person" data-tracking-user-id="${person.user_id}">
         <b>${escapeHtml(person.user_name)}</b><small>${escapeHtml(person.department || 'Employee')}</small>
         <span class="tracking-status ${person.punch_in && !person.punch_out ? 'active' : ''}">${person.punch_in && !person.punch_out ? 'Live now' : 'Not active'}</span>
       </button>`).join('') : '<div class="hint">No employees found.</div>';
+    const selectedPerson = people.find(person => Number(person.user_id) === Number(selectedTrackingUserId)) || people[0];
+    selectedTrackingUserId = selectedPerson ? Number(selectedPerson.user_id) : null;
     $$('.tracking-person').forEach(button => {
-      button.onclick = () => loadTrackingTimeline(Number(button.dataset.trackingUserId), button);
+      button.onclick = () => {
+        selectedTrackingUserId = Number(button.dataset.trackingUserId);
+        loadTrackingTimeline(selectedTrackingUserId, button, selectedDate);
+      };
     });
-    if (people.length) loadTrackingTimeline(people[0].user_id, peoplePanel.querySelector('.tracking-person'));
+    if (selectedPerson) {
+      const selectedButton = peoplePanel.querySelector(`[data-tracking-user-id="${selectedPerson.user_id}"]`);
+      loadTrackingTimeline(selectedPerson.user_id, selectedButton, selectedDate);
+    }
   } catch (error) {
     peoplePanel.innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
   }
 }
 
-async function loadTrackingTimeline(userId, selectedButton) {
+async function loadTrackingTimeline(userId, selectedButton, selectedDate = todayISO()) {
   $$('.tracking-person').forEach(button => button.classList.toggle('active', button === selectedButton));
   const detail = $('#tracking-detail');
   if (!detail) return;
   try {
-    const trackingData = await api(`/attendance/tracking/${userId}/timeline`);
+    const trackingData = await api(`/attendance/tracking/${userId}/timeline?date=${encodeURIComponent(selectedDate)}`);
     const timeline = trackingData.points || [];
     const latest = timeline[timeline.length - 1];
     const totalDistanceKm = Number(trackingData.total_distance_meters || 0) / 1000;
     const distanceLabel = totalDistanceKm >= 1 ? `${totalDistanceKm.toFixed(2)} km` : `${Number(trackingData.total_distance_meters || 0).toFixed(0)} m`;
-    detail.innerHTML = `<div class="tracking-detail-header"><div><span class="eyebrow">Location timeline</span><h2>${escapeHtml(selectedButton?.querySelector('b')?.textContent || 'Employee')}</h2></div><span class="hint">${timeline.length} points · ${distanceLabel} today · ${trackingData.place_changes || 0} place changes</span></div>
+    detail.innerHTML = `<div class="tracking-detail-header"><div><span class="eyebrow">Location timeline · ${escapeHtml(selectedDate)}</span><h2>${escapeHtml(selectedButton?.querySelector('b')?.textContent || 'Employee')}</h2></div><span class="hint">${timeline.length} points · ${distanceLabel} · ${trackingData.place_changes || 0} place changes</span></div>
       ${latest ? `<iframe class="tracking-map" title="Latest employee location" src="https://www.google.com/maps?q=${latest.latitude},${latest.longitude}&output=embed" loading="lazy"></iframe>` : '<div class="tracking-map tracking-map-empty">No location points recorded yet.</div>'}
-      <div class="tracking-timeline">${timeline.length ? timeline.map((point, index) => `<a class="tracking-point" href="https://www.google.com/maps?q=${point.latitude},${point.longitude}" target="_blank" rel="noopener"><b>${index + 1}. ${escapeHtml(fmtDateTime(point.recorded_at))}${Number(point.place_changed) ? ' · Place changed' : ''}</b><span>+${Number(point.distance_meters || 0).toFixed(0)} m · ${Number(point.latitude).toFixed(6)}, ${Number(point.longitude).toFixed(6)}</span></a>`).join('') : '<div class="hint">The first point appears when the employee punches in.</div>'}</div>`;
+      <div class="tracking-timeline">${timeline.length ? timeline.map((point, index) => `<a class="tracking-point" href="https://www.google.com/maps?q=${point.latitude},${point.longitude}" target="_blank" rel="noopener"><b>${index + 1}. ${escapeHtml(fmtDateTime(point.recorded_at))}${Number(point.place_changed) ? ' · Place changed' : ''}</b><span>+${Number(point.distance_meters || 0).toFixed(0)} m · ${Number(point.latitude).toFixed(6)}, ${Number(point.longitude).toFixed(6)}</span></a>`).join('') : `<div class="hint">No location records for ${escapeHtml(selectedDate)}. If the employee punched in, confirm their GPS punch-in was saved.</div>`}</div>`;
   } catch (error) {
     detail.innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
   }
