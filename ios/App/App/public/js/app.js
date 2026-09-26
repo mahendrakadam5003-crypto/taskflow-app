@@ -1315,13 +1315,14 @@ async function showNewTaskDrawer() {
   const saveButton = $('#btn-save-task');
   const completeButton = $('#btn-complete-task');
   const deleteButton = $('#btn-delete-task');
-  if (title) title.value = '';
+  if (title) { title.value = ''; title.disabled = false; }
   if (assignee) assignee.innerHTML = '<option value="">No assignee</option>' + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
-  if (due) due.value = '';
-  if (customerName) customerName.value = '';
-  if (invoiceNumber) invoiceNumber.value = '';
-  if (invoiceDate) invoiceDate.value = '';
-  if (totalAmount) totalAmount.value = '';
+  if (assignee) assignee.disabled = false;
+  if (due) { due.value = ''; due.disabled = false; }
+  if (customerName) { customerName.value = ''; customerName.disabled = false; }
+  if (invoiceNumber) { invoiceNumber.value = ''; invoiceNumber.disabled = false; }
+  if (invoiceDate) { invoiceDate.value = ''; invoiceDate.disabled = false; }
+  if (totalAmount) { totalAmount.value = ''; totalAmount.disabled = false; }
   if (due) due.removeAttribute('min');
   if (created) created.textContent = 'Created when saved';
   if (status) { status.value = 'open'; status.disabled = true; }
@@ -1329,7 +1330,7 @@ async function showNewTaskDrawer() {
     workMode.value = 'office';
     workMode.disabled = !workModeAccess.allowed;
   }
-  if (description) description.value = '';
+  if (description) { description.value = ''; description.disabled = false; }
   if (description) {
     description.oninput = autoGrowDescription;
     autoGrowDescription();
@@ -1406,32 +1407,43 @@ async function openTaskDrawer(taskId) {
       api(`/projects/${task.project_id}/members`)
     ]);
     let taskHistory = taskHistoryResult;
+    const currentCheckin = (task.checkin_users || []).find(user => Number(user.id) === Number(ME?.id));
+    const taskCheckinRequired = ME?.role !== 'admin' && Number(task.checkin_required) === 1;
+    const isCheckedIntoTask = !!currentCheckin?.check_in_at && !currentCheckin.check_out_at;
+    const taskActionsLocked = taskCheckinRequired && !isCheckedIntoTask;
+    const canEditTask = !!PROJECT_ACTION_ACCESS.edit_task;
+    const canCompleteAfterCheckout = taskCheckinRequired && !!currentCheckin?.check_in_at
+      && !!currentCheckin.check_out_at && !!PROJECT_ACTION_ACCESS.complete_task;
     drawer.classList.remove('loading');
     $('#drawer-title').value = task.title || '';
-    $('#drawer-title').disabled = false;
+    $('#drawer-title').disabled = taskActionsLocked;
     $('#drawer-assignee').innerHTML = '<option value="">No assignee</option>' + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
-    $('#drawer-assignee').disabled = false;
+    $('#drawer-assignee').disabled = !canEditTask;
     $('#drawer-assignee').value = task.assignee_id || '';
     const workModeInput = $('#drawer-work-mode');
     if (workModeInput) {
       workModeInput.value = task.work_mode || 'office';
-      workModeInput.disabled = Number(task.can_change_work_mode) !== 1;
+      workModeInput.disabled = taskActionsLocked || Number(task.can_change_work_mode) !== 1;
     }
     $('#drawer-due').value = task.due_date || '';
-    $('#drawer-due').disabled = false;
+    $('#drawer-due').disabled = taskActionsLocked;
     $('#drawer-customer-name').value = task.customer_name || '';
+    $('#drawer-customer-name').disabled = taskActionsLocked;
     $('#drawer-invoice-number').value = task.invoice_number || '';
+    $('#drawer-invoice-number').disabled = taskActionsLocked;
     $('#drawer-invoice-date').value = task.invoice_date || '';
+    $('#drawer-invoice-date').disabled = taskActionsLocked;
     $('#drawer-total-amount').value = task.total_amount ? Number(task.total_amount).toFixed(2) : '';
+    $('#drawer-total-amount').disabled = taskActionsLocked;
     $('#drawer-due').removeAttribute('min');
     $('#drawer-created').textContent = fmtDateTime(task.created_at);
     $('#drawer-status').value = task.status || 'open';
-    $('#drawer-status').disabled = false;
+    $('#drawer-status').disabled = taskActionsLocked;
     $('#drawer-desc').value = task.description || '';
-    $('#drawer-desc').disabled = false;
+    $('#drawer-desc').disabled = taskActionsLocked;
     $('#drawer-desc').oninput = autoGrowDescription;
     autoGrowDescription();
-    $('#drawer-subtasks').innerHTML = (task.subtasks || []).map(item => `<label class="subtask-row"><input type="checkbox" class="subtask-check" data-subtask-id="${item.id}" ${item.done ? 'checked' : ''}><span class="subtask-title ${item.done ? 'done' : ''}">${escapeHtml(item.title)}</span><button class="subtask-del" data-subtask-id="${item.id}" title="Delete subtask">✕</button></label>`).join('') || '<div class="hint">No subtasks yet.</div>';
+    $('#drawer-subtasks').innerHTML = (task.subtasks || []).map(item => `<label class="subtask-row"><input type="checkbox" class="subtask-check" data-subtask-id="${item.id}" ${item.done ? 'checked' : ''} ${taskActionsLocked ? 'disabled' : ''}><span class="subtask-title ${item.done ? 'done' : ''}">${escapeHtml(item.title)}</span><button class="subtask-del" data-subtask-id="${item.id}" title="Delete subtask" ${taskActionsLocked ? 'disabled' : ''}>✕</button></label>`).join('') || '<div class="hint">No subtasks yet.</div>';
     $$('.subtask-check').forEach(input => {
       input.onchange = async () => {
         await api(`/subtasks/${input.dataset.subtaskId}`, { method: 'PUT', body: { done: input.checked } });
@@ -1461,7 +1473,7 @@ async function openTaskDrawer(taskId) {
     ].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     $('#drawer-comments').innerHTML = activity.length ? activity.map((entry, index) => {
       if (entry.activityType === 'comment') return `<div class="comment" data-comment-id="${entry.id}">
-        <div class="comment-meta"><b>${escapeHtml(entry.user_name || 'User')}</b> · ${escapeHtml(fmtDateTime(entry.created_at))}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
+        <div class="comment-meta"><b>${escapeHtml(entry.user_name || 'User')}</b> · ${escapeHtml(fmtDateTime(entry.created_at))}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
         <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
         ${renderCommentAttachment(entry)}
       </div>`;
@@ -1514,15 +1526,21 @@ async function openTaskDrawer(taskId) {
     $('#comment-image-preview').classList.add('hidden');
     $('#comment-file-input').value = '';
     $('#drawer-comment-input').value = '';
+    $('#drawer-comment-input').disabled = taskActionsLocked;
+    $('#btn-attach-image').disabled = taskActionsLocked;
+    $('#btn-add-comment').disabled = taskActionsLocked;
     $('#drawer-comment-input').oninput = autoGrowComment;
     autoGrowComment();
     $('#btn-save-task').style.display = PROJECT_ACTION_ACCESS.edit_task || Number(task.can_change_work_mode) === 1 ? '' : 'none';
+    $('#btn-save-task').disabled = taskActionsLocked && !canEditTask;
     $('#btn-save-task').className = 'btn btn-secondary btn-sm';
     $('#btn-complete-task').style.display = PROJECT_ACTION_ACCESS.complete_task ? '' : 'none';
     $('#btn-complete-task').textContent = task.status === 'done' ? '↻ Reopen task' : '✓ Complete task';
-    $('#btn-complete-task').disabled = false;
+    $('#btn-complete-task').disabled = taskActionsLocked && !canCompleteAfterCheckout;
     $('#btn-complete-task').className = 'btn btn-primary btn-block';
     $('#btn-delete-task').style.display = PROJECT_ACTION_ACCESS.delete_task ? '' : 'none';
+    $('#btn-delete-task').disabled = taskActionsLocked;
+    $('#btn-add-subtask').disabled = taskActionsLocked;
     drawer.classList.remove('hidden');
     $('#app').classList.add('drawer-open');
     $('#drawer-close').onclick = closeDrawer;
@@ -1605,6 +1623,7 @@ async function openTaskDrawer(taskId) {
     $('#drawer-work-mode').onchange = queueAutosave;
     $('#btn-save-task').onclick = async () => {
       clearTimeout(autosaveTimer);
+      if (!canEditTask && Number(task.can_change_work_mode) !== 1) return;
       try {
         await saveChanges();
       } catch (err) {
@@ -1612,23 +1631,27 @@ async function openTaskDrawer(taskId) {
       }
     };
     const checkinControls = $('#task-checkin-controls');
-    const currentCheckin = (task.checkin_users || []).find(user => Number(user.id) === Number(ME?.id));
     if (checkinControls) {
       if (task.work_mode !== 'on_field' || !currentCheckin) {
         checkinControls.innerHTML = task.work_mode === 'on_field' ? '<div class="hint">You are not required to check in/out for this task.</div>' : '';
       } else if (!currentCheckin.check_in_at) {
-        checkinControls.innerHTML = '<button class="btn btn-secondary btn-block" id="btn-task-check-in">📍 Check in to task</button>';
+        checkinControls.innerHTML = `<button class="btn btn-secondary btn-block" id="btn-task-check-in">📍 ${Number(task.assignee_id) === Number(ME?.id) ? 'Check in to task' : 'Take task & check in'}</button>`;
       } else if (!currentCheckin.check_out_at) {
         checkinControls.innerHTML = `<div class="hint">Checked in at ${escapeHtml(fmtDateTime(currentCheckin.check_in_at))}</div><button class="btn btn-secondary btn-block" id="btn-task-check-out">📍 Check out of task</button>`;
       } else {
         checkinControls.innerHTML = `<div class="hint">Checked in ${escapeHtml(fmtDateTime(currentCheckin.check_in_at))} and out ${escapeHtml(fmtDateTime(currentCheckin.check_out_at))}.</div>`;
       }
+      if (taskActionsLocked) {
+        checkinControls.insertAdjacentHTML('afterbegin', '<div class="hint">Check in to unlock task editing and comments. You may reassign this task before checking in.</div>');
+      }
       const checkInButton = $('#btn-task-check-in');
       const checkOutButton = $('#btn-task-check-out');
       const recordTaskLocation = async (path, message) => {
         try {
+          if (path === 'check-in') await saveChanges();
           const coords = await getLiveCoords();
           await api(`/tasks/${taskId}/${path}`, { method: 'POST', body: coords });
+          await renderTasks();
           await openTaskDrawer(taskId);
         } catch (error) { alert(error.message); }
       };
@@ -1647,6 +1670,7 @@ async function openTaskDrawer(taskId) {
       renderTasks();
     };
     $('#btn-add-subtask').onclick = async () => {
+      if (taskActionsLocked) return;
       showModal(`
         <h3>Add subtask</h3>
         <input id="new-subtask-title" placeholder="Subtask name" autofocus>
@@ -1719,7 +1743,7 @@ async function openTaskDrawer(taskId) {
       }
     };
     commentInput.onblur = () => setTimeout(hideMentionSuggestions, 120);
-    $('#btn-attach-image').onclick = () => fileInput.click();
+    $('#btn-attach-image').onclick = () => { if (!taskActionsLocked) fileInput.click(); };
     fileInput.onchange = () => {
       const file = fileInput.files[0];
       if (!file) { filePreview.classList.add('hidden'); return; }
@@ -1744,6 +1768,7 @@ async function openTaskDrawer(taskId) {
       request.send(formData);
     });
     $('#btn-add-comment').onclick = async () => {
+      if (taskActionsLocked) return;
       const body = commentInput.value.trim();
       const attachment = fileInput.files[0];
       if (!body && !attachment) return;

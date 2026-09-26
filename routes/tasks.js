@@ -164,6 +164,20 @@ async function canProjectAction(req, action) {
   const row = await db.prepare(`SELECT ${action} AS allowed FROM project_action_access WHERE user_id=?`).get(req.session.userId);
   return row ? Number(row.allowed) === 1 : true;
 }
+async function getTaskCheckinStatus(taskId, userId, admin = false) {
+  if (admin) return { required: false, checkedIn: true, hasCheckedIn: true };
+  const task = await db.prepare('SELECT work_mode FROM tasks WHERE id=?').get(taskId);
+  if (!task || task.work_mode !== 'on_field') return { required: false, checkedIn: true, hasCheckedIn: true };
+  const required = await db.prepare('SELECT user_id FROM task_checkin_access WHERE user_id=?').get(userId);
+  if (!required) return { required: false, checkedIn: true, hasCheckedIn: true };
+  const checkin = await db.prepare(`SELECT check_in_at, check_out_at FROM task_checkins
+    WHERE task_id=? AND user_id=? ORDER BY id DESC LIMIT 1`).get(taskId, userId);
+  return {
+    required: true,
+    checkedIn: !!checkin?.check_in_at && !checkin.check_out_at,
+    hasCheckedIn: !!checkin?.check_in_at
+  };
+}
 async function canChangeTaskWorkMode(req) {
   if (req.session.role === 'admin') return true;
   return !!(await db.prepare('SELECT user_id FROM task_work_mode_access WHERE user_id=?').get(req.session.userId));
@@ -620,11 +634,13 @@ router.put('/tasks/:id', async (req, res) => {
     if (workModeChangeRequested && !(await canChangeTaskWorkMode(req))) return res.status(403).json({ error: 'You do not have permission to change the task work location. Ask an administrator.' });
     if (Object.keys(req.body).some(key => !['status', 'work_mode'].includes(key)) && !(await canProjectAction(req, 'edit_task'))) return res.status(403).json({ error: 'You do not have permission to edit tasks.' });
     const taskBefore = await db.prepare('SELECT title, description, status, assignee_id, due_date, payment_member_id, invoice_number, work_mode FROM tasks WHERE id=?').get(req.params.id);
-    if (taskBefore.work_mode === 'on_field' && req.session.role !== 'admin' && Object.keys(req.body).some(key => !['status'].includes(key))) {
-      const activeCheckin = await db.prepare(`SELECT c.id FROM task_checkin_access a
-        JOIN task_checkins c ON c.task_id=? AND c.user_id=a.user_id
-        WHERE a.user_id=? AND c.check_in_at IS NOT NULL AND c.check_out_at IS NULL`).get(req.params.id, req.session.userId);
-      if (!activeCheckin) return res.status(403).json({ error: 'Check in to this on-field task before editing or updating it.' });
+    if (!taskBefore) return res.status(404).json({ error: 'Task not found.' });
+    const checkinStatus = await getTaskCheckinStatus(req.params.id, req.session.userId, req.session.role === 'admin');
+    const onlyReassigning = Object.keys(req.body).length === 1 && req.body.assignee_id !== undefined;
+    const onlyChangingStatusAfterCheckin = Object.keys(req.body).length === 1
+      && req.body.status !== undefined && checkinStatus.hasCheckedIn;
+    if (checkinStatus.required && !checkinStatus.checkedIn && !onlyReassigning && !onlyChangingStatusAfterCheckin) {
+      return res.status(403).json({ error: 'Check in to this on-field task before editing, commenting, or updating it. You may reassign it before checking in.' });
     }
     const nextWorkMode = req.body.work_mode === 'on_field' ? 'on_field' : (req.body.work_mode === 'office' ? 'office' : taskBefore.work_mode || 'office');
     if (workModeChangeRequested && nextWorkMode === 'office' && taskBefore.work_mode === 'on_field') {
@@ -704,7 +720,6 @@ async function getTaskForCheckin(taskId, userId, admin) {
   const task = await db.prepare('SELECT id, project_id, title, assignee_id, work_mode FROM tasks WHERE id=?').get(taskId);
   if (!task || !(await canAccessTask(taskId, userId, admin))) return null;
   if (task.work_mode !== 'on_field') return { error: 'Check-in and check-out are only required for on-field tasks.' };
-  if (!admin && Number(task.assignee_id) !== Number(userId)) return { error: 'Only the assigned employee can check in and check out for this task.' };
   const required = await db.prepare('SELECT user_id FROM task_checkin_access WHERE user_id=?').get(userId);
   if (!required) return { error: 'You are not required to check in and out for this task.' };
   return task;
@@ -724,9 +739,20 @@ router.post('/tasks/:id/check-in', async (req, res) => {
       WHERE c.user_id=? AND c.task_id<>? AND c.check_in_at IS NOT NULL AND c.check_out_at IS NULL
       LIMIT 1`).get(req.session.userId, req.params.id);
     if (activeTask) return res.status(400).json({ error: `Check out of "${activeTask.title}" before checking into another task.` });
+    const otherActiveUser = await db.prepare(`SELECT u.name FROM task_checkins c
+      JOIN users u ON u.id=c.user_id
+      WHERE c.task_id=? AND c.user_id<>? AND c.check_in_at IS NOT NULL AND c.check_out_at IS NULL
+      LIMIT 1`).get(req.params.id, req.session.userId);
+    if (otherActiveUser) return res.status(400).json({ error: `This task is already checked in by ${otherActiveUser.name}.` });
     const now = new Date().toISOString();
     if (existing) await db.prepare('UPDATE task_checkins SET check_in_at=?, check_in_lat=?, check_in_lng=?, check_out_at=NULL, check_out_lat=NULL, check_out_lng=NULL WHERE id=?').run(now, lat, lng, existing.id);
     else await db.prepare('INSERT INTO task_checkins (task_id,user_id,check_in_at,check_in_lat,check_in_lng) VALUES (?,?,?,?,?)').run(req.params.id, req.session.userId, now, lat, lng);
+    if (Number(task.assignee_id) !== Number(req.session.userId)) {
+      await db.prepare("UPDATE tasks SET assignee_id=?, updated_at=datetime('now') WHERE id=?").run(req.session.userId, req.params.id);
+      const newAssignee = await db.prepare('SELECT name FROM users WHERE id=?').get(req.session.userId);
+      await db.prepare('INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value) VALUES (?, ?, ?, ?, ?)')
+        .run(req.params.id, req.session.userId, 'Assignee', task.assignee_id ? (await db.prepare('SELECT name FROM users WHERE id=?').get(task.assignee_id))?.name || String(task.assignee_id) : 'Unassigned', newAssignee?.name || String(req.session.userId));
+    }
     res.json({ ok: true, check_in_at: now });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -762,10 +788,11 @@ router.get('/tasks/:id', async (req, res) => {
     task.history = await db.prepare(`SELECT h.*, u.name AS actor_name
       FROM task_history h LEFT JOIN users u ON u.id = h.actor_id
       WHERE h.task_id = ? ORDER BY h.created_at ASC, h.id ASC`).all(task.id);
-    task.checkin_users = task.assignee_id ? await db.prepare(`SELECT u.id, u.name, c.check_in_at, c.check_in_lat, c.check_in_lng, c.check_out_at, c.check_out_lat, c.check_out_lng
-      FROM users u LEFT JOIN task_checkin_access r ON r.user_id=u.id
+    task.checkin_users = await db.prepare(`SELECT u.id, u.name, c.check_in_at, c.check_in_lat, c.check_in_lng, c.check_out_at, c.check_out_lat, c.check_out_lng
+      FROM users u JOIN task_checkin_access r ON r.user_id=u.id
       LEFT JOIN task_checkins c ON c.task_id=? AND c.user_id=u.id
-      WHERE u.id=? AND r.user_id IS NOT NULL`).all(task.id, task.assignee_id) : [];
+      WHERE u.id=?`).all(task.id, req.session.userId);
+    task.checkin_required = task.checkin_users.length ? 1 : 0;
     res.json(task);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -781,6 +808,8 @@ router.delete('/tasks/:id', async (req, res) => {
 router.post('/tasks/:id/subtasks', async (req, res) => {
   try {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
+    const checkinStatus = await getTaskCheckinStatus(req.params.id, req.session.userId, req.session.role === 'admin');
+    if (checkinStatus.required && !checkinStatus.checkedIn) return res.status(403).json({ error: 'Check in to this on-field task before managing subtasks.' });
     const title = String(req.body.title || '').trim();
     if (!title) return res.status(400).json({ error: 'Subtask title is required.' });
     const info = await db.prepare('INSERT INTO subtasks (task_id, title, position) VALUES (?, ?, COALESCE((SELECT MAX(position) + 1 FROM subtasks WHERE task_id = ?), 0))')
@@ -793,6 +822,8 @@ router.put('/subtasks/:id', async (req, res) => {
   try {
     const subtask = await db.prepare('SELECT task_id FROM subtasks WHERE id=?').get(req.params.id);
     if (!subtask || !(await canAccessTask(subtask.task_id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this subtask' });
+    const checkinStatus = await getTaskCheckinStatus(subtask.task_id, req.session.userId, req.session.role === 'admin');
+    if (checkinStatus.required && !checkinStatus.checkedIn) return res.status(403).json({ error: 'Check in to this on-field task before managing subtasks.' });
     const updates = [];
     const values = [];
     if (req.body.title !== undefined) { updates.push('title=?'); values.push(String(req.body.title).trim()); }
@@ -808,16 +839,28 @@ router.delete('/subtasks/:id', async (req, res) => {
   try {
     const subtask = await db.prepare('SELECT task_id FROM subtasks WHERE id=?').get(req.params.id);
     if (!subtask || !(await canAccessTask(subtask.task_id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this subtask' });
+    const checkinStatus = await getTaskCheckinStatus(subtask.task_id, req.session.userId, req.session.role === 'admin');
+    if (checkinStatus.required && !checkinStatus.checkedIn) return res.status(403).json({ error: 'Check in to this on-field task before managing subtasks.' });
     await db.prepare('DELETE FROM subtasks WHERE id=?').run(req.params.id);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/tasks/:id/comments', commentUpload.single('attachment'), async (req, res) => {
+async function requireTaskCheckinToComment(req, res, next) {
   try {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) {
       return res.status(403).json({ error: 'You do not have access to this task' });
     }
+    const checkinStatus = await getTaskCheckinStatus(req.params.id, req.session.userId, req.session.role === 'admin');
+    if (checkinStatus.required && !checkinStatus.checkedIn) return res.status(403).json({ error: 'Check in to this on-field task before commenting.' });
+    next();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+router.post('/tasks/:id/comments', requireTaskCheckinToComment, commentUpload.single('attachment'), async (req, res) => {
+  try {
     const body = String(req.body.body || '').trim();
     if (!body && !req.file) return res.status(400).json({ error: 'Write a comment or attach an image.' });
     let imagePath = null;
@@ -836,9 +879,12 @@ router.post('/tasks/:id/comments', commentUpload.single('attachment'), async (re
 
 router.put('/comments/:id', async (req, res) => {
   try {
-    const comment = await db.prepare('SELECT id, user_id FROM comments WHERE id=?').get(req.params.id);
+    const comment = await db.prepare('SELECT id, task_id, user_id FROM comments WHERE id=?').get(req.params.id);
     if (!comment) return res.status(404).json({ error: 'Comment not found.' });
     if (Number(comment.user_id) !== Number(req.session.userId)) return res.status(403).json({ error: 'Only the comment author can edit this comment.' });
+    if (!(await canAccessTask(comment.task_id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task.' });
+    const checkinStatus = await getTaskCheckinStatus(comment.task_id, req.session.userId, req.session.role === 'admin');
+    if (checkinStatus.required && !checkinStatus.checkedIn) return res.status(403).json({ error: 'Check in to this on-field task before editing comments.' });
     const body = String(req.body.body || '').trim();
     if (!body) return res.status(400).json({ error: 'Comment cannot be empty.' });
     const editedAt = new Date().toISOString();
