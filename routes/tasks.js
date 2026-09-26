@@ -601,13 +601,6 @@ router.put('/tasks/:id', async (req, res) => {
         FROM tasks t LEFT JOIN task_checkins c ON c.task_id=t.id AND c.user_id=t.assignee_id WHERE t.id=?`).get(req.params.id);
       if (Number(incomplete?.count || 0) > 0) return res.status(400).json({ error: 'Every required user must check in and check out before completing this on-field task.' });
     }
-    if (workModeChangeRequested && nextWorkMode === 'on_field') {
-      const requestedCheckinUsers = Array.isArray(req.body.checkin_user_ids) ? [...new Set(req.body.checkin_user_ids.map(Number).filter(Boolean))] : [];
-      const existingUsers = await db.prepare('SELECT user_id FROM task_checkin_users WHERE task_id=?').all(req.params.id);
-      const checkinUserIds = requestedCheckinUsers.length ? requestedCheckinUsers : existingUsers.map(row => Number(row.user_id));
-      if (!checkinUserIds.length) return res.status(400).json({ error: 'Select at least one user who must check in and out.' });
-      for (const userId of checkinUserIds) if (!(await canAccessProject(taskBefore.project_id, userId, false))) return res.status(400).json({ error: 'Every required check-in user must be a project member.' });
-    }
     const updates = [];
     const values = [];
     if (req.body.status !== undefined) { updates.push('status=?'); values.push(req.body.status === 'done' ? 'done' : 'open'); updates.push('completed_at=?'); values.push(req.body.status === 'done' ? new Date().toISOString() : null); }
