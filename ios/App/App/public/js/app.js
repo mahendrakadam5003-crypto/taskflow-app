@@ -527,11 +527,19 @@ async function renderDashboard() {
         </div>` : '';
 
       summaryPanel.innerHTML = `
+        ${summary.active_task ? `<button type="button" class="dashboard-metric dashboard-active-task" id="dashboard-active-task-card"><small>Currently working on</small><b>${escapeHtml(summary.active_task.title)}</b><span>${escapeHtml(summary.active_task.customer_name || summary.active_task.project_name || 'Task')}</span><span class="dashboard-active-task-hint">Click to open task</span></button>` : ''}
         <div class="dashboard-metric"><small>Open tasks</small><b>${summary.open_tasks}</b></div>
         <div class="dashboard-metric alert"><small>Overdue tasks</small><b>${summary.overdue_tasks}</b></div>
         <div class="dashboard-metric money"><small>Pending reimbursements</small><b>${summary.pending_reimbursements} · INR ${Number(summary.pending_reimbursement_amount).toFixed(2)}</b></div>
         ${summary.payment_alerts?.length ? `<div class="dashboard-metric alert dashboard-payment-alert"><small>Overdue invoices</small><b>${summary.payment_alerts.length}</b>${summary.payment_alerts.slice(0, 3).map(invoice => `<span>${escapeHtml(invoice.invoice_number)} · ${escapeHtml(invoice.customer_name || 'No customer')} · pending ${Number(invoice.pending_amount || 0).toFixed(2)}</span>`).join('')}</div>` : ''}
         ${storageMetric}`;
+      const activeTaskCard = $('#dashboard-active-task-card');
+      if (activeTaskCard) activeTaskCard.onclick = async () => {
+        const project = PROJECTS.find(item => Number(item.id) === Number(summary.active_task.project_id));
+        if (!project) return showAppNotification('This task project is no longer available.');
+        pendingSearchTaskId = Number(summary.active_task.id);
+        await openProject(Number(project.id));
+      };
     }
     if (storageCard && ME?.role === 'admin' && summary?.storage) {
       storageCard.onclick = () => showStorageDetails(summary.storage);
@@ -1077,7 +1085,10 @@ async function openProject(id) {
         <button class="btn btn-secondary" id="m-cancel">Cancel</button>
         <button class="btn btn-primary" id="m-ok">Unlock</button>
       </div>`);
-    $('#m-cancel').onclick = closeModal;
+    $('#m-cancel').onclick = () => {
+      pendingSearchTaskId = null;
+      closeModal();
+    };
     $('#m-ok').onclick = async () => {
       try {
         await api(`/projects/${id}/unlock`, { method: 'POST', body: { pin: $('#pin-input').value } });
@@ -1286,7 +1297,10 @@ async function showNewTaskDrawer() {
   if (!CURRENT_PROJECT) return;
   const drawer = $('#task-drawer');
   if (!drawer) return;
-  const members = await api(`/projects/${CURRENT_PROJECT.id}/members`);
+  const [members, workModeAccess] = await Promise.all([
+    api(`/projects/${CURRENT_PROJECT.id}/members`),
+    api('/task-work-mode-access/me')
+  ]);
   const title = $('#drawer-title');
   const assignee = $('#drawer-assignee');
   const due = $('#drawer-due');
@@ -1313,7 +1327,7 @@ async function showNewTaskDrawer() {
   if (status) { status.value = 'open'; status.disabled = true; }
   if (workMode) {
     workMode.value = 'office';
-    workMode.disabled = ME.role !== 'admin';
+    workMode.disabled = !workModeAccess.allowed;
   }
   if (description) description.value = '';
   if (description) {
@@ -1332,7 +1346,7 @@ async function showNewTaskDrawer() {
   completeButton.onclick = async () => {
     if (!title.value.trim()) { title.focus(); return; }
     try {
-      await api(`/projects/${CURRENT_PROJECT.id}/tasks`, { method: 'POST', body: {
+      const body = {
         title: title.value.trim(),
         description: description.value.trim(),
         assignee_id: assignee.value || null,
@@ -1340,9 +1354,10 @@ async function showNewTaskDrawer() {
         customer_name: customerName.value.trim(),
         invoice_number: invoiceNumber.value.trim() || null,
         invoice_date: invoiceDate.value || null,
-        total_amount: totalAmount.value || 0,
-        work_mode: workMode.value
-      }});
+        total_amount: totalAmount.value || 0
+      };
+      if (workModeAccess.allowed) body.work_mode = workMode.value;
+      await api(`/projects/${CURRENT_PROJECT.id}/tasks`, { method: 'POST', body });
       reloadWithActionMessage('project', 'Task created successfully.', CURRENT_PROJECT.id);
     } catch (err) { alert(err.message); }
   };
@@ -1392,7 +1407,7 @@ async function openTaskDrawer(taskId) {
     const workModeInput = $('#drawer-work-mode');
     if (workModeInput) {
       workModeInput.value = task.work_mode || 'office';
-      workModeInput.disabled = ME.role !== 'admin';
+      workModeInput.disabled = Number(task.can_change_work_mode) !== 1;
     }
     $('#drawer-due').value = task.due_date || '';
     $('#drawer-due').disabled = false;
@@ -1493,7 +1508,7 @@ async function openTaskDrawer(taskId) {
     $('#drawer-comment-input').value = '';
     $('#drawer-comment-input').oninput = autoGrowComment;
     autoGrowComment();
-    $('#btn-save-task').style.display = PROJECT_ACTION_ACCESS.edit_task ? '' : 'none';
+    $('#btn-save-task').style.display = PROJECT_ACTION_ACCESS.edit_task || Number(task.can_change_work_mode) === 1 ? '' : 'none';
     $('#btn-save-task').className = 'btn btn-secondary btn-sm';
     $('#btn-complete-task').style.display = PROJECT_ACTION_ACCESS.complete_task ? '' : 'none';
     $('#btn-complete-task').textContent = task.status === 'done' ? '↻ Reopen task' : '✓ Complete task';
@@ -1503,7 +1518,7 @@ async function openTaskDrawer(taskId) {
     drawer.classList.remove('hidden');
     $('#app').classList.add('drawer-open');
     $('#drawer-close').onclick = closeDrawer;
-    const getTaskDraftKey = () => JSON.stringify({
+    const getTaskDraft = () => ({
       title: $('#drawer-title').value.trim(),
       description: $('#drawer-desc').value,
       assignee_id: $('#drawer-assignee').value || null,
@@ -1515,41 +1530,48 @@ async function openTaskDrawer(taskId) {
       status: $('#drawer-status').value,
       work_mode: $('#drawer-work-mode').value
     });
-    let savedTaskDraftKey = getTaskDraftKey();
+    let savedTaskDraft = getTaskDraft();
+    let savedTaskDraftKey = JSON.stringify(savedTaskDraft);
+    const showTaskSaveError = (error, action) => {
+      const saveState = $('#drawer-save-state');
+      if (saveState) {
+        saveState.textContent = 'Save failed';
+        saveState.className = 'drawer-save-state error';
+        saveState.title = error.message;
+      }
+      console.error(`${action}:`, error);
+    };
     const saveChanges = async () => {
-      const draftKey = getTaskDraftKey();
+      const draft = getTaskDraft();
+      const draftKey = JSON.stringify(draft);
       if (draftKey === savedTaskDraftKey) return;
       const saveState = $('#drawer-save-state');
-      if (saveState) { saveState.textContent = 'Saving...'; saveState.className = 'drawer-save-state'; }
-      const body = {
-        title: $('#drawer-title').value.trim(),
-        description: $('#drawer-desc').value,
-        assignee_id: $('#drawer-assignee').value || null,
-        due_date: $('#drawer-due').value || null,
-        customer_name: $('#drawer-customer-name').value.trim(),
-        invoice_number: $('#drawer-invoice-number').value.trim() || null,
-        invoice_date: $('#drawer-invoice-date').value || null,
-        total_amount: $('#drawer-total-amount').value || 0,
-        status: $('#drawer-status').value
-      };
-      if (ME.role === 'admin') {
-        body.work_mode = $('#drawer-work-mode').value;
+      if (saveState) { saveState.textContent = 'Saving...'; saveState.className = 'drawer-save-state'; saveState.title = ''; }
+      const body = {};
+      Object.keys(draft).forEach(key => {
+        if (draft[key] !== savedTaskDraft[key]
+          && (key !== 'work_mode' || Number(task.can_change_work_mode) === 1)) {
+          body[key] = draft[key];
+        }
+      });
+      if (Object.keys(body).length === 0) {
+        savedTaskDraft = draft;
+        savedTaskDraftKey = draftKey;
+        if (saveState) { saveState.textContent = 'Saved'; saveState.className = 'drawer-save-state saved'; saveState.title = ''; }
+        return;
       }
       await api(`/tasks/${taskId}`, { method: 'PUT', body });
+      savedTaskDraft = draft;
       savedTaskDraftKey = draftKey;
       await renderTasks();
       taskHistory = await api(`/tasks/${taskId}/history`);
       await openTaskDrawer(taskId);
-      if (saveState) { saveState.textContent = 'Saved'; saveState.className = 'drawer-save-state saved'; }
+      if (saveState) { saveState.textContent = 'Saved'; saveState.className = 'drawer-save-state saved'; saveState.title = ''; }
     };
     let autosaveTimer = null;
     const queueAutosave = () => {
       clearTimeout(autosaveTimer);
-      autosaveTimer = setTimeout(() => saveChanges().catch(err => {
-        const saveState = $('#drawer-save-state');
-        if (saveState) { saveState.textContent = 'Save failed'; saveState.className = 'drawer-save-state error'; }
-        console.error('Task autosave failed:', err);
-      }), 500);
+      autosaveTimer = setTimeout(() => saveChanges().catch(err => showTaskSaveError(err, 'Task autosave failed')), 500);
     };
     $('#drawer-title').oninput = queueAutosave;
     $('#drawer-desc').onblur = async () => {
@@ -1557,9 +1579,7 @@ async function openTaskDrawer(taskId) {
       try {
         await saveChanges();
       } catch (err) {
-        const saveState = $('#drawer-save-state');
-        if (saveState) { saveState.textContent = 'Save failed'; saveState.className = 'drawer-save-state error'; }
-        console.error('Description save failed:', err);
+        showTaskSaveError(err, 'Description save failed');
       }
     };
     $('#drawer-assignee').onchange = queueAutosave;
@@ -1572,7 +1592,11 @@ async function openTaskDrawer(taskId) {
     $('#drawer-work-mode').onchange = queueAutosave;
     $('#btn-save-task').onclick = async () => {
       clearTimeout(autosaveTimer);
-      await saveChanges();
+      try {
+        await saveChanges();
+      } catch (err) {
+        showTaskSaveError(err, 'Task save failed');
+      }
     };
     const checkinControls = $('#task-checkin-controls');
     const currentCheckin = (task.checkin_users || []).find(user => Number(user.id) === Number(ME?.id));
@@ -2109,7 +2133,7 @@ async function loadTrackingTimeline(userId, selectedButton, selectedDate = today
 // ================= ADMINISTRATIVE CORE VIEW MODULE =================
 async function renderAdmin() {
   try {
-    const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess, paymentAccess, deviceAccess, myDeviceAccess, projectActionAccess, taskCheckinAccess] = await Promise.all([api('/auth/users'), api('/auth/settings'), api('/auth/departments'), api('/auth/reimbursement-access'), api('/auth/activity'), api('/attendance/tracking-access'), api('/attendance/verification-access'), api('/payment-history/access'), api('/attendance/device-access'), api('/attendance/device-access/me'), api('/project-action-access'), api('/task-checkin-access')]);
+    const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess, paymentAccess, deviceAccess, myDeviceAccess, projectActionAccess, taskCheckinAccess, taskWorkModeAccess] = await Promise.all([api('/auth/users'), api('/auth/settings'), api('/auth/departments'), api('/auth/reimbursement-access'), api('/auth/activity'), api('/attendance/tracking-access'), api('/attendance/verification-access'), api('/payment-history/access'), api('/attendance/device-access'), api('/attendance/device-access/me'), api('/project-action-access'), api('/task-checkin-access'), api('/task-work-mode-access')]);
     const verificationByUser = new Map(verificationAccess.map(person => [Number(person.id), Number(person.verification_required) === 1]));
     const wrap = $('#admin-content');
     if (!wrap) return;
@@ -2158,6 +2182,12 @@ async function renderAdmin() {
         <h3>Task check-in / check-out access</h3>
         <p class="hint">Enable employees who must use GPS check-in and check-out when they are assigned an on-field task.</p>
         <div id="task-checkin-access-list"></div>
+      </div>
+
+      <div class="admin-block">
+        <h3>Task work location access</h3>
+        <p class="hint">Allow selected employees to change a task between Office and On-field. Admins can always change this setting.</p>
+        <div id="task-work-mode-access-list"></div>
       </div>
 
       <div class="admin-block">
@@ -2214,7 +2244,8 @@ async function renderAdmin() {
       const storageKey = `taskflow-admin-section:${sectionTitle.trim()}`;
       const savedState = localStorage.getItem(storageKey);
       const isExpandedByDefault = sectionTitle.includes('Team members')
-        || sectionTitle.includes('Task check-in / check-out access');
+        || sectionTitle.includes('Task check-in / check-out access')
+        || sectionTitle.includes('Task work location access');
       const isCollapsed = savedState ? savedState === 'collapsed' : !isExpandedByDefault;
       section.classList.toggle('is-collapsed', isCollapsed);
       const heading = section.querySelector('h3');
@@ -2326,6 +2357,21 @@ async function renderAdmin() {
         try {
           await api(`/task-checkin-access/${checkbox.dataset.taskCheckinUser}`, { method: 'PUT', body: { enabled: checkbox.checked } });
           showAppNotification('Task check-in access updated.');
+        } catch (error) { checkbox.checked = !checkbox.checked; alert(error.message); }
+      };
+    });
+    const taskWorkModeAccessList = $('#task-work-mode-access-list');
+    taskWorkModeAccess.forEach((person) => {
+      const row = document.createElement('div');
+      row.className = 'tracking-access-row';
+      row.innerHTML = `<div><b>${escapeHtml(person.name)}</b><span class="tracking-username">${escapeHtml(person.username)}</span></div><label class="tracking-toggle"><input type="checkbox" ${Number(person.can_change_work_mode) === 1 ? 'checked' : ''} data-task-work-mode-user="${person.id}"><span>Can change Office / On-field</span></label>`;
+      taskWorkModeAccessList.appendChild(row);
+    });
+    $$('[data-task-work-mode-user]').forEach((checkbox) => {
+      checkbox.onchange = async () => {
+        try {
+          await api(`/task-work-mode-access/${checkbox.dataset.taskWorkModeUser}`, { method: 'PUT', body: { enabled: checkbox.checked } });
+          showAppNotification('Task work location access updated.');
         } catch (error) { checkbox.checked = !checkbox.checked; alert(error.message); }
       };
     });

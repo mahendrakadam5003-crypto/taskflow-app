@@ -166,6 +166,12 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       enabled_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
 
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS task_work_mode_access (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      enabled_by INTEGER REFERENCES users(id),
+      enabled_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );`);
+
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS task_checkins (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,

@@ -186,6 +186,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .dashboard-summary { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:12px; margin-top:18px; }
 .dashboard-metric { background:rgba(255,255,255,.88); border:1px solid var(--line); border-radius:10px; padding:15px 17px; box-shadow:0 5px 16px rgba(20,33,61,.035); }
 .dashboard-metric b { display:block; font-size:23px; margin-top:4px; }.dashboard-metric small { color:var(--muted); font-size:12px; }.dashboard-metric.alert b { color:var(--red); }.dashboard-metric.money b { color:var(--green); }
+.dashboard-active-task { display:flex; flex-direction:column; align-items:flex-start; width:100%; color:var(--ink); font:inherit; text-align:left; cursor:pointer; }.dashboard-active-task:hover { border-color:#B9DDC4; background:var(--green-bg); }.dashboard-active-task > b { font-size:17px; }.dashboard-active-task > span { margin-top:4px; color:var(--muted); font-size:12px; }.dashboard-active-task .dashboard-active-task-hint { color:var(--green); font-weight:700; }
 .dashboard-payment-alert span { display:block; margin-top:5px; color:var(--muted); font-size:11px; font-weight:500; }
 .dashboard-metric.storage b { color:var(--blue); }
 .dashboard-progress { width:100%; height:8px; background:rgba(20,33,61,.08); border-radius:999px; overflow:hidden; margin:10px 0 8px; }

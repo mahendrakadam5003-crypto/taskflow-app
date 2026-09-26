@@ -164,6 +164,10 @@ async function canProjectAction(req, action) {
   const row = await db.prepare(`SELECT ${action} AS allowed FROM project_action_access WHERE user_id=?`).get(req.session.userId);
   return row ? Number(row.allowed) === 1 : true;
 }
+async function canChangeTaskWorkMode(req) {
+  if (req.session.role === 'admin') return true;
+  return !!(await db.prepare('SELECT user_id FROM task_work_mode_access WHERE user_id=?').get(req.session.userId));
+}
 async function canAccessTask(taskId, userId, admin = false) {
   if (admin) return true;
   const row = await db.prepare('SELECT project_id, assignee_id FROM tasks WHERE id=?').get(taskId);
@@ -273,6 +277,10 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
     const reimbursementParams = reimbursementWhere ? [req.session.userId] : [];
     const reimbursement = await db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS amount
       FROM reimbursements WHERE status IN ('submitted', 'approved_level_1')${reimbursementWhere}`).get(...reimbursementParams);
+    const activeTask = await db.prepare(`SELECT t.id, t.project_id, t.title, t.customer_name, p.name AS project_name
+      FROM task_checkins c JOIN tasks t ON t.id=c.task_id JOIN projects p ON p.id=t.project_id
+      WHERE c.user_id=? AND c.check_in_at IS NOT NULL AND c.check_out_at IS NULL
+      ORDER BY c.check_in_at DESC LIMIT 1`).get(req.session.userId);
     const paymentAccess = await canViewPaymentHistory(req);
     const paymentAlerts = paymentAccess ? await db.prepare(`SELECT t.id, t.invoice_number, t.invoice_date, t.customer_name, t.total_amount, t.amount_received, p.name AS project_name
       FROM tasks t JOIN projects p ON p.id=t.project_id
@@ -286,6 +294,7 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
       overdue_tasks: taskRows.filter(task => task.due_date && task.due_date < today).length,
       pending_reimbursements: Number(reimbursement?.count || 0),
       pending_reimbursement_amount: Number(reimbursement?.amount || 0),
+      active_task: activeTask || null,
       payment_alert_count: paymentAlerts.length,
       payment_alerts: paymentAlerts.map(row => ({ ...row, pending_amount: Math.max(0, Number(row.total_amount || 0) - Number(row.amount_received || 0)) })),
       storage: req.session.role === 'admin' ? await getStorageUsage() : null
@@ -449,6 +458,29 @@ router.put('/task-checkin-access/:userId', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+router.get('/task-work-mode-access/me', async (req, res) => {
+  res.json({ allowed: await canChangeTaskWorkMode(req) });
+});
+
+router.get('/task-work-mode-access', requireAdmin, async (req, res) => {
+  const rows = await db.prepare(`SELECT u.id, u.name, u.username,
+    CASE WHEN a.user_id IS NULL THEN 0 ELSE 1 END AS can_change_work_mode
+    FROM users u LEFT JOIN task_work_mode_access a ON a.user_id=u.id
+    WHERE u.active=1 ORDER BY u.name`).all();
+  res.json(rows || []);
+});
+
+router.put('/task-work-mode-access/:userId', requireAdmin, async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!userId) return res.status(400).json({ error: 'Valid user is required.' });
+  if (req.body.enabled) {
+    await db.prepare('INSERT OR REPLACE INTO task_work_mode_access (user_id, enabled_by) VALUES (?, ?)').run(userId, req.session.userId);
+  } else {
+    await db.prepare('DELETE FROM task_work_mode_access WHERE user_id=?').run(userId);
+  }
+  res.json({ ok: true });
+});
+
 router.put('/project-action-access/:userId', requireAdmin, async (req, res) => {
   const userId = Number(req.params.userId);
   if (!userId) return res.status(400).json({ error: 'Valid user is required.' });
@@ -557,6 +589,7 @@ router.get('/tasks/search', async (req, res) => {
 router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
   try {
     if (!(await canProjectAction(req, 'create_task'))) return res.status(403).json({ error: 'You do not have permission to create tasks.' });
+    if (req.body.work_mode !== undefined && !(await canChangeTaskWorkMode(req))) return res.status(403).json({ error: 'You do not have permission to choose the task work location. Ask an administrator.' });
     const { title, description, assignee_id, due_date, invoice_number, invoice_date, customer_name, total_amount } = req.body;
     const workMode = req.body.work_mode === 'on_field' ? 'on_field' : 'office';
     if (!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
@@ -584,9 +617,9 @@ router.put('/tasks/:id', async (req, res) => {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
     if (req.body.status !== undefined && !(await canProjectAction(req, 'complete_task'))) return res.status(403).json({ error: 'You do not have permission to complete tasks.' });
     const workModeChangeRequested = req.body.work_mode !== undefined;
-    if (workModeChangeRequested && req.session.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can change the task work location.' });
+    if (workModeChangeRequested && !(await canChangeTaskWorkMode(req))) return res.status(403).json({ error: 'You do not have permission to change the task work location. Ask an administrator.' });
     if (Object.keys(req.body).some(key => !['status', 'work_mode'].includes(key)) && !(await canProjectAction(req, 'edit_task'))) return res.status(403).json({ error: 'You do not have permission to edit tasks.' });
-    const taskBefore = await db.prepare('SELECT title, description, status, assignee_id, due_date, payment_member_id, invoice_number, work_mode, project_id FROM tasks WHERE id=?').get(req.params.id);
+    const taskBefore = await db.prepare('SELECT title, description, status, assignee_id, due_date, payment_member_id, invoice_number, work_mode FROM tasks WHERE id=?').get(req.params.id);
     if (taskBefore.work_mode === 'on_field' && req.session.role !== 'admin' && Object.keys(req.body).some(key => !['status'].includes(key))) {
       const activeCheckin = await db.prepare(`SELECT c.id FROM task_checkin_access a
         JOIN task_checkins c ON c.task_id=? AND c.user_id=a.user_id
@@ -594,6 +627,12 @@ router.put('/tasks/:id', async (req, res) => {
       if (!activeCheckin) return res.status(403).json({ error: 'Check in to this on-field task before editing or updating it.' });
     }
     const nextWorkMode = req.body.work_mode === 'on_field' ? 'on_field' : (req.body.work_mode === 'office' ? 'office' : taskBefore.work_mode || 'office');
+    if (workModeChangeRequested && nextWorkMode === 'office' && taskBefore.work_mode === 'on_field') {
+      const activeCheckin = await db.prepare(`SELECT t.title FROM task_checkins c
+        JOIN tasks t ON t.id=c.task_id
+        WHERE c.task_id=? AND c.check_in_at IS NOT NULL AND c.check_out_at IS NULL LIMIT 1`).get(req.params.id);
+      if (activeCheckin) return res.status(400).json({ error: `Check out of "${activeCheckin.title}" before changing it to Office.` });
+    }
     if (req.body.status === 'done' && taskBefore.work_mode === 'on_field') {
       const incomplete = await db.prepare(`SELECT CASE WHEN t.assignee_id IS NOT NULL
         AND EXISTS (SELECT 1 FROM task_checkin_access a WHERE a.user_id=t.assignee_id)
@@ -680,6 +719,11 @@ router.post('/tasks/:id/check-in', async (req, res) => {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: 'Location is required to check in.' });
     const existing = await db.prepare('SELECT * FROM task_checkins WHERE task_id=? AND user_id=?').get(req.params.id, req.session.userId);
     if (existing?.check_in_at) return res.status(400).json({ error: 'You are already checked in for this task.' });
+    const activeTask = await db.prepare(`SELECT t.title FROM task_checkins c
+      JOIN tasks t ON t.id=c.task_id
+      WHERE c.user_id=? AND c.task_id<>? AND c.check_in_at IS NOT NULL AND c.check_out_at IS NULL
+      LIMIT 1`).get(req.session.userId, req.params.id);
+    if (activeTask) return res.status(400).json({ error: `Check out of "${activeTask.title}" before checking into another task.` });
     const now = new Date().toISOString();
     if (existing) await db.prepare('UPDATE task_checkins SET check_in_at=?, check_in_lat=?, check_in_lng=?, check_out_at=NULL, check_out_lat=NULL, check_out_lng=NULL WHERE id=?').run(now, lat, lng, existing.id);
     else await db.prepare('INSERT INTO task_checkins (task_id,user_id,check_in_at,check_in_lat,check_in_lng) VALUES (?,?,?,?,?)').run(req.params.id, req.session.userId, now, lat, lng);
@@ -708,6 +752,7 @@ router.get('/tasks/:id', async (req, res) => {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
     const task = await db.prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id);
     if (!task) return res.status(404).json({ error: 'Not found' });
+    task.can_change_work_mode = await canChangeTaskWorkMode(req) ? 1 : 0;
     task.subtasks = await db.prepare('SELECT * FROM subtasks WHERE task_id=? ORDER BY position').all(task.id);
     task.comments = await db.prepare('SELECT c.*,u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE task_id=? ORDER BY c.created_at').all(task.id);
     task.comments = task.comments.map(comment => ({
