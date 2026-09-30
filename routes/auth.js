@@ -5,18 +5,39 @@ const { logActivity } = require('../audit');
 
 const router = express.Router();
 
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   if (!req.session || !req.session.userId) {
     return res.status(401).json({ error: 'Not logged in' });
   }
-  next();
+  try {
+    const user = await db.prepare('SELECT role, name, active FROM users WHERE id = ?').get(req.session.userId);
+    if (!user || Number(user.active ?? user.ACTIVE ?? 1) !== 1) {
+      req.session.destroy(() => {});
+      return res.status(401).json({ error: 'Account is inactive. Contact an administrator.' });
+    }
+    req.session.role = String(user.role || user.ROLE);
+    req.session.name = String(user.name || user.NAME);
+    next();
+  } catch (error) {
+    next(error);
+  }
 }
 
-function requireAdmin(req, res, next) {
+async function requireAdmin(req, res, next) {
   if (!req.session || !req.session.userId || req.session.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
   }
-  next();
+  try {
+    const user = await db.prepare('SELECT role, active FROM users WHERE id = ?').get(req.session.userId);
+    if (!user || Number(user.active ?? user.ACTIVE ?? 1) !== 1) {
+      req.session.destroy(() => {});
+      return res.status(401).json({ error: 'Account is inactive. Contact an administrator.' });
+    }
+    if (String(user.role || user.ROLE) !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    next();
+  } catch (error) {
+    next(error);
+  }
 }
 
 // ASYNC LOGIN CONTROLLER: Robust property-safe unwrapper with relaxed status requirements
@@ -38,6 +59,10 @@ router.post('/login', async (req, res) => {
     }
     
     if (!user || typeof user !== 'object') {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    if (Number(user.active ?? user.ACTIVE ?? 1) !== 1) {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
@@ -195,23 +220,34 @@ router.put('/users/:id/reset-password', requireAdmin, async (req, res) => {
 
 router.put('/users/:id', requireAdmin, async (req, res) => {
   try {
-    const { name, department, role, active, password } = req.body;
-    const id = req.params.id;
-    const target = await db.prepare('SELECT name, department, role, active FROM users WHERE id = ?').get(id);
+    const { name, username, department, role, active, password } = req.body;
+    const id = Number(req.params.id);
+    const target = await db.prepare('SELECT name, username, department, role, active FROM users WHERE id = ?').get(id);
+    if (!target) return res.status(404).json({ error: 'User not found.' });
+    const nextActive = active === undefined ? undefined : active === true || Number(active) === 1;
+    if (id === Number(req.session.userId) && nextActive === false) return res.status(400).json({ error: "You can't disable your own account." });
+    if (id === Number(req.session.userId) && role !== undefined && String(role).toLowerCase() !== 'admin') return res.status(400).json({ error: "You can't remove your own admin access." });
+    if (password && String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    const nextName = name === undefined ? undefined : String(name).trim();
+    const nextUsername = username === undefined ? undefined : String(username).trim().toLowerCase();
+    if (nextName === '') return res.status(400).json({ error: 'Employee name cannot be empty.' });
+    if (nextUsername === '') return res.status(400).json({ error: 'Username cannot be empty.' });
+    if (nextUsername !== undefined) {
+      const duplicate = await db.prepare('SELECT id FROM users WHERE username = ? AND id <> ?').get(nextUsername, id);
+      if (duplicate) return res.status(409).json({ error: 'That username is already in use.' });
+    }
     
-    if (name !== undefined) await db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name, id);
+    if (nextName !== undefined) await db.prepare('UPDATE users SET name = ? WHERE id = ?').run(nextName, id);
+    if (nextUsername !== undefined) await db.prepare('UPDATE users SET username = ? WHERE id = ?').run(nextUsername, id);
     if (department !== undefined) {
       const nextDepartment = String(department).trim();
       await db.prepare('UPDATE users SET department = ? WHERE id = ?').run(nextDepartment, id);
       if (target && String(target.department || '') !== nextDepartment) await logActivity(req, 'Department changed', 'user', id, `${target.name}: ${target.department || 'No department'} -> ${nextDepartment || 'No department'}`, id);
     }
     if (role !== undefined) await db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role === 'admin' ? 'admin' : 'employee', id);
-    if (active !== undefined) await db.prepare('UPDATE users SET active = ? WHERE id = ?').run(active ? 1 : 0, id);
+    if (nextActive !== undefined) await db.prepare('UPDATE users SET active = ? WHERE id = ?').run(nextActive ? 1 : 0, id);
     
-    if (password) { 
-      if (String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' }); 
-      await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(String(password), 10), id); 
-    }
+    if (password) await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(String(password), 10), id);
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -221,8 +257,11 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
 router.delete('/users/:id', requireAdmin, async (req, res) => {
   if (Number(req.params.id) === req.session.userId) return res.status(400).json({ error: "Can't delete your own account" });
   try {
-    await db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
-    res.json({ ok: true });
+    const target = await db.prepare('SELECT name FROM users WHERE id = ?').get(req.params.id);
+    if (!target) return res.status(404).json({ error: 'User not found.' });
+    await db.prepare('UPDATE users SET active = 0 WHERE id = ?').run(req.params.id);
+    await logActivity(req, 'Employee access removed', 'user', req.params.id, target.name, Number(req.params.id));
+    res.json({ ok: true, archived: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

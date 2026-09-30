@@ -118,7 +118,7 @@
       <div id="attendance-history">
         <h2 class="section-title">My attendance history</h2>
         <table class="attn-table">
-          <thead><tr><th>Date</th><th>Punch in</th><th>Punch out</th><th>Location</th></tr></thead>
+          <thead><tr><th>Date</th><th>Punch in</th><th>In device</th><th>Punch out</th><th>Out device</th><th>Location</th></tr></thead>
           <tbody id="attendance-history-table"></tbody>
         </table>
       </div>
@@ -238,6 +238,7 @@
         <label>Billing description</label>
         <div class="billing-details-fields">
           <div class="field-row"><label>Customer</label><input type="text" id="drawer-customer-name" placeholder="Customer name"></div>
+          <div class="field-row"><label>Invoice type</label><select id="drawer-invoice-type"><option value="cash">Cash</option><option value="gst" selected>GST</option><option value="igst">IGST</option></select></div>
           <div class="field-row"><label>Invoice number</label><input type="text" id="drawer-invoice-number" placeholder="Invoice number"></div>
           <div class="field-row"><label>Invoice date</label><input type="date" id="drawer-invoice-date"></div>
           <div class="field-row"><label>Total amount</label><input type="number" id="drawer-total-amount" min="0" step="0.01" placeholder="0.00"></div>

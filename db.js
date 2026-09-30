@@ -126,6 +126,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       created_by INTEGER REFERENCES users(id),
       assignee_id INTEGER REFERENCES users(id),
       due_date TEXT,
+      invoice_type TEXT NOT NULL DEFAULT 'gst',
       invoice_number TEXT,
       invoice_date TEXT,
       customer_name TEXT DEFAULT '',
@@ -143,6 +144,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     );`);
     const taskSchemaColumns = await dbDriverInterface.prepare('PRAGMA table_info(tasks)').all();
     const taskSchemaColumnNames = (taskSchemaColumns || []).map(row => row.name || row.NAME);
+    if (!taskSchemaColumnNames.includes('invoice_type')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN invoice_type TEXT NOT NULL DEFAULT 'gst'");
     if (!taskSchemaColumnNames.includes('invoice_number')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN invoice_number TEXT');
     if (!taskSchemaColumnNames.includes('invoice_date')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN invoice_date TEXT');
     if (!taskSchemaColumnNames.includes('customer_name')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN customer_name TEXT NOT NULL DEFAULT ''");
@@ -219,6 +221,10 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       out_lat REAL, out_lng REAL,
       in_location_text TEXT,
       out_location_text TEXT,
+      in_device_type TEXT,
+      in_device_info TEXT,
+      out_device_type TEXT,
+      out_device_info TEXT,
       location_status TEXT,
       notes TEXT
     );`);
@@ -358,6 +364,10 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     if (!attendanceColumns.includes('out_location_text')) {
       await dbDriverInterface.exec("ALTER TABLE attendance ADD COLUMN out_location_text TEXT");
     }
+    if (!attendanceColumns.includes('in_device_type')) await dbDriverInterface.exec('ALTER TABLE attendance ADD COLUMN in_device_type TEXT');
+    if (!attendanceColumns.includes('in_device_info')) await dbDriverInterface.exec('ALTER TABLE attendance ADD COLUMN in_device_info TEXT');
+    if (!attendanceColumns.includes('out_device_type')) await dbDriverInterface.exec('ALTER TABLE attendance ADD COLUMN out_device_type TEXT');
+    if (!attendanceColumns.includes('out_device_info')) await dbDriverInterface.exec('ALTER TABLE attendance ADD COLUMN out_device_info TEXT');
 
     const rawTaskPragmaRows = await dbDriverInterface.prepare("PRAGMA table_info(tasks)").all();
     const taskColumns = (rawTaskPragmaRows || []).map(row => row.name || row.NAME);

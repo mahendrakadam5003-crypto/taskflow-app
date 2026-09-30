@@ -585,10 +585,11 @@ async function renderPaymentHistory() {
           <label>From <input type="date" id="payment-history-from"></label>
           <label>To <input type="date" id="payment-history-to"></label>
           <label>Member <select id="payment-history-assignee"><option value="">All members</option>${PEOPLE.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('')}</select></label>
+          <label>Invoice type <select id="payment-history-invoice-type"><option value="">All types</option><option value="cash">Cash</option><option value="gst">GST</option><option value="igst">IGST</option></select></label>
           <label>Status <select id="payment-history-status"><option value="">All statuses</option><option value="received">Received</option><option value="not_received">Not received</option><option value="pending">Pending</option></select></label>
           <button class="btn btn-primary" id="payment-history-filter">Filter</button>
         </div>
-          <div class="task-table-wrap" style="overflow-x:auto; margin-top:14px;"><table class="attn-table payment-history-table"><thead><tr><th>Member</th><th>Invoice</th><th>Invoice date</th><th>Customer</th><th>Task / project</th><th>Total</th><th>Status</th><th>Received date</th><th>Received</th><th>Pending</th><th>Save</th></tr></thead><tbody id="payment-history-table"></tbody></table></div>
+          <div class="task-table-wrap" style="overflow-x:auto; margin-top:14px;"><table class="attn-table payment-history-table"><thead><tr><th>Member</th><th>Invoice</th><th>Invoice type</th><th>Invoice date</th><th>Customer</th><th>Task / project</th><th>Total</th><th>Status</th><th>Received date</th><th>Received</th><th>Pending</th><th>Save</th></tr></thead><tbody id="payment-history-table"></tbody></table></div>
       </div>`;
     const table = $('#payment-history-table');
     const renderSummary = async () => {
@@ -596,32 +597,36 @@ async function renderPaymentHistory() {
       if ($('#payment-history-from').value) params.set('from', $('#payment-history-from').value);
       if ($('#payment-history-to').value) params.set('to', $('#payment-history-to').value);
       if ($('#payment-history-assignee').value) params.set('assignee_id', $('#payment-history-assignee').value);
+      if ($('#payment-history-invoice-type').value) params.set('invoice_type', $('#payment-history-invoice-type').value);
       const summary = await api(`/payment-history/summary?${params.toString()}`);
       $('#payment-summary-revenue').textContent = Number(summary.total_revenue || 0).toFixed(2);
       $('#payment-summary-received').textContent = Number(summary.payment_received || 0).toFixed(2);
       $('#payment-summary-pending').textContent = Number(summary.payment_pending || 0).toFixed(2);
       $('#payment-summary-invoices').textContent = `${summary.invoice_count} invoice${summary.invoice_count === 1 ? '' : 's'}`;
       const selectedMember = $('#payment-history-assignee').selectedOptions[0]?.textContent;
-      $('#payment-summary-period').textContent = `${summary.from || summary.to ? `Selected period${summary.from ? ` from ${summary.from}` : ''}${summary.to ? ` to ${summary.to}` : ''}` : 'Last 30 days'}${summary.assignee_id ? ` · ${selectedMember}` : ''}`;
+      const selectedInvoiceType = $('#payment-history-invoice-type').selectedOptions[0]?.textContent;
+      $('#payment-summary-period').textContent = `${summary.from || summary.to ? `Selected period${summary.from ? ` from ${summary.from}` : ''}${summary.to ? ` to ${summary.to}` : ''}` : 'Last 30 days'}${summary.assignee_id ? ` · ${selectedMember}` : ''}${summary.invoice_type ? ` · ${selectedInvoiceType}` : ''}`;
     };
     const renderRows = async () => {
       const params = new URLSearchParams();
       if ($('#payment-history-from').value) params.set('from', $('#payment-history-from').value);
       if ($('#payment-history-to').value) params.set('to', $('#payment-history-to').value);
       if ($('#payment-history-assignee').value) params.set('assignee_id', $('#payment-history-assignee').value);
+      if ($('#payment-history-invoice-type').value) params.set('invoice_type', $('#payment-history-invoice-type').value);
       if ($('#payment-history-status').value) params.set('status', $('#payment-history-status').value);
       try {
         const rows = await api(`/payment-history?${params.toString()}`);
         table.innerHTML = rows.length ? rows.map(row => {
           const selectedMemberId = row.payment_member_id ?? row.assignee_id ?? '';
+          const invoiceTypeLabel = ({ cash: 'Cash', gst: 'GST', igst: 'IGST' })[row.invoice_type] || 'GST';
           return `<tr>
-          <td><select class="payment-row-member" data-id="${row.id}"><option value="">Unassigned</option>${PEOPLE.map(person => `<option value="${person.id}" ${Number(selectedMemberId) === Number(person.id) ? 'selected' : ''}>${escapeHtml(person.name || person.NAME)}</option>`).join('')}</select></td><td><b>${escapeHtml(row.invoice_number)}</b></td><td>${escapeHtml(row.invoice_date || '—')}</td><td>${escapeHtml(row.customer_name || '—')}</td>
+          <td><select class="payment-row-member" data-id="${row.id}"><option value="">Unassigned</option>${PEOPLE.map(person => `<option value="${person.id}" ${Number(selectedMemberId) === Number(person.id) ? 'selected' : ''}>${escapeHtml(person.name || person.NAME)}</option>`).join('')}</select></td><td><b>${escapeHtml(row.invoice_number || '—')}</b></td><td>${invoiceTypeLabel}</td><td>${escapeHtml(row.invoice_date || '—')}</td><td>${escapeHtml(row.customer_name || '—')}</td>
           <td>${escapeHtml(row.title)}<small class="hint">${escapeHtml(row.project_name || '')}</small></td><td>${Number(row.total_amount || 0).toFixed(2)}</td>
           <td><select class="payment-row-status" data-id="${row.id}"><option value="received" ${row.payment_status === 'received' ? 'selected' : ''}>Received</option><option value="not_received" ${row.payment_status === 'not_received' ? 'selected' : ''}>Not received</option><option value="pending" ${row.payment_status === 'pending' ? 'selected' : ''}>Pending</option></select></td>
           <td><input class="payment-row-date" data-id="${row.id}" type="date" value="${escapeHtml(row.payment_received_date || '')}"></td><td><input class="payment-row-received" data-id="${row.id}" type="number" min="0" step="0.01" value="${Number(row.amount_received || 0).toFixed(2)}"></td>
           <td class="payment-pending" data-id="${row.id}">${Number(row.pending_amount || 0).toFixed(2)}</td><td><button class="btn btn-primary btn-sm payment-save" data-id="${row.id}">Save</button></td>
         </tr>`;
-        }).join('') : '<tr><td colspan="10" class="hint" style="text-align:center;padding:15px;">No invoices found.</td></tr>';
+        }).join('') : '<tr><td colspan="12" class="hint" style="text-align:center;padding:15px;">No invoices found.</td></tr>';
         $$('.payment-save').forEach(button => button.onclick = async () => {
           const id = button.dataset.id;
           const received = Number($(`.payment-row-received[data-id="${id}"]`).value || 0);
@@ -630,7 +635,7 @@ async function renderPaymentHistory() {
           await renderRows();
           showAppNotification('Payment history updated.');
         });
-      } catch (error) { table.innerHTML = `<tr><td colspan="11" class="form-error">${escapeHtml(error.message)}</td></tr>`; }
+      } catch (error) { table.innerHTML = `<tr><td colspan="12" class="form-error">${escapeHtml(error.message)}</td></tr>`; }
     };
     $('#payment-history-filter').onclick = async () => { await renderSummary(); await renderRows(); };
     renderSummary().catch(error => console.warn('Payment summary refresh failed:', error.message));
@@ -1306,6 +1311,7 @@ async function showNewTaskDrawer() {
   const due = $('#drawer-due');
   const customerName = $('#drawer-customer-name');
   const invoiceNumber = $('#drawer-invoice-number');
+  const invoiceType = $('#drawer-invoice-type');
   const invoiceDate = $('#drawer-invoice-date');
   const totalAmount = $('#drawer-total-amount');
   const status = $('#drawer-status');
@@ -1321,6 +1327,7 @@ async function showNewTaskDrawer() {
   if (due) { due.value = ''; due.disabled = false; }
   if (customerName) { customerName.value = ''; customerName.disabled = false; }
   if (invoiceNumber) { invoiceNumber.value = ''; invoiceNumber.disabled = false; }
+  if (invoiceType) { invoiceType.value = 'gst'; invoiceType.disabled = false; }
   if (invoiceDate) { invoiceDate.value = ''; invoiceDate.disabled = false; }
   if (totalAmount) { totalAmount.value = ''; totalAmount.disabled = false; }
   if (due) due.removeAttribute('min');
@@ -1353,6 +1360,7 @@ async function showNewTaskDrawer() {
         assignee_id: assignee.value || null,
         due_date: due.value || null,
         customer_name: customerName.value.trim(),
+        invoice_type: invoiceType.value,
         invoice_number: invoiceNumber.value.trim() || null,
         invoice_date: invoiceDate.value || null,
         total_amount: totalAmount.value || 0
@@ -1431,6 +1439,8 @@ async function openTaskDrawer(taskId) {
     $('#drawer-customer-name').disabled = taskActionsLocked;
     $('#drawer-invoice-number').value = task.invoice_number || '';
     $('#drawer-invoice-number').disabled = taskActionsLocked;
+    $('#drawer-invoice-type').value = task.invoice_type || 'gst';
+    $('#drawer-invoice-type').disabled = taskActionsLocked;
     $('#drawer-invoice-date').value = task.invoice_date || '';
     $('#drawer-invoice-date').disabled = taskActionsLocked;
     $('#drawer-total-amount').value = task.total_amount ? Number(task.total_amount).toFixed(2) : '';
@@ -1550,6 +1560,7 @@ async function openTaskDrawer(taskId) {
       assignee_id: $('#drawer-assignee').value || null,
       due_date: $('#drawer-due').value || null,
       customer_name: $('#drawer-customer-name').value.trim(),
+      invoice_type: $('#drawer-invoice-type').value,
       invoice_number: $('#drawer-invoice-number').value.trim() || null,
       invoice_date: $('#drawer-invoice-date').value || null,
       total_amount: $('#drawer-total-amount').value || 0,
@@ -1617,6 +1628,7 @@ async function openTaskDrawer(taskId) {
     $('#drawer-due').onchange = queueAutosave;
     $('#drawer-customer-name').onchange = queueAutosave;
     $('#drawer-invoice-number').onchange = queueAutosave;
+    $('#drawer-invoice-type').onchange = queueAutosave;
     $('#drawer-invoice-date').onchange = queueAutosave;
     $('#drawer-total-amount').onchange = queueAutosave;
     $('#drawer-status').onchange = queueAutosave;
@@ -2059,7 +2071,7 @@ async function renderHistory() {
     const rawRows = await api('/attendance/mine');
     const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
     if (!rows || !rows.length) {
-      table.innerHTML = '<tr><td colspan="4" class="hint" style="text-align:center; padding:15px; color:#888;">No tracking history entries generated.</td></tr>';
+      table.innerHTML = '<tr><td colspan="6" class="hint" style="text-align:center; padding:15px; color:#888;">No tracking history entries generated.</td></tr>';
       return;
     }
     table.innerHTML = rows.map(r => {
@@ -2074,7 +2086,9 @@ async function renderHistory() {
       <tr style="border-bottom: 1px solid #eee;">
         <td style="padding:10px;">${fmtDate(r.date || r.DATE)}</td>
         <td style="padding:10px; color:green;">${fmtTime(r.punch_in || r.PUNCH_IN) || '--'}</td>
+        <td style="padding:10px;">${escapeHtml(r.in_device_info || r.in_device_type || '--')}</td>
         <td style="padding:10px; color:red;">${fmtTime(r.punch_out || r.PUNCH_OUT) || '--'}</td>
+        <td style="padding:10px;">${escapeHtml(r.out_device_info || r.out_device_type || '--')}</td>
         <td style="padding:10px;">
           <small style="display:block; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#555;" title="${escapeHtml(r.location_status || r.LOCATION_STATUS || '')}">
             ${escapeHtml(r.location_status || r.LOCATION_STATUS || '')}
@@ -2310,42 +2324,20 @@ async function renderAdmin() {
       users.forEach((u) => {
         const tr = document.createElement('tr');
         tr.style.borderBottom = "1px solid #eee";
-        
-        let actionsHtml = '';
-        if (u.id !== ME.id) {
-          actionsHtml = `
-            <button class="btn btn-secondary btn-sm" style="margin-right:6px;" onclick="adminChangePassword(${u.id}, '${escapeHtml(u.name)}')">Change Password</button>
-            <button class="btn btn-danger btn-sm" onclick="adminRemoveUser(${u.id}, '${escapeHtml(u.name)}')">Remove</button>
-          `;
-        } else {
-          actionsHtml = `
-            <button class="btn btn-secondary btn-sm" onclick="adminChangePassword(${u.id}, '${escapeHtml(u.name)}')">Change Password</button>
-          `;
-        }
-
+        const actionsHtml = `<button class="btn btn-secondary btn-sm admin-edit-user" type="button">Edit</button>`;
         tr.innerHTML = `
           <td style="padding:10px;"><b>${escapeHtml(u.name || u.NAME)}</b></td>
           <td style="padding:10px;">${escapeHtml(u.username || u.USERNAME)}</td>
-          <td style="padding:10px;"><select class="admin-department" data-user-id="${u.id}" style="width:140px; padding:5px;"><option value="">No department</option>${departments.map(department => `<option value="${escapeHtml(department.name || department.NAME)}" ${String(u.department || u.DEPARTMENT || '') === String(department.name || department.NAME) ? 'selected' : ''}>${escapeHtml(department.name || department.NAME)}</option>`).join('')}</select><button class="btn btn-secondary btn-sm admin-save-department" data-user-id="${u.id}" style="margin-left:5px;">Save</button></td>
-          <td style="padding:10px;"><select class="admin-role" data-user-id="${u.id}" style="width:110px; padding:5px;" ${Number(u.id) === Number(ME.id) ? 'disabled' : ''}><option value="employee" ${String(u.role || u.ROLE) === 'employee' ? 'selected' : ''}>Employee</option><option value="admin" ${String(u.role || u.ROLE) === 'admin' ? 'selected' : ''}>Admin</option></select><button class="btn btn-secondary btn-sm admin-save-role" data-user-id="${u.id}" style="margin-left:5px;" ${Number(u.id) === Number(ME.id) ? 'disabled' : ''}>Save</button></td>
-          <td style="padding:10px;"><span class="badge" style="background:#c8e6c9; color:#25602a; padding:4px 8px; border-radius:4px; font-size:12px;">${u.active || u.ACTIVE ? 'Active' : 'Disabled'}</span></td>
+          <td style="padding:10px;">${escapeHtml(u.department || u.DEPARTMENT || 'No department')}</td>
+          <td style="padding:10px;">${escapeHtml(u.role || u.ROLE)}</td>
+          <td style="padding:10px;"><span class="badge" style="background:${Number(u.active ?? u.ACTIVE) === 1 ? '#c8e6c9' : '#eeeeee'}; color:${Number(u.active ?? u.ACTIVE) === 1 ? '#25602a' : '#555'}; padding:4px 8px; border-radius:4px; font-size:12px;">${Number(u.active ?? u.ACTIVE) === 1 ? 'Active' : 'Disabled'}</span></td>
           <td style="padding:10px;"><label class="admin-biometric-toggle"><input type="checkbox" data-verification-user="${u.id}" ${verificationByUser.get(Number(u.id)) ? 'checked' : ''}><span>${verificationByUser.get(Number(u.id)) ? 'Required' : 'Off'}</span></label></td>
           <td style="padding:10px;">${actionsHtml}</td>
         `;
         tbody.appendChild(tr);
+        tr.querySelector('.admin-edit-user').onclick = () => adminEditUser(u, departments);
       });
     }
-    $$('.admin-save-role').forEach(button => {
-      button.onclick = async () => {
-        const userId = button.dataset.userId;
-        const role = button.closest('td')?.querySelector('.admin-role')?.value;
-        try {
-          await api(`/auth/users/${userId}`, { method: 'PUT', body: { role } });
-          showAppNotification(`${role === 'admin' ? 'Admin access granted' : 'Admin access removed'} successfully.`);
-          await renderAdmin();
-        } catch (error) { alert(error.message); }
-      };
-    });
 
     const departmentList = $('#department-list');
     departments.forEach((department) => {
@@ -2418,7 +2410,8 @@ async function renderAdmin() {
     projectActionAccess.forEach((person) => {
       const row = document.createElement('div');
       row.className = 'admin-form-row';
-      row.innerHTML = `<b style="min-width:180px;">${escapeHtml(person.name)}</b><div style="display:flex;flex-wrap:wrap;gap:10px;">${Object.entries(projectActionLabels).map(([action, label]) => `<label><input type="checkbox" data-project-action="${action}" data-project-user="${person.user_id}" ${Number(person[action]) === 1 ? 'checked' : ''}> ${label}</label>`).join('')}</div><button class="btn btn-secondary btn-sm save-project-actions" data-project-user="${person.user_id}">Save</button>`;
+      const isAdmin = person.role === 'admin';
+      row.innerHTML = `<b style="min-width:180px;">${escapeHtml(person.name)}</b><div style="display:flex;flex-wrap:wrap;gap:10px;">${Object.entries(projectActionLabels).map(([action, label]) => `<label><input type="checkbox" data-project-action="${action}" data-project-user="${person.user_id}" ${Number(person[action]) === 1 ? 'checked' : ''} ${isAdmin ? 'disabled' : ''}> ${label}</label>`).join('')}</div><button class="btn btn-secondary btn-sm save-project-actions" data-project-user="${person.user_id}" ${isAdmin ? 'disabled' : ''}>Save</button>`;
       projectActionList.appendChild(row);
     });
     $$('.save-project-actions').forEach((button) => {
@@ -2535,19 +2528,6 @@ async function renderAdmin() {
       };
     });
 
-    $$('.admin-save-department').forEach((button) => {
-      button.onclick = async () => {
-        const input = document.querySelector(`.admin-department[data-user-id="${button.dataset.userId}"]`);
-        try {
-          await api(`/auth/users/${button.dataset.userId}`, { method: 'PUT', body: { department: input.value.trim() } });
-          refreshNotificationsAfterAction();
-          renderAdmin();
-          button.textContent = 'Saved';
-          setTimeout(() => { button.textContent = 'Save'; }, 1200);
-        } catch (err) { alert(err.message); }
-      };
-    });
-
     $('#admin-settings-save').onclick = async () => {
       const lat = parseFloat($('#admin-lat').value);
       const lng = parseFloat($('#admin-lng').value);
@@ -2611,8 +2591,8 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
       <button class="btn btn-secondary" id="admin-att-export">Export CSV</button>
     </div>
     <div class="task-table-wrap" style="margin-top:14px; overflow-x:auto;">
-      <table class="attn-table" style="min-width:980px;">
-        <thead><tr><th>Employee</th><th>Department</th><th>Date</th><th>Punch in</th><th>Punch-in location</th><th>Punch out</th><th>Punch-out location</th><th>Action</th></tr></thead>
+      <table class="attn-table" style="min-width:1220px;">
+        <thead><tr><th>Employee</th><th>Department</th><th>Date</th><th>Punch in</th><th>In device</th><th>Punch-in location</th><th>Punch out</th><th>Out device</th><th>Punch-out location</th><th>Action</th></tr></thead>
         <tbody id="admin-attendance-table"></tbody>
       </table>
     </div>`;
@@ -2624,7 +2604,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
     const userId = $('#admin-att-employee').value;
     const department = $('#admin-att-department').value;
     if (!from || !to || from > to) {
-      table.innerHTML = '<tr><td colspan="8" class="form-error">Choose a valid date range.</td></tr>';
+      table.innerHTML = '<tr><td colspan="10" class="form-error">Choose a valid date range.</td></tr>';
       return;
     }
     try {
@@ -2635,7 +2615,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
         rows = await api(`/attendance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${userId ? `&user_id=${encodeURIComponent(userId)}` : ''}${department ? `&department=${encodeURIComponent(department)}` : ''}`);
       }
       if (!rows.length) {
-        table.innerHTML = '<tr><td colspan="8" class="hint" style="text-align:center; padding:15px;">No attendance records found.</td></tr>';
+        table.innerHTML = '<tr><td colspan="10" class="hint" style="text-align:center; padding:15px;">No attendance records found.</td></tr>';
         return;
       }
       table.innerHTML = rows.map(row => {
@@ -2651,8 +2631,10 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
           <td>${escapeHtml(departmentName)}</td>
           <td>${escapeHtml(row.date || from)}</td>
           <td>${fmtTime(row.punch_in) || '--'}</td>
+          <td>${escapeHtml(row.in_device_info || row.in_device_type || '--')}</td>
           <td>${escapeHtml(row.in_location_text || (row.punch_in ? 'Location unavailable' : '--'))}</td>
           <td>${fmtTime(row.punch_out) || '--'}</td>
+          <td>${escapeHtml(row.out_device_info || row.out_device_type || '--')}</td>
           <td>${escapeHtml(row.out_location_text || (row.punch_out ? 'Location unavailable' : '--'))}</td>
           <td>${action}</td>
         </tr>`;
@@ -2673,7 +2655,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
         };
       });
     } catch (err) {
-      table.innerHTML = `<tr><td colspan="8" class="form-error">${escapeHtml(err.message)}</td></tr>`;
+      table.innerHTML = `<tr><td colspan="10" class="form-error">${escapeHtml(err.message)}</td></tr>`;
     }
   };
 
@@ -2707,6 +2689,56 @@ function showSelfPasswordModal() {
       reloadWithActionMessage(currentViewName(), 'Password changed successfully.');
     } catch (err) { error.textContent = err.message; }
   };
+}
+
+function adminEditUser(user, departments) {
+  const userId = Number(user.id || user.ID);
+  const isSelf = userId === Number(ME.id);
+  const department = user.department || user.DEPARTMENT || '';
+  const role = user.role || user.ROLE || 'employee';
+  const active = Number(user.active ?? user.ACTIVE) === 1;
+  showModal(`
+    <h3>Edit employee</h3>
+    <div class="form-grid">
+      <label>Employee name<input id="admin-edit-name" value="${escapeHtml(user.name || user.NAME || '')}" autocomplete="name"></label>
+      <label>Username<input id="admin-edit-username" value="${escapeHtml(user.username || user.USERNAME || '')}" autocomplete="username"></label>
+      <label>Department<select id="admin-edit-department"><option value="">No department</option>${departments.map(item => {
+        const name = item.name || item.NAME || '';
+        return `<option value="${escapeHtml(name)}" ${name === department ? 'selected' : ''}>${escapeHtml(name)}</option>`;
+      }).join('')}</select></label>
+      <label>Role<select id="admin-edit-role" ${isSelf ? 'disabled' : ''}><option value="employee" ${role === 'employee' ? 'selected' : ''}>Employee</option><option value="admin" ${role === 'admin' ? 'selected' : ''}>Admin</option></select></label>
+      <label>Account status<select id="admin-edit-active" ${isSelf ? 'disabled' : ''}><option value="1" ${active ? 'selected' : ''}>Active</option><option value="0" ${!active ? 'selected' : ''}>Disabled</option></select></label>
+      <label>New password<input id="admin-edit-password" type="password" placeholder="Leave blank to keep current password" autocomplete="new-password"></label>
+    </div>
+    <div id="admin-edit-error" class="form-error"></div>
+    <div class="modal-actions">
+      ${!isSelf && active ? '<button class="btn btn-danger" id="admin-edit-remove" type="button">Remove user</button>' : ''}
+      <button class="btn btn-secondary" id="admin-edit-cancel" type="button">Cancel</button>
+      <button class="btn btn-primary" id="admin-edit-save" type="button">Save changes</button>
+    </div>`);
+  $('#admin-edit-cancel').onclick = closeModal;
+  $('#admin-edit-save').onclick = async () => {
+    const error = $('#admin-edit-error');
+    const password = $('#admin-edit-password').value;
+    const body = {
+      name: $('#admin-edit-name').value.trim(),
+      username: $('#admin-edit-username').value.trim(),
+      department: $('#admin-edit-department').value,
+      role: isSelf ? role : $('#admin-edit-role').value,
+      active: $('#admin-edit-active').value === '1'
+    };
+    error.textContent = '';
+    if (!body.name || !body.username) { error.textContent = 'Employee name and username are required.'; return; }
+    if (password && password.length < 6) { error.textContent = 'Password must be at least 6 characters long.'; return; }
+    if (password) body.password = password;
+    try {
+      await api(`/auth/users/${userId}`, { method: 'PUT', body });
+      closeModal();
+      showAppNotification('Employee details updated.');
+      await renderAdmin();
+    } catch (err) { error.textContent = err.message; }
+  };
+  $('#admin-edit-remove')?.addEventListener('click', () => adminRemoveUser(userId, user.name || user.NAME || user.username || user.USERNAME));
 }
 
 async function adminChangePassword(userId, userName) {
@@ -2751,7 +2783,7 @@ async function adminChangePassword(userId, userName) {
 async function adminRemoveUser(userId, userName) {
   const confirmed = await confirmModal(
     'Remove Employee?', 
-    `Are you sure you want to permanently drop "${userName}" from the application system databases?`,
+    `Remove ${userName}'s access? Their attendance and task history will be preserved.`,
     'Remove User',
     true
   );
@@ -2760,8 +2792,9 @@ async function adminRemoveUser(userId, userName) {
 
   try {
     await api(`/auth/users/${userId}`, { method: 'DELETE' });
-    alert('User dropped successfully from system registries.');
-    renderAdmin();
+    closeModal();
+    showAppNotification('User access removed; historical records were preserved.');
+    await renderAdmin();
   } catch (err) {
     alert(err.message);
   }

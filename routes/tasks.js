@@ -158,6 +158,7 @@ async function canViewPaymentHistory(req) {
   return !!(await db.prepare('SELECT 1 FROM payment_history_access WHERE user_id=?').get(req.session.userId));
 }
 const PROJECT_ACTIONS = ['create_project', 'edit_project', 'delete_project', 'create_task', 'edit_task', 'delete_task', 'complete_task'];
+const INVOICE_TYPES = ['cash', 'gst', 'igst'];
 async function canProjectAction(req, action) {
   if (req.session.role === 'admin') return true;
   if (!PROJECT_ACTIONS.includes(action)) return false;
@@ -345,7 +346,9 @@ router.get('/payment-history', async (req, res) => {
   const invoiceCondition = `((t.invoice_number IS NOT NULL AND trim(t.invoice_number) <> '')
     OR (t.customer_name IS NOT NULL AND trim(t.customer_name) <> '')
     OR COALESCE(t.total_amount, 0) > 0)`;
-  let sql = `SELECT t.id, t.project_id, t.title, t.invoice_number, t.invoice_date, t.customer_name,
+  const invoiceType = String(req.query.invoice_type || '').trim().toLowerCase();
+  if (invoiceType && !INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invalid invoice type.' });
+  let sql = `SELECT t.id, t.project_id, t.title, t.invoice_type, t.invoice_number, t.invoice_date, t.customer_name,
     t.total_amount, t.payment_status, t.payment_received_date, t.amount_received,
     COALESCE(t.payment_member_id, t.assignee_id) AS payment_member_id,
     p.name AS project_name, member.name AS payment_member_name
@@ -355,6 +358,7 @@ router.get('/payment-history', async (req, res) => {
   if (req.query.to) { sql += ' AND (t.invoice_date IS NULL OR t.invoice_date <= ?)'; params.push(req.query.to); }
   if (req.query.status) { sql += ' AND t.payment_status = ?'; params.push(req.query.status); }
   if (req.query.assignee_id) { sql += ' AND COALESCE(t.payment_member_id, t.assignee_id) = ?'; params.push(Number(req.query.assignee_id)); }
+  if (invoiceType) { sql += ' AND t.invoice_type = ?'; params.push(invoiceType); }
   sql += " ORDER BY COALESCE(t.invoice_date, '9999-12-31') DESC, t.id DESC";
   if (!req.query.from && !req.query.to) sql += ' LIMIT 25';
   const rows = await db.prepare(sql).all(...params);
@@ -367,6 +371,8 @@ router.get('/payment-history/summary', async (req, res) => {
     OR (t.customer_name IS NOT NULL AND trim(t.customer_name) <> '')
     OR COALESCE(t.total_amount, 0) > 0)`];
   const params = [];
+  const invoiceType = String(req.query.invoice_type || '').trim().toLowerCase();
+  if (invoiceType && !INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invalid invoice type.' });
   if (req.query.from || req.query.to) {
     conditions.push('t.invoice_date >= ?', 't.invoice_date <= ?');
     params.push(req.query.from || '0000-01-01', req.query.to || '9999-12-31');
@@ -374,12 +380,13 @@ router.get('/payment-history/summary', async (req, res) => {
     conditions.push("(t.invoice_date IS NULL OR t.invoice_date >= date('now', '-30 days'))", "(t.invoice_date IS NULL OR t.invoice_date <= date('now'))");
   }
   if (req.query.assignee_id) { conditions.push('COALESCE(t.payment_member_id, t.assignee_id) = ?'); params.push(Number(req.query.assignee_id)); }
+  if (invoiceType) { conditions.push('t.invoice_type = ?'); params.push(invoiceType); }
   const row = await db.prepare(`SELECT COUNT(*) AS invoice_count,
       COALESCE(SUM(t.total_amount), 0) AS total_revenue,
       COALESCE(SUM(t.amount_received), 0) AS payment_received,
       COALESCE(SUM(CASE WHEN t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS payment_pending
     FROM tasks t WHERE ${conditions.join(' AND ')}`).get(...params);
-  res.json({ invoice_count: Number(row?.invoice_count || 0), total_revenue: Number(row?.total_revenue || 0), payment_received: Number(row?.payment_received || 0), payment_pending: Number(row?.payment_pending || 0), from: req.query.from || null, to: req.query.to || null, assignee_id: req.query.assignee_id || null });
+  res.json({ invoice_count: Number(row?.invoice_count || 0), total_revenue: Number(row?.total_revenue || 0), payment_received: Number(row?.payment_received || 0), payment_pending: Number(row?.payment_pending || 0), from: req.query.from || null, to: req.query.to || null, assignee_id: req.query.assignee_id || null, invoice_type: invoiceType || null });
 });
 
 router.put('/payment-history/:id', async (req, res) => {
@@ -434,14 +441,14 @@ router.put('/projects/:id/members', async (req, res) => {
 });
 
 router.get('/project-action-access', requireAdmin, async (req, res) => {
-  const rows = await db.prepare(`SELECT u.id AS user_id, u.name, u.username,
-    COALESCE(paa.create_project, 1) AS create_project,
-    COALESCE(paa.edit_project, 1) AS edit_project,
-    COALESCE(paa.delete_project, 0) AS delete_project,
-    COALESCE(paa.create_task, 1) AS create_task,
-    COALESCE(paa.edit_task, 1) AS edit_task,
-    COALESCE(paa.delete_task, 0) AS delete_task,
-    COALESCE(paa.complete_task, 1) AS complete_task
+  const rows = await db.prepare(`SELECT u.id AS user_id, u.name, u.username, u.role,
+    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.create_project, 1) END AS create_project,
+    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.edit_project, 1) END AS edit_project,
+    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.delete_project, 0) END AS delete_project,
+    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.create_task, 1) END AS create_task,
+    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.edit_task, 1) END AS edit_task,
+    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.delete_task, 0) END AS delete_task,
+    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.complete_task, 1) END AS complete_task
     FROM users u LEFT JOIN project_action_access paa ON paa.user_id=u.id
     WHERE u.active=1 ORDER BY u.name`).all();
   res.json(rows || []);
@@ -498,7 +505,9 @@ router.put('/task-work-mode-access/:userId', requireAdmin, async (req, res) => {
 router.put('/project-action-access/:userId', requireAdmin, async (req, res) => {
   const userId = Number(req.params.userId);
   if (!userId) return res.status(400).json({ error: 'Valid user is required.' });
-  const values = PROJECT_ACTIONS.map(action => req.body[action] ? 1 : 0);
+  const target = await db.prepare('SELECT role FROM users WHERE id=? AND active=1').get(userId);
+  if (!target) return res.status(404).json({ error: 'Active user not found.' });
+  const values = PROJECT_ACTIONS.map(action => target.role === 'admin' ? 1 : (req.body[action] ? 1 : 0));
   await db.prepare(`INSERT INTO project_action_access (user_id, ${PROJECT_ACTIONS.join(', ')}, updated_by)
     VALUES (?, ${PROJECT_ACTIONS.map(() => '?').join(', ')}, ?)
     ON CONFLICT(user_id) DO UPDATE SET ${PROJECT_ACTIONS.map(action => `${action}=excluded.${action}`).join(', ')}, updated_by=excluded.updated_by, updated_at=datetime('now')}`)
@@ -604,13 +613,15 @@ router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
   try {
     if (!(await canProjectAction(req, 'create_task'))) return res.status(403).json({ error: 'You do not have permission to create tasks.' });
     if (req.body.work_mode !== undefined && !(await canChangeTaskWorkMode(req))) return res.status(403).json({ error: 'You do not have permission to choose the task work location. Ask an administrator.' });
-    const { title, description, assignee_id, due_date, invoice_number, invoice_date, customer_name, total_amount } = req.body;
+    const { title, description, assignee_id, due_date, invoice_number, invoice_date, invoice_type, customer_name, total_amount } = req.body;
     const workMode = req.body.work_mode === 'on_field' ? 'on_field' : 'office';
+    const invoiceType = String(invoice_type || 'gst').trim().toLowerCase();
+    if (!INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invoice type must be Cash, GST, or IGST.' });
     if (!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
     if (assignee_id && !(await canAccessProject(req.params.id, Number(assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
     const normalizedInvoiceNumber = String(invoice_number || '').trim() || null;
-    const info = await db.prepare(`INSERT INTO tasks(project_id,title,description,created_by,assignee_id,due_date,invoice_number,invoice_date,customer_name,total_amount,work_mode)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(req.params.id, title.trim(), String(description || '').trim(), req.session.userId, assignee_id || null, due_date || null, normalizedInvoiceNumber, invoice_date || null, String(customer_name || '').trim(), Math.max(0, Number(total_amount) || 0), workMode);
+    const info = await db.prepare(`INSERT INTO tasks(project_id,title,description,created_by,assignee_id,due_date,invoice_type,invoice_number,invoice_date,customer_name,total_amount,work_mode)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(req.params.id, title.trim(), String(description || '').trim(), req.session.userId, assignee_id || null, due_date || null, invoiceType, normalizedInvoiceNumber, invoice_date || null, String(customer_name || '').trim(), Math.max(0, Number(total_amount) || 0), workMode);
     if (assignee_id && normalizedInvoiceNumber) {
       await db.prepare('UPDATE tasks SET payment_member_id = COALESCE(payment_member_id, ?) WHERE id = ?').run(Number(assignee_id), info.lastInsertRowid);
     }
@@ -662,6 +673,11 @@ router.put('/tasks/:id', async (req, res) => {
     if (req.body.title !== undefined) { updates.push('title=?'); values.push(String(req.body.title).trim()); }
     if (req.body.description !== undefined) { updates.push('description=?'); values.push(String(req.body.description)); }
     if (req.body.due_date !== undefined) { updates.push('due_date=?'); values.push(req.body.due_date || null); }
+    if (req.body.invoice_type !== undefined) {
+      const invoiceType = String(req.body.invoice_type || '').trim().toLowerCase();
+      if (!INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invoice type must be Cash, GST, or IGST.' });
+      updates.push('invoice_type=?'); values.push(invoiceType);
+    }
     if (req.body.invoice_number !== undefined) { updates.push('invoice_number=?'); values.push(String(req.body.invoice_number || '').trim() || null); }
     if (req.body.invoice_date !== undefined) { updates.push('invoice_date=?'); values.push(req.body.invoice_date || null); }
     if (req.body.customer_name !== undefined) { updates.push('customer_name=?'); values.push(String(req.body.customer_name || '').trim()); }
