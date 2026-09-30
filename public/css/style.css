@@ -386,6 +386,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .attn-table tr:last-child td { border-bottom: none; }
 .reimbursement-row { cursor: pointer; }
 .reimbursement-row:hover { background: #FAFAF8; }
+.reimbursement-receipt-links { display: flex; min-width: 110px; flex-direction: column; align-items: flex-start; gap: 4px; }
+.reimbursement-receipt-links a { font-size: 12px; }
 .receipt-gallery { display: flex; flex-wrap: wrap; gap: 10px; }
 .receipt-item { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .receipt-storage-label { color: var(--muted); font-size: 10px; }

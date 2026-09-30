@@ -916,11 +916,17 @@ async function renderReimbursements() {
       renderSummary(rows);
       table.innerHTML = rows.length ? rows.map(row => {
         const canApprove = canReview && ((row.status === 'submitted' && (isAdmin || Number(access.approval_level) === 1)) || (row.status === 'approved_level_1' && (isAdmin || Number(access.approval_level) >= 2)));
+        const receiptItems = Array.isArray(row.receipt_items) ? row.receipt_items : (row.receipt_url ? [{ url: row.receipt_url, original_name: 'View receipt' }] : []);
+        const receiptCell = receiptItems.length
+          ? `<div class="reimbursement-receipt-links">${receiptItems.map((item, index) => item.url
+            ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.original_name || `View receipt ${index + 1}`)}</a>`
+            : `<span class="hint">${escapeHtml(item.original_name || `Receipt ${index + 1}`)} (expired)</span>`).join('')}</div>`
+          : (row.receipt_expired ? '<span class="hint">Attachment expired</span>' : '—');
         return `<tr class="reimbursement-row" data-reimbursement-id="${row.id}">
         ${canReview ? `<td><input type="checkbox" class="reimbursement-select" data-id="${row.id}" ${canApprove ? '' : 'disabled'}></td><td>${escapeHtml(row.user_name)}</td><td>${escapeHtml(row.department || '—')}</td>` : ''}
         <td>${escapeHtml(row.expense_date)}</td><td>${escapeHtml(row.category)}</td><td>${escapeHtml(row.description)}</td>
         <td>${escapeHtml(row.currency)} ${Number(row.amount).toFixed(2)}</td>
-        <td>${row.receipt_url ? `<a href="${row.receipt_url}" target="_blank">View receipt</a>` : (row.receipt_expired ? '<span class="hint">Attachment expired</span>' : '—')}</td>
+        <td>${receiptCell}</td>
         <td><span class="tag">${escapeHtml(row.status)}</span>${row.admin_note ? `<small class="hint">${escapeHtml(row.admin_note)}</small>` : ''}</td>
         ${canReview ? `<td>${canApprove ? `<button class="btn btn-primary btn-sm reimbursement-action" data-id="${row.id}" data-status="approved">Approve</button> <button class="btn btn-danger btn-sm reimbursement-action" data-id="${row.id}" data-status="rejected">Reject</button>` : row.status === 'approved' && canPay ? `<button class="btn btn-secondary btn-sm reimbursement-action" data-id="${row.id}" data-status="paid">Mark paid</button>` : '—'}</td>` : ''}
       </tr>`;
@@ -996,6 +1002,10 @@ async function renderReimbursements() {
       const response = await fetch('/api/reimbursements', { method: 'POST', body: formData, credentials: 'same-origin' });
       const result = await response.json();
       if (!response.ok) { $('#reimbursement-form-error').textContent = result.error || 'Unable to submit claim.'; return; }
+      $('#reimbursement-form').reset();
+      $('#reimbursement-date').value = todayISO();
+      $('#reimbursement-receipt').value = '';
+      $('#reimbursement-form-error').textContent = '';
       $('#reimbursement-form-success').textContent = 'Expense submitted successfully.';
       $('#employee-reimbursement-form').classList.add('hidden');
       $('#employee-reimbursement-overview').classList.remove('hidden');
