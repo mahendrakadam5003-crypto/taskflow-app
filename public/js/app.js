@@ -1979,8 +1979,20 @@ function currentDeviceType() {
   return isPhoneDevice() ? 'phone' : 'laptop';
 }
 
+function getAttendanceDeviceId() {
+  const storageKey = `taskflow-attendance-device:${ME.id}`;
+  let deviceId = localStorage.getItem(storageKey);
+  if (!deviceId) {
+    const bytes = new Uint8Array(24);
+    window.crypto.getRandomValues(bytes);
+    deviceId = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    localStorage.setItem(storageKey, deviceId);
+  }
+  return deviceId;
+}
+
 async function getPunchDevicePayload() {
-  const payload = { device_type: currentDeviceType() };
+  const payload = { device_type: currentDeviceType(), device_id: getAttendanceDeviceId() };
   try {
     const details = await navigator.userAgentData?.getHighEntropyValues?.(['model']);
     if (details?.model && !/^k$/i.test(details.model.trim())) payload.device_model = details.model.trim();
@@ -1994,13 +2006,71 @@ async function renderPunchCard() {
   const card = $('#punch-card-container');
   if (!card) return;
   try {
-    const [status, deviceAccess] = await Promise.all([api('/attendance/today'), api('/attendance/device-access/me')]);
+    const deviceId = getAttendanceDeviceId();
+    const [status, deviceAccess, registration] = await Promise.all([
+      api('/attendance/today'),
+      api('/attendance/device-access/me'),
+      api(`/attendance/device-registration/me?device_id=${encodeURIComponent(deviceId)}`)
+    ]);
     if (!deviceAccess[`allow_${currentDeviceType()}`]) {
       card.innerHTML = `<div class="admin-block attendance-phone-only"><b>Attendance is disabled on this device</b><p class="hint">Ask an administrator to allow punching from your ${currentDeviceType()}.</p></div>`;
       return;
     }
+    if (!registration.registered) {
+      card.innerHTML = `<div class="admin-block attendance-device-enrollment"><b>Register this device</b><p class="hint">Name the phone or computer you use for attendance. This account can punch only from this browser until an administrator resets the device.</p><label>Device name<input id="attendance-device-name" maxlength="60" placeholder="For example, Amit's Pixel"></label><button class="btn btn-primary" id="attendance-device-register" type="button">Register device</button><div class="form-error" id="attendance-device-error"></div></div>`;
+      $('#attendance-device-register').onclick = async (event) => {
+        const button = event.currentTarget;
+        const error = $('#attendance-device-error');
+        const deviceName = $('#attendance-device-name').value.trim();
+        if (!deviceName) { error.textContent = 'Enter a name for this device.'; return; }
+        button.disabled = true;
+        try {
+          const devicePayload = await getPunchDevicePayload();
+          await api('/attendance/device-registration/register', { method: 'POST', body: { ...devicePayload, device_name: deviceName } });
+          await renderPunchCard();
+        } catch (err) { error.textContent = err.message; button.disabled = false; }
+      };
+      return;
+    }
+    if (!registration.is_current_device) {
+      card.innerHTML = `<div class="admin-block attendance-phone-only"><b>This account is registered to ${escapeHtml(registration.device_name || 'another device')}</b><p class="hint">Punching from this browser is blocked. Ask an administrator to reset your registered device.${registration.can_manage ? ' You have permission to move your enrollment to this browser.' : ''}</p>${registration.can_manage ? '<button class="btn btn-secondary" id="attendance-device-self-reset" type="button">Reset my device</button>' : ''}<div class="form-error" id="attendance-device-error"></div></div>`;
+      $('#attendance-device-self-reset')?.addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+        const confirmed = await confirmModal('Reset registered device?', 'This removes the current device binding so this browser can be registered instead.', 'Reset device', true);
+        if (!confirmed) return;
+        button.disabled = true;
+        try {
+          await api('/attendance/device-registration/me', { method: 'DELETE' });
+          await renderPunchCard();
+        } catch (err) { $('#attendance-device-error').textContent = err.message; button.disabled = false; }
+      });
+      return;
+    }
+    const registeredDeviceSummary = `<div class="attendance-registered-device"><span>Registered device</span><b>${escapeHtml(registration.device_name)}</b>${registration.can_manage ? `<div class="attendance-device-edit"><input id="attendance-device-rename" maxlength="60" value="${escapeHtml(registration.device_name)}" aria-label="Registered device name"><button class="btn btn-secondary btn-sm" id="attendance-device-rename-save" type="button">Save name</button><button class="btn btn-danger btn-sm" id="attendance-device-self-reset" type="button">Reset</button></div>` : ''}</div>`;
+    card.innerHTML = registeredDeviceSummary;
+    $('#attendance-device-rename-save')?.addEventListener('click', async () => {
+      const button = $('#attendance-device-rename-save');
+      const deviceName = $('#attendance-device-rename').value.trim();
+      if (!deviceName) return alert('Enter a name for this device.');
+      button.disabled = true;
+      try {
+        const devicePayload = await getPunchDevicePayload();
+        await api('/attendance/device-registration/register', { method: 'POST', body: { ...devicePayload, device_name: deviceName } });
+        await renderPunchCard();
+      } catch (err) { alert(err.message); button.disabled = false; }
+    });
+    $('#attendance-device-self-reset')?.addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      const confirmed = await confirmModal('Reset registered device?', 'This removes the current device binding so another browser can be registered.', 'Reset device', true);
+      if (!confirmed) return;
+      button.disabled = true;
+      try {
+        await api('/attendance/device-registration/me', { method: 'DELETE' });
+        await renderPunchCard();
+      } catch (err) { alert(err.message); button.disabled = false; }
+    });
     if (!status) {
-      card.innerHTML = `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`;
+      card.insertAdjacentHTML('beforeend', `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`);
       $('#btn-punch-in').onclick = async () => {
         try {
           await verifyAttendanceIfRequired('in');
@@ -2011,7 +2081,7 @@ async function renderPunchCard() {
         } catch (err) { alert(err.message); }
       };
     } else if (!status.punch_in) {
-      card.innerHTML = `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`;
+      card.insertAdjacentHTML('beforeend', `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`);
       $('#btn-punch-in').onclick = async () => {
         try {
           await verifyAttendanceIfRequired('in');
@@ -2023,11 +2093,11 @@ async function renderPunchCard() {
       };
     } else if (status.punch_in && !status.punch_out) {
       startLiveTracking();
-      card.innerHTML = `
+      card.insertAdjacentHTML('beforeend', `
         <div class="status-alert" style="background:#e3f2fd; color:#0d47a1; padding:12px; border-radius:4px; margin-bottom:10px; font-weight:bold; text-align:center;">
           ⚡ On-Duty Since: ${fmtTime(status.punch_in)}<br><small>📍 Live location active</small>
         </div>
-        <button class="btn btn-danger btn-lg" id="btn-punch-out" style="width:100%; padding:15px; font-size:18px;">🏁 Punch Out Field Shift</button>`;
+        <button class="btn btn-danger btn-lg" id="btn-punch-out" style="width:100%; padding:15px; font-size:18px;">🏁 Punch Out Field Shift</button>`);
       $('#btn-punch-out').onclick = async () => {
         try {
           await verifyAttendanceIfRequired('out');
@@ -2040,10 +2110,10 @@ async function renderPunchCard() {
       };
     } else {
       stopLiveTracking();
-      card.innerHTML = `
+      card.insertAdjacentHTML('beforeend', `
         <div class="status-complete" style="background:#e8f5e9; color:#1b5e20; padding:15px; border-radius:4px; font-weight:bold; text-align:center;">
           ✅ Today's Shift Completed (${fmtTime(status.punch_in)} - ${fmtTime(status.punch_out)})
-        </div>`;
+        </div>`);
     }
   } catch (err) {
     card.innerHTML = `<div class="form-error">Failed to sync tracker parameters: ${err.message}</div>`;
@@ -2445,10 +2515,12 @@ async function renderAdmin() {
     deviceAccess.forEach((person) => {
       const row = document.createElement('div');
       row.className = 'admin-form-row';
-      row.innerHTML = `<b style="min-width:180px;">${escapeHtml(person.name)}</b>
+      row.innerHTML = `<div class="attendance-device-admin-person"><b>${escapeHtml(person.name)}</b><span>${escapeHtml(person.registered_device_name || 'No device registered')}</span>${person.registered_device_info ? `<small>${escapeHtml(person.registered_device_info)}</small>` : ''}</div>
         <label><input type="checkbox" data-device-phone="${person.id}" ${Number(person.allow_phone) === 1 ? 'checked' : ''}> Phone</label>
         <label><input type="checkbox" data-device-laptop="${person.id}" ${Number(person.allow_laptop) === 1 ? 'checked' : ''}> Laptop</label>
-        <button class="btn btn-secondary btn-sm save-device-access" data-device-user="${person.id}">Save</button>`;
+        <label><input type="checkbox" data-device-manage="${person.id}" ${Number(person.can_manage_device) === 1 ? 'checked' : ''}> Can manage own registered device</label>
+        <button class="btn btn-secondary btn-sm save-device-access" data-device-user="${person.id}">Save access</button>
+        ${person.registered_device_name ? `<button class="btn btn-danger btn-sm reset-attendance-device" data-device-user="${person.id}" data-device-name="${escapeHtml(person.registered_device_name)}" type="button">Reset device</button>` : ''}`;
       deviceAccessList.appendChild(row);
     });
     $$('[data-device-phone], [data-device-laptop]').forEach((checkbox) => {
@@ -2465,9 +2537,22 @@ async function renderAdmin() {
         const row = button.closest('.admin-form-row');
         const phone = row.querySelector(`[data-device-phone="${userId}"]`);
         const laptop = row.querySelector(`[data-device-laptop="${userId}"]`);
+        const manage = row.querySelector(`[data-device-manage="${userId}"]`);
         try {
           await api(`/attendance/device-access/${userId}`, { method: 'PUT', body: { allow_phone: phone.checked, allow_laptop: laptop.checked } });
+          await api(`/attendance/device-registration/access/${userId}`, { method: 'PUT', body: { allowed: manage.checked } });
           showAppNotification('Attendance device access updated.');
+        } catch (error) { alert(error.message); }
+      };
+    });
+    $$('.reset-attendance-device').forEach(button => {
+      button.onclick = async () => {
+        const confirmed = await confirmModal('Reset attendance device?', `Reset ${button.dataset.deviceName}'s registered device? Their next punch must register a device again.`, 'Reset device', true);
+        if (!confirmed) return;
+        try {
+          await api(`/attendance/device-registration/${button.dataset.deviceUser}`, { method: 'DELETE' });
+          showAppNotification('Registered attendance device reset.');
+          await renderAdmin();
         } catch (error) { alert(error.message); }
       };
     });
@@ -2606,8 +2691,8 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
       <button class="btn btn-secondary" id="admin-att-export">Export CSV</button>
     </div>
     <div class="task-table-wrap" style="margin-top:14px; overflow-x:auto;">
-      <table class="attn-table" style="min-width:1220px;">
-        <thead><tr><th>Employee</th><th>Department</th><th>Date</th><th>Punch in</th><th>In device</th><th>Punch-in location</th><th>Punch out</th><th>Out device</th><th>Punch-out location</th><th>Action</th></tr></thead>
+      <table class="attn-table" style="min-width:1380px;">
+        <thead><tr><th>Employee</th><th>Department</th><th>Registered device</th><th>Date</th><th>Punch in</th><th>In device</th><th>Punch-in location</th><th>Punch out</th><th>Out device</th><th>Punch-out location</th><th>Action</th></tr></thead>
         <tbody id="admin-attendance-table"></tbody>
       </table>
     </div>`;
@@ -2619,7 +2704,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
     const userId = $('#admin-att-employee').value;
     const department = $('#admin-att-department').value;
     if (!from || !to || from > to) {
-      table.innerHTML = '<tr><td colspan="10" class="form-error">Choose a valid date range.</td></tr>';
+      table.innerHTML = '<tr><td colspan="11" class="form-error">Choose a valid date range.</td></tr>';
       return;
     }
     try {
@@ -2630,7 +2715,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
         rows = await api(`/attendance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${userId ? `&user_id=${encodeURIComponent(userId)}` : ''}${department ? `&department=${encodeURIComponent(department)}` : ''}`);
       }
       if (!rows.length) {
-        table.innerHTML = '<tr><td colspan="10" class="hint" style="text-align:center; padding:15px;">No attendance records found.</td></tr>';
+        table.innerHTML = '<tr><td colspan="11" class="hint" style="text-align:center; padding:15px;">No attendance records found.</td></tr>';
         return;
       }
       table.innerHTML = rows.map(row => {
@@ -2644,6 +2729,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
         return `<tr>
           <td><b>${escapeHtml(name)}</b></td>
           <td>${escapeHtml(departmentName)}</td>
+          <td>${escapeHtml(row.registered_device_name || '--')}</td>
           <td>${escapeHtml(row.date || from)}</td>
           <td>${fmtTime(row.punch_in) || '--'}</td>
           <td>${escapeHtml(row.in_device_info || row.in_device_type || '--')}</td>
@@ -2671,7 +2757,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
         };
       });
     } catch (err) {
-      table.innerHTML = `<tr><td colspan="10" class="form-error">${escapeHtml(err.message)}</td></tr>`;
+      table.innerHTML = `<tr><td colspan="11" class="form-error">${escapeHtml(err.message)}</td></tr>`;
     }
   };
 

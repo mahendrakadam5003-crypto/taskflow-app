@@ -265,6 +265,21 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
 
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS attendance_registered_devices (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      device_token_hash TEXT NOT NULL,
+      device_name TEXT NOT NULL,
+      device_info TEXT NOT NULL DEFAULT '',
+      registered_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );`);
+
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS attendance_device_management_access (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      granted_by INTEGER REFERENCES users(id),
+      granted_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );`);
+
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS reimbursements (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id),

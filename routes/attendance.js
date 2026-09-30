@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const db = require('../db');
 const axios = require('axios'); // Added axios to make the free API call
 const { requireAuth, requireAdmin } = require('./auth');
@@ -37,6 +38,32 @@ function getPunchDevice(req, reportedModel) {
   else if (/Chrome\//i.test(userAgent)) browserName = 'Chrome';
   else if (/Safari\//i.test(userAgent)) browserName = 'Safari';
   return { type: isPhone ? 'phone' : 'laptop', info: `${deviceName} · ${browserName}` };
+}
+
+function getDeviceTokenHash(deviceId) {
+  return crypto.createHash('sha256').update(String(deviceId)).digest('hex');
+}
+
+function isValidDeviceId(deviceId) {
+  return typeof deviceId === 'string' && /^[a-zA-Z0-9-]{32,100}$/.test(deviceId);
+}
+
+async function checkRegisteredDevice(req, res) {
+  const deviceId = req.body.device_id;
+  if (!isValidDeviceId(deviceId)) {
+    res.status(400).json({ error: 'This browser has no device ID. Reload the page and register this device.', code: 'DEVICE_REGISTRATION_REQUIRED' });
+    return false;
+  }
+  const registration = await db.prepare('SELECT device_token_hash, device_name FROM attendance_registered_devices WHERE user_id=?').get(req.session.userId);
+  if (!registration) {
+    res.status(409).json({ error: 'Register a named device before punching in.', code: 'DEVICE_REGISTRATION_REQUIRED' });
+    return false;
+  }
+  if (registration.device_token_hash !== getDeviceTokenHash(deviceId)) {
+    res.status(403).json({ error: `This account is registered to "${registration.device_name}". Ask an administrator to reset the device before punching from another one.`, code: 'DEVICE_MISMATCH' });
+    return false;
+  }
+  return true;
 }
 
 async function canPunchFromDevice(userId, deviceType) {
@@ -111,10 +138,88 @@ router.get('/device-access/me', async (req, res) => {
 router.get('/device-access', requireAdmin, async (req, res) => {
   const rows = await db.prepare(`SELECT u.id, u.name, u.username,
     COALESCE(ada.allow_phone, 1) AS allow_phone,
-    COALESCE(ada.allow_laptop, 0) AS allow_laptop
+    COALESCE(ada.allow_laptop, 0) AS allow_laptop,
+    rd.device_name AS registered_device_name, rd.device_info AS registered_device_info, rd.registered_at,
+    CASE WHEN dma.user_id IS NULL THEN 0 ELSE 1 END AS can_manage_device
     FROM users u LEFT JOIN attendance_device_access ada ON ada.user_id = u.id
+    LEFT JOIN attendance_registered_devices rd ON rd.user_id=u.id
+    LEFT JOIN attendance_device_management_access dma ON dma.user_id=u.id
     WHERE u.active = 1 ORDER BY u.name`).all();
   res.json(rows || []);
+});
+
+router.get('/device-registration/me', async (req, res) => {
+  const deviceId = String(req.query.device_id || '');
+  const [registration, access] = await Promise.all([
+    db.prepare('SELECT device_token_hash, device_name, device_info, registered_at FROM attendance_registered_devices WHERE user_id=?').get(req.session.userId),
+    db.prepare('SELECT user_id FROM attendance_device_management_access WHERE user_id=?').get(req.session.userId)
+  ]);
+  res.json({
+    registered: !!registration,
+    device_name: registration?.device_name || null,
+    device_info: registration?.device_info || null,
+    registered_at: registration?.registered_at || null,
+    is_current_device: !!registration && isValidDeviceId(deviceId) && registration.device_token_hash === getDeviceTokenHash(deviceId),
+    can_manage: req.session.role === 'admin' || !!access
+  });
+});
+
+router.post('/device-registration/register', async (req, res) => {
+  const deviceId = req.body.device_id;
+  const deviceName = String(req.body.device_name || '').trim().slice(0, 60);
+  if (!isValidDeviceId(deviceId)) return res.status(400).json({ error: 'Invalid browser device ID. Reload TaskFlow and try again.' });
+  if (!deviceName) return res.status(400).json({ error: 'Enter a name for this device.' });
+  const tokenHash = getDeviceTokenHash(deviceId);
+  const existing = await db.prepare('SELECT device_token_hash, device_name FROM attendance_registered_devices WHERE user_id=?').get(req.session.userId);
+  if (existing && existing.device_token_hash !== tokenHash) {
+    return res.status(403).json({ error: `This account is already registered to "${existing.device_name}". Ask an administrator to reset it before using another device.` });
+  }
+  const canManage = req.session.role === 'admin' || !!(await db.prepare('SELECT user_id FROM attendance_device_management_access WHERE user_id=?').get(req.session.userId));
+  if (existing && existing.device_name !== deviceName && !canManage) {
+    return res.status(403).json({ error: 'You do not have permission to rename your registered device.' });
+  }
+  if (existing) {
+    await db.prepare('UPDATE attendance_registered_devices SET device_name=?, device_info=?, updated_at=datetime(\'now\') WHERE user_id=?')
+      .run(deviceName, getPunchDevice(req, req.body.device_model).info, req.session.userId);
+  } else {
+    try {
+      await db.prepare('INSERT INTO attendance_registered_devices (user_id, device_token_hash, device_name, device_info) VALUES (?, ?, ?, ?)')
+        .run(req.session.userId, tokenHash, deviceName, getPunchDevice(req, req.body.device_model).info);
+    } catch (error) {
+      return res.status(409).json({ error: 'Device registration changed in another request. Reload and try again.' });
+    }
+  }
+  await logActivity(req, existing ? 'Attendance device renamed' : 'Attendance device registered', 'user', req.session.userId, deviceName, req.session.userId);
+  res.json({ ok: true, device_name: deviceName });
+});
+
+router.delete('/device-registration/me', async (req, res) => {
+  const allowed = req.session.role === 'admin' || !!(await db.prepare('SELECT user_id FROM attendance_device_management_access WHERE user_id=?').get(req.session.userId));
+  if (!allowed) return res.status(403).json({ error: 'Only an administrator can reset your registered device.' });
+  await db.prepare('DELETE FROM attendance_registered_devices WHERE user_id=?').run(req.session.userId);
+  await logActivity(req, 'Attendance device reset by user', 'user', req.session.userId, req.session.name || '', req.session.userId);
+  res.json({ ok: true });
+});
+
+router.put('/device-registration/access/:userId', requireAdmin, async (req, res) => {
+  const userId = Number(req.params.userId);
+  const target = await db.prepare('SELECT id FROM users WHERE id=? AND active=1').get(userId);
+  if (!target) return res.status(404).json({ error: 'Active user not found.' });
+  if (req.body.allowed) {
+    await db.prepare('INSERT OR REPLACE INTO attendance_device_management_access (user_id, granted_by) VALUES (?, ?)').run(userId, req.session.userId);
+  } else {
+    await db.prepare('DELETE FROM attendance_device_management_access WHERE user_id=?').run(userId);
+  }
+  res.json({ ok: true });
+});
+
+router.delete('/device-registration/:userId', requireAdmin, async (req, res) => {
+  const userId = Number(req.params.userId);
+  const target = await db.prepare('SELECT name FROM users WHERE id=? AND active=1').get(userId);
+  if (!target) return res.status(404).json({ error: 'Active user not found.' });
+  await db.prepare('DELETE FROM attendance_registered_devices WHERE user_id=?').run(userId);
+  await logActivity(req, 'Attendance device reset by admin', 'user', userId, target.name, userId);
+  res.json({ ok: true });
 });
 
 router.put('/device-access/:userId', requireAdmin, async (req, res) => {
@@ -150,6 +255,7 @@ router.put('/verification-access/:userId', requireAdmin, async (req, res) => {
 // PUNCH IN ROUTE WITH AUTOMATIC LOCATION NAMING
 router.post('/punch-in', async (req, res) => {
   const { lat, lng } = req.body;
+  if (!(await checkRegisteredDevice(req, res))) return;
   const device = getPunchDevice(req, req.body.device_model);
   const deviceType = device.type;
   if (!(await canPunchFromDevice(req.session.userId, deviceType))) return res.status(403).json({ error: 'Punching from this device is not allowed. Ask an admin to enable it.' });
@@ -204,6 +310,7 @@ router.post('/location-update', async (req, res) => {
 // PUNCH OUT ROUTE WITH AUTOMATIC LOCATION NAMING
 router.post('/punch-out', async (req, res) => {
   const { lat, lng } = req.body;
+  if (!(await checkRegisteredDevice(req, res))) return;
   const device = getPunchDevice(req, req.body.device_model);
   const deviceType = device.type;
   if (!(await canPunchFromDevice(req.session.userId, deviceType))) return res.status(403).json({ error: 'Punching from this device is not allowed. Ask an admin to enable it.' });
@@ -237,9 +344,11 @@ router.get('/overview', requireAdmin, async (req, res) => {
            a.id, a.date, a.punch_in, a.punch_out, a.in_lat, a.in_lng,
            a.out_lat, a.out_lng, a.in_location_text, a.out_location_text,
            a.in_device_type, a.in_device_info, a.out_device_type, a.out_device_info,
+          rd.device_name AS registered_device_name, rd.device_info AS registered_device_info,
            a.location_status, a.notes
     FROM users u
     LEFT JOIN attendance a ON a.user_id = u.id AND a.date = ?
+        LEFT JOIN attendance_registered_devices rd ON rd.user_id=u.id
     WHERE u.active = 1`;
   const params = [date];
   if (user_id) { sql += ' AND u.id = ?'; params.push(user_id); }
@@ -310,7 +419,9 @@ router.get('/mine', async (req, res) => {
 // admin: view all attendance
 router.get('/', requireAdmin, async (req, res) => {
   const { date, from, to, user_id, department } = req.query;
-  let sql = `SELECT a.*, u.name AS user_name, u.department FROM attendance a JOIN users u ON u.id = a.user_id WHERE 1=1`;
+  let sql = `SELECT a.*, u.name AS user_name, u.department, rd.device_name AS registered_device_name, rd.device_info AS registered_device_info
+    FROM attendance a JOIN users u ON u.id = a.user_id
+    LEFT JOIN attendance_registered_devices rd ON rd.user_id=u.id WHERE 1=1`;
   const params = [];
   if (date) { sql += ' AND a.date = ?'; params.push(date); }
   if (from) { sql += ' AND a.date >= ?'; params.push(from); }
