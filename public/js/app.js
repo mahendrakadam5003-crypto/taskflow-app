@@ -929,7 +929,7 @@ async function renderReimbursements() {
         <td>${escapeHtml(row.currency)} ${Number(row.amount).toFixed(2)}</td>
         <td>${receiptCell}</td>
         <td><span class="tag">${escapeHtml(row.status)}</span>${row.admin_note ? `<small class="hint">${escapeHtml(row.admin_note)}</small>` : ''}</td>
-        ${canReview ? `<td>${canApprove ? `<button class="btn btn-primary btn-sm reimbursement-action" data-id="${row.id}" data-status="approved">Approve</button> <button class="btn btn-danger btn-sm reimbursement-action" data-id="${row.id}" data-status="rejected">Reject</button>` : row.status === 'approved' && canPay ? `<button class="btn btn-secondary btn-sm reimbursement-action" data-id="${row.id}" data-status="paid">Mark paid</button>` : '—'}</td>` : ''}
+        ${canReview ? `<td>${canApprove ? `<button class="btn btn-primary btn-sm reimbursement-action" data-id="${row.id}" data-status="approved">Approve</button> <button class="btn btn-danger btn-sm reimbursement-action" data-id="${row.id}" data-status="rejected">Reject</button>` : row.status === 'approved' && canPay ? `<button class="btn btn-secondary btn-sm reimbursement-action" data-id="${row.id}" data-status="paid">Mark paid</button>` : '—'}${isAdmin ? ` <button class="btn btn-danger btn-sm reimbursement-delete" data-id="${row.id}">Delete</button>` : ''}</td>` : ''}
       </tr>`;
       }).join('') : `<tr><td colspan="${isAdmin ? 10 : 7}" class="hint" style="text-align:center; padding:15px;">No reimbursement claims found.</td></tr>`;
       if (canReview) {
@@ -946,6 +946,17 @@ async function renderReimbursements() {
           if (button.dataset.status === 'approved') {
             showAppNotification('Expense has been approved successfully.');
           }
+          await renderRows();
+          await refreshReimbursementSummary();
+          await refreshNotificationsAfterAction();
+        };
+      });
+      $$('.reimbursement-delete').forEach(button => {
+        button.onclick = async (event) => {
+          event.stopPropagation();
+          if (!await confirmModal('Delete expense?', 'This expense will be permanently deleted.', 'Delete', true)) return;
+          await api(`/reimbursements/${button.dataset.id}`, { method: 'DELETE' });
+          showAppNotification('Expense deleted successfully.');
           await renderRows();
           await refreshReimbursementSummary();
           await refreshNotificationsAfterAction();
@@ -1538,7 +1549,7 @@ async function openTaskDrawer(taskId) {
     $('#drawer-desc').disabled = taskActionsLocked;
     $('#drawer-desc').oninput = autoGrowDescription;
     autoGrowDescription();
-    $('#drawer-subtasks').innerHTML = (task.subtasks || []).map(item => `<label class="subtask-row"><input type="checkbox" class="subtask-check" data-subtask-id="${item.id}" ${item.done ? 'checked' : ''} ${taskActionsLocked ? 'disabled' : ''}><span class="subtask-title ${item.done ? 'done' : ''}">${escapeHtml(item.title)}</span><button class="subtask-del" data-subtask-id="${item.id}" title="Delete subtask" ${taskActionsLocked ? 'disabled' : ''}>✕</button></label>`).join('') || '<div class="hint">No subtasks yet.</div>';
+    $('#drawer-subtasks').innerHTML = (task.subtasks || []).map(item => `<label class="subtask-row"><input type="checkbox" class="subtask-check" data-subtask-id="${item.id}" ${item.done ? 'checked' : ''} ${taskActionsLocked ? 'disabled' : ''}><span class="subtask-title ${item.done ? 'done' : ''}">${escapeHtml(item.title)}</span><button class="subtask-del" data-subtask-id="${item.id}" title="Delete subtask" ${taskActionsLocked || !PROJECT_ACTION_ACCESS.delete_task ? 'disabled' : ''}>✕</button></label>`).join('') || '<div class="hint">No subtasks yet.</div>';
     $$('.subtask-check').forEach(input => {
       input.onchange = async () => {
         await api(`/subtasks/${input.dataset.subtaskId}`, { method: 'PUT', body: { done: input.checked } });

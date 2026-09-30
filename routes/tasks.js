@@ -158,12 +158,21 @@ async function canViewPaymentHistory(req) {
   return !!(await db.prepare('SELECT 1 FROM payment_history_access WHERE user_id=?').get(req.session.userId));
 }
 const PROJECT_ACTIONS = ['create_project', 'edit_project', 'delete_project', 'create_task', 'edit_task', 'delete_task', 'complete_task'];
+const PROJECT_ACTION_DEFAULTS = {
+  create_project: true,
+  edit_project: true,
+  delete_project: false,
+  create_task: true,
+  edit_task: true,
+  delete_task: false,
+  complete_task: true
+};
 const INVOICE_TYPES = ['cash', 'gst'];
 async function canProjectAction(req, action) {
   if (req.session.role === 'admin') return true;
   if (!PROJECT_ACTIONS.includes(action)) return false;
   const row = await db.prepare(`SELECT ${action} AS allowed FROM project_action_access WHERE user_id=?`).get(req.session.userId);
-  return row ? Number(row.allowed) === 1 : true;
+  return row ? Number(row.allowed) === 1 : PROJECT_ACTION_DEFAULTS[action];
 }
 async function getTaskCheckinStatus(taskId, userId, admin = false) {
   if (admin) return { required: false, checkedIn: true, hasCheckedIn: true };
@@ -469,7 +478,7 @@ router.get('/project-action-access', requireAdmin, async (req, res) => {
 router.get('/project-action-access/me', async (req, res) => {
   if (req.session.role === 'admin') return res.json(Object.fromEntries(PROJECT_ACTIONS.map(action => [action, true])));
   const row = await db.prepare(`SELECT ${PROJECT_ACTIONS.join(', ')} FROM project_action_access WHERE user_id=?`).get(req.session.userId);
-  res.json(Object.fromEntries(PROJECT_ACTIONS.map(action => [action, row ? Number(row[action]) === 1 : true])));
+  res.json(Object.fromEntries(PROJECT_ACTIONS.map(action => [action, row ? Number(row[action]) === 1 : PROJECT_ACTION_DEFAULTS[action]])));
 });
 
 router.get('/task-checkin-access', requireAdmin, async (req, res) => {
@@ -893,6 +902,7 @@ router.put('/subtasks/:id', async (req, res) => {
 
 router.delete('/subtasks/:id', async (req, res) => {
   try {
+    if (!(await canProjectAction(req, 'delete_task'))) return res.status(403).json({ error: 'You do not have permission to delete tasks.' });
     const subtask = await db.prepare('SELECT task_id FROM subtasks WHERE id=?').get(req.params.id);
     if (!subtask || !(await canAccessTask(subtask.task_id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this subtask' });
     const checkinStatus = await getTaskCheckinStatus(subtask.task_id, req.session.userId, req.session.role === 'admin');

@@ -161,6 +161,18 @@ router.post('/', upload.array('receipt', 10), async (req, res) => {
   }
 });
 
+router.delete('/:id', requireAdmin, async (req, res) => {
+  try {
+    const claim = await db.prepare('SELECT user_id, amount, currency, category FROM reimbursements WHERE id = ?').get(req.params.id);
+    if (!claim) return res.status(404).json({ error: 'Expense not found.' });
+    await logActivity(req, 'Reimbursement deleted', 'reimbursement', req.params.id, `${claim.amount} ${claim.currency} - ${claim.category}`, claim.user_id);
+    await db.prepare('DELETE FROM reimbursements WHERE id = ?').run(req.params.id);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.put('/bulk-status', async (req, res) => {
   const ids = Array.isArray(req.body.ids) ? req.body.ids.map(Number).filter(Number.isInteger) : [];
   if (!ids.length) return res.status(400).json({ error: 'Select at least one reimbursement.' });
