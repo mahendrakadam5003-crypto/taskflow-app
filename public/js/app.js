@@ -932,6 +932,9 @@ async function renderReimbursements() {
         ${canReview ? `<td>${canApprove ? `<button class="btn btn-primary btn-sm reimbursement-action" data-id="${row.id}" data-status="approved">Approve</button> <button class="btn btn-danger btn-sm reimbursement-action" data-id="${row.id}" data-status="rejected">Reject</button>` : row.status === 'approved' && canPay ? `<button class="btn btn-secondary btn-sm reimbursement-action" data-id="${row.id}" data-status="paid">Mark paid</button>` : '—'}</td>` : ''}
       </tr>`;
       }).join('') : `<tr><td colspan="${isAdmin ? 10 : 7}" class="hint" style="text-align:center; padding:15px;">No reimbursement claims found.</td></tr>`;
+      if (canReview) {
+        table.insertAdjacentHTML('beforeend', `<tr class="reimbursement-selection-summary"><td colspan="10" style="text-align:right; font-weight:600;"><span id="reimbursement-selected-count">Selected expenses: 0</span> &nbsp; <span id="reimbursement-selected-total">Total: INR 0.00</span></td></tr>`);
+      }
       $$('.reimbursement-action').forEach(button => {
         button.onclick = async (event) => {
           event.stopPropagation();
@@ -956,9 +959,25 @@ async function renderReimbursements() {
         };
       });
       const selectAll = $('#reimbursement-select-all');
+      const updateSelectedSummary = () => {
+        const selected = $$('.reimbursement-select:checked')
+          .map(input => rows.find(row => String(row.id) === input.dataset.id))
+          .filter(Boolean);
+        const totalsByCurrency = new Map();
+        selected.forEach(row => {
+          const currency = String(row.currency || 'INR');
+          totalsByCurrency.set(currency, (totalsByCurrency.get(currency) || 0) + Number(row.amount || 0));
+        });
+        const total = totalsByCurrency.size
+          ? [...totalsByCurrency].map(([currency, amount]) => `${currency} ${amount.toFixed(2)}`).join(', ')
+          : 'INR 0.00';
+        $('#reimbursement-selected-count').textContent = `Selected expenses: ${selected.length}`;
+        $('#reimbursement-selected-total').textContent = `Total: ${total}`;
+      };
       const updateBulkButton = () => {
         const bulkApprove = $('#reimbursement-bulk-approve');
         if (bulkApprove) bulkApprove.style.display = $$('.reimbursement-select:checked').length ? '' : 'none';
+        updateSelectedSummary();
       };
       if (selectAll) selectAll.onchange = () => {
         $$('.reimbursement-select:not(:disabled)').forEach(input => { input.checked = selectAll.checked; });
