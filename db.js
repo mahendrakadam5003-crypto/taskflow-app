@@ -346,6 +346,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       details TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS idx_activity_log_created_id ON activity_log(created_at DESC, id DESC)');
     try {
       const activityColumns = await dbDriverInterface.prepare('PRAGMA table_info(activity_log)').all();
       if (!(activityColumns || []).some(row => (row.name || row.NAME) === 'subject_user_id')) {
