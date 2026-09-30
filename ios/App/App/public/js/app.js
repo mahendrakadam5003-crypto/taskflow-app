@@ -1483,6 +1483,8 @@ async function openTaskDrawer(taskId) {
       let message = entry.field_name === 'Task created' ? 'created this task' : `changed the ${entry.field_name.toLowerCase()}`;
       if (entry.field_name === 'Assignee') message = `reassigned this task from ${oldValue} to ${newValue}`;
       if (entry.field_name === 'Due date') message = `changed the due date from ${oldValue} to ${newValue}`;
+      if (entry.field_name === 'Task check-in') message = 'checked in to this task';
+      if (entry.field_name === 'Task check-out') message = 'checked out of this task';
       const difference = entry.field_name === 'Description' ? `<button type="button" class="link-btn task-difference-toggle" data-history-index="${index}">Show difference</button><div class="task-difference hidden" data-history-panel="${index}"><div class="task-history-old"><b>Old:</b> ${oldValue}</div><div class="task-history-new"><b>New:</b> ${newValue}</div></div>` : '';
       return `<div class="task-activity-change" data-activity-index="${index}"><b>${actor}</b> ${message} <span>· ${escapeHtml(fmtDateTime(entry.created_at))}</span>${difference}</div>`;
     }).join('') : '<div class="hint">No activity yet.</div>';
@@ -1634,12 +1636,11 @@ async function openTaskDrawer(taskId) {
     if (checkinControls) {
       if (task.work_mode !== 'on_field' || !currentCheckin) {
         checkinControls.innerHTML = task.work_mode === 'on_field' ? '<div class="hint">You are not required to check in/out for this task.</div>' : '';
-      } else if (!currentCheckin.check_in_at) {
-        checkinControls.innerHTML = `<button class="btn btn-secondary btn-block" id="btn-task-check-in">📍 ${Number(task.assignee_id) === Number(ME?.id) ? 'Check in to task' : 'Take task & check in'}</button>`;
+      } else if (!currentCheckin.check_in_at || currentCheckin.check_out_at) {
+        const previouslyVisited = !!currentCheckin.check_out_at;
+        checkinControls.innerHTML = `${previouslyVisited ? `<div class="hint">Last visit: ${escapeHtml(fmtDateTime(currentCheckin.check_in_at))} to ${escapeHtml(fmtDateTime(currentCheckin.check_out_at))}</div>` : ''}<button class="btn btn-secondary btn-block" id="btn-task-check-in">📍 ${previouslyVisited ? 'Check in again' : (Number(task.assignee_id) === Number(ME?.id) ? 'Check in to task' : 'Take task & check in')}</button>`;
       } else if (!currentCheckin.check_out_at) {
         checkinControls.innerHTML = `<div class="hint">Checked in at ${escapeHtml(fmtDateTime(currentCheckin.check_in_at))}</div><button class="btn btn-secondary btn-block" id="btn-task-check-out">📍 Check out of task</button>`;
-      } else {
-        checkinControls.innerHTML = `<div class="hint">Checked in ${escapeHtml(fmtDateTime(currentCheckin.check_in_at))} and out ${escapeHtml(fmtDateTime(currentCheckin.check_out_at))}.</div>`;
       }
       if (taskActionsLocked) {
         checkinControls.insertAdjacentHTML('afterbegin', '<div class="hint">Check in to unlock task editing and comments. You may reassign this task before checking in.</div>');

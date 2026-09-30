@@ -693,7 +693,9 @@ router.put('/tasks/:id', async (req, res) => {
       const incomplete = await db.prepare(`SELECT CASE WHEN t.assignee_id IS NOT NULL
         AND EXISTS (SELECT 1 FROM task_checkin_access a WHERE a.user_id=t.assignee_id)
         AND (c.check_in_at IS NULL OR c.check_out_at IS NULL) THEN 1 ELSE 0 END AS count
-        FROM tasks t LEFT JOIN task_checkins c ON c.task_id=t.id AND c.user_id=t.assignee_id WHERE t.id=?`).get(req.params.id);
+          FROM tasks t LEFT JOIN task_checkins c ON c.id=(SELECT latest.id FROM task_checkins latest
+            WHERE latest.task_id=t.id AND latest.user_id=t.assignee_id ORDER BY latest.id DESC LIMIT 1)
+          WHERE t.id=?`).get(req.params.id);
       if (Number(incomplete?.count || 0) > 0) return res.status(400).json({ error: 'Every required user must check in and check out before completing this on-field task.' });
     }
     const updates = [];
@@ -778,8 +780,10 @@ router.post('/tasks/:id/check-in', async (req, res) => {
     if (task.error) return res.status(400).json({ error: task.error });
     const lat = Number(req.body.lat), lng = Number(req.body.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: 'Location is required to check in.' });
-    const existing = await db.prepare('SELECT * FROM task_checkins WHERE task_id=? AND user_id=?').get(req.params.id, req.session.userId);
-    if (existing?.check_in_at) return res.status(400).json({ error: 'You are already checked in for this task.' });
+    const activeVisit = await db.prepare(`SELECT id FROM task_checkins
+      WHERE task_id=? AND user_id=? AND check_in_at IS NOT NULL AND check_out_at IS NULL
+      ORDER BY id DESC LIMIT 1`).get(req.params.id, req.session.userId);
+    if (activeVisit) return res.status(400).json({ error: 'You are already checked in for this task.' });
     const activeTask = await db.prepare(`SELECT t.title FROM task_checkins c
       JOIN tasks t ON t.id=c.task_id
       WHERE c.user_id=? AND c.task_id<>? AND c.check_in_at IS NOT NULL AND c.check_out_at IS NULL
@@ -791,8 +795,9 @@ router.post('/tasks/:id/check-in', async (req, res) => {
       LIMIT 1`).get(req.params.id, req.session.userId);
     if (otherActiveUser) return res.status(400).json({ error: `This task is already checked in by ${otherActiveUser.name}.` });
     const now = new Date().toISOString();
-    if (existing) await db.prepare('UPDATE task_checkins SET check_in_at=?, check_in_lat=?, check_in_lng=?, check_out_at=NULL, check_out_lat=NULL, check_out_lng=NULL WHERE id=?').run(now, lat, lng, existing.id);
-    else await db.prepare('INSERT INTO task_checkins (task_id,user_id,check_in_at,check_in_lat,check_in_lng) VALUES (?,?,?,?,?)').run(req.params.id, req.session.userId, now, lat, lng);
+    await db.prepare('INSERT INTO task_checkins (task_id,user_id,check_in_at,check_in_lat,check_in_lng) VALUES (?,?,?,?,?)').run(req.params.id, req.session.userId, now, lat, lng);
+    await db.prepare('INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value) VALUES (?, ?, ?, ?, ?)')
+      .run(req.params.id, req.session.userId, 'Task check-in', '', now);
     if (Number(task.assignee_id) !== Number(req.session.userId)) {
       await db.prepare("UPDATE tasks SET assignee_id=?, updated_at=datetime('now') WHERE id=?").run(req.session.userId, req.params.id);
       const newAssignee = await db.prepare('SELECT name FROM users WHERE id=?').get(req.session.userId);
@@ -810,11 +815,15 @@ router.post('/tasks/:id/check-out', async (req, res) => {
     if (task.error) return res.status(400).json({ error: task.error });
     const lat = Number(req.body.lat), lng = Number(req.body.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: 'Location is required to check out.' });
-    const existing = await db.prepare('SELECT * FROM task_checkins WHERE task_id=? AND user_id=?').get(req.params.id, req.session.userId);
+    const existing = await db.prepare(`SELECT * FROM task_checkins
+      WHERE task_id=? AND user_id=? AND check_in_at IS NOT NULL AND check_out_at IS NULL
+      ORDER BY id DESC LIMIT 1`).get(req.params.id, req.session.userId);
     if (!existing?.check_in_at) return res.status(400).json({ error: 'Check in before checking out.' });
     if (existing.check_out_at) return res.status(400).json({ error: 'You are already checked out for this task.' });
     const now = new Date().toISOString();
     await db.prepare('UPDATE task_checkins SET check_out_at=?, check_out_lat=?, check_out_lng=? WHERE id=?').run(now, lat, lng, existing.id);
+    await db.prepare('INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value) VALUES (?, ?, ?, ?, ?)')
+      .run(req.params.id, req.session.userId, 'Task check-out', existing.check_in_at, now);
     res.json({ ok: true, check_out_at: now });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -836,7 +845,8 @@ router.get('/tasks/:id', async (req, res) => {
       WHERE h.task_id = ? ORDER BY h.created_at ASC, h.id ASC`).all(task.id);
     task.checkin_users = await db.prepare(`SELECT u.id, u.name, c.check_in_at, c.check_in_lat, c.check_in_lng, c.check_out_at, c.check_out_lat, c.check_out_lng
       FROM users u JOIN task_checkin_access r ON r.user_id=u.id
-      LEFT JOIN task_checkins c ON c.task_id=? AND c.user_id=u.id
+      LEFT JOIN task_checkins c ON c.id=(SELECT latest.id FROM task_checkins latest
+        WHERE latest.task_id=? AND latest.user_id=u.id ORDER BY latest.id DESC LIMIT 1)
       WHERE u.id=?`).all(task.id, req.session.userId);
     task.checkin_required = task.checkin_users.length ? 1 : 0;
     res.json(task);

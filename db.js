@@ -186,9 +186,28 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       check_in_lng REAL NOT NULL,
       check_out_at TEXT,
       check_out_lat REAL,
-      check_out_lng REAL,
-      UNIQUE (task_id, user_id)
+      check_out_lng REAL
     );`);
+    const taskCheckinIndexes = await dbDriverInterface.prepare('PRAGMA index_list(task_checkins)').all();
+    if ((taskCheckinIndexes || []).some(index => Number(index.unique ?? index.UNIQUE) === 1)) {
+      await dbDriverInterface.exec(`CREATE TABLE task_checkins_rebuilt (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        check_in_at TEXT NOT NULL,
+        check_in_lat REAL NOT NULL,
+        check_in_lng REAL NOT NULL,
+        check_out_at TEXT,
+        check_out_lat REAL,
+        check_out_lng REAL
+      );`);
+      await dbDriverInterface.exec(`INSERT INTO task_checkins_rebuilt
+        (id, task_id, user_id, check_in_at, check_in_lat, check_in_lng, check_out_at, check_out_lat, check_out_lng)
+        SELECT id, task_id, user_id, check_in_at, check_in_lat, check_in_lng, check_out_at, check_out_lat, check_out_lng
+        FROM task_checkins`);
+      await dbDriverInterface.exec('DROP TABLE task_checkins');
+      await dbDriverInterface.exec('ALTER TABLE task_checkins_rebuilt RENAME TO task_checkins');
+    }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS subtasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
