@@ -299,7 +299,9 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
     const paymentAccess = await canViewPaymentHistory(req);
     const paymentAlerts = paymentAccess ? await db.prepare(`SELECT t.id, t.invoice_number, t.invoice_date, t.customer_name, t.total_amount, t.amount_received, p.name AS project_name
       FROM tasks t JOIN projects p ON p.id=t.project_id
-      WHERE t.invoice_number IS NOT NULL AND trim(t.invoice_number) <> ''
+      WHERE COALESCE(t.no_billing_required, 0)=0
+        AND t.invoice_number IS NOT NULL AND trim(t.invoice_number) <> ''
+        AND t.invoice_date IS NOT NULL AND trim(t.invoice_date) <> ''
         AND COALESCE(t.payment_status, 'not_received') <> 'received'
         AND t.invoice_date IS NOT NULL AND date(t.invoice_date, '+30 days') < date('now')
       ORDER BY t.invoice_date ASC`).all() : [];
@@ -343,9 +345,9 @@ router.put('/payment-history/access/:userId', requireAdmin, async (req, res) => 
 router.get('/payment-history', async (req, res) => {
   if (!(await canViewPaymentHistory(req))) return res.status(403).json({ error: 'You do not have payment-history access.' });
   const params = [];
-  const invoiceCondition = `((t.invoice_number IS NOT NULL AND trim(t.invoice_number) <> '')
-    OR (t.customer_name IS NOT NULL AND trim(t.customer_name) <> '')
-    OR COALESCE(t.total_amount, 0) > 0)`;
+  const invoiceCondition = `t.invoice_number IS NOT NULL AND trim(t.invoice_number) <> ''
+    AND t.invoice_date IS NOT NULL AND trim(t.invoice_date) <> ''
+    AND COALESCE(t.no_billing_required, 0)=0`;
   const invoiceType = String(req.query.invoice_type || '').trim().toLowerCase();
   if (invoiceType && !INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invalid invoice type.' });
   let sql = `SELECT t.id, t.project_id, t.title, t.invoice_type, t.invoice_number, t.invoice_date, t.customer_name,
@@ -367,9 +369,9 @@ router.get('/payment-history', async (req, res) => {
 
 router.get('/payment-history/summary', async (req, res) => {
   if (!(await canViewPaymentHistory(req))) return res.status(403).json({ error: 'You do not have payment-history access.' });
-  const conditions = [`((t.invoice_number IS NOT NULL AND trim(t.invoice_number) <> '')
-    OR (t.customer_name IS NOT NULL AND trim(t.customer_name) <> '')
-    OR COALESCE(t.total_amount, 0) > 0)`];
+  const conditions = [`t.invoice_number IS NOT NULL AND trim(t.invoice_number) <> ''
+    AND t.invoice_date IS NOT NULL AND trim(t.invoice_date) <> ''
+    AND COALESCE(t.no_billing_required, 0)=0`];
   const params = [];
   const invoiceType = String(req.query.invoice_type || '').trim().toLowerCase();
   if (invoiceType && !INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invalid invoice type.' });
@@ -408,9 +410,9 @@ router.put('/payment-history/:id', async (req, res) => {
   const status = ['received', 'not_received', 'pending'].includes(req.body.payment_status) ? req.body.payment_status : null;
   if (!status) return res.status(400).json({ error: 'Invalid payment status.' });
   const task = await db.prepare(`SELECT id FROM tasks
-    WHERE id=? AND ((invoice_number IS NOT NULL AND trim(invoice_number) <> '')
-      OR (customer_name IS NOT NULL AND trim(customer_name) <> '')
-      OR COALESCE(total_amount, 0) > 0)`).get(req.params.id);
+    WHERE id=? AND COALESCE(no_billing_required, 0)=0
+      AND invoice_number IS NOT NULL AND trim(invoice_number) <> ''
+      AND invoice_date IS NOT NULL AND trim(invoice_date) <> ''`).get(req.params.id);
   if (!task) return res.status(404).json({ error: 'Invoice task not found.' });
   const received = Math.max(0, Number(req.body.amount_received) || 0);
   const memberId = req.body.payment_member_id ? Number(req.body.payment_member_id) : null;
@@ -629,14 +631,18 @@ router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     if (req.body.work_mode !== undefined && !(await canChangeTaskWorkMode(req))) return res.status(403).json({ error: 'You do not have permission to choose the task work location. Ask an administrator.' });
     const { title, description, assignee_id, due_date, invoice_number, invoice_date, invoice_type, customer_name, total_amount } = req.body;
     const workMode = req.body.work_mode === 'on_field' ? 'on_field' : 'office';
+    const noBillingRequired = req.body.no_billing_required === true || Number(req.body.no_billing_required) === 1;
     const invoiceType = String(invoice_type || 'gst').trim().toLowerCase();
     if (!INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invoice type must be Cash, GST, or IGST.' });
     if (!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
     if (assignee_id && !(await canAccessProject(req.params.id, Number(assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
-    const normalizedInvoiceNumber = String(invoice_number || '').trim() || null;
-    const info = await db.prepare(`INSERT INTO tasks(project_id,title,description,created_by,assignee_id,due_date,invoice_type,invoice_number,invoice_date,customer_name,total_amount,work_mode)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(req.params.id, title.trim(), String(description || '').trim(), req.session.userId, assignee_id || null, due_date || null, invoiceType, normalizedInvoiceNumber, invoice_date || null, String(customer_name || '').trim(), Math.max(0, Number(total_amount) || 0), workMode);
-    if (assignee_id && normalizedInvoiceNumber) {
+    const normalizedInvoiceNumber = noBillingRequired ? null : String(invoice_number || '').trim() || null;
+    const normalizedInvoiceDate = noBillingRequired ? null : (invoice_date || null);
+    const normalizedCustomerName = noBillingRequired ? '' : String(customer_name || '').trim();
+    const normalizedTotalAmount = noBillingRequired ? 0 : Math.max(0, Number(total_amount) || 0);
+    const info = await db.prepare(`INSERT INTO tasks(project_id,title,description,no_billing_required,created_by,assignee_id,due_date,invoice_type,invoice_number,invoice_date,customer_name,total_amount,work_mode)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(req.params.id, title.trim(), String(description || '').trim(), noBillingRequired ? 1 : 0, req.session.userId, assignee_id || null, due_date || null, invoiceType, normalizedInvoiceNumber, normalizedInvoiceDate, normalizedCustomerName, normalizedTotalAmount, workMode);
+    if (!noBillingRequired && assignee_id && normalizedInvoiceNumber) {
       await db.prepare('UPDATE tasks SET payment_member_id = COALESCE(payment_member_id, ?) WHERE id = ?').run(Number(assignee_id), info.lastInsertRowid);
     }
     const historyInsert = db.prepare('INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value) VALUES (?, ?, ?, ?, ?)');
@@ -658,8 +664,21 @@ router.put('/tasks/:id', async (req, res) => {
     const workModeChangeRequested = req.body.work_mode !== undefined;
     if (workModeChangeRequested && !(await canChangeTaskWorkMode(req))) return res.status(403).json({ error: 'You do not have permission to change the task work location. Ask an administrator.' });
     if (Object.keys(req.body).some(key => !['status', 'work_mode'].includes(key)) && !(await canProjectAction(req, 'edit_task'))) return res.status(403).json({ error: 'You do not have permission to edit tasks.' });
-    const taskBefore = await db.prepare('SELECT title, description, status, assignee_id, due_date, payment_member_id, invoice_number, work_mode FROM tasks WHERE id=?').get(req.params.id);
+    const taskBefore = await db.prepare('SELECT title, description, status, assignee_id, due_date, payment_member_id, invoice_number, invoice_date, customer_name, total_amount, invoice_type, no_billing_required, work_mode FROM tasks WHERE id=?').get(req.params.id);
     if (!taskBefore) return res.status(404).json({ error: 'Task not found.' });
+    const noBillingRequired = req.body.no_billing_required === undefined
+      ? Number(taskBefore.no_billing_required) === 1
+      : req.body.no_billing_required === true || Number(req.body.no_billing_required) === 1;
+    if (req.body.status === 'done' && !noBillingRequired) {
+      const invoiceNumber = String(req.body.invoice_number ?? taskBefore.invoice_number ?? '').trim();
+      const invoiceDate = String(req.body.invoice_date ?? taskBefore.invoice_date ?? '').trim();
+      const customerName = String(req.body.customer_name ?? taskBefore.customer_name ?? '').trim();
+      const totalAmount = Number(req.body.total_amount ?? taskBefore.total_amount ?? 0);
+      const invoiceType = String(req.body.invoice_type ?? taskBefore.invoice_type ?? '').trim().toLowerCase();
+      if (!customerName || !invoiceNumber || !invoiceDate || !INVOICE_TYPES.includes(invoiceType) || !Number.isFinite(totalAmount) || totalAmount <= 0) {
+        return res.status(400).json({ error: 'Complete the billing details (customer, invoice type, invoice number, invoice date, and total amount) or select No billing required before completing this task.' });
+      }
+    }
     const checkinStatus = await getTaskCheckinStatus(req.params.id, req.session.userId, req.session.role === 'admin');
     const onlyReassigning = Object.keys(req.body).length === 1 && req.body.assignee_id !== undefined;
     const onlyChangingStatusAfterCheckin = Object.keys(req.body).length === 1
@@ -684,18 +703,19 @@ router.put('/tasks/:id', async (req, res) => {
     const updates = [];
     const values = [];
     if (req.body.status !== undefined) { updates.push('status=?'); values.push(req.body.status === 'done' ? 'done' : 'open'); updates.push('completed_at=?'); values.push(req.body.status === 'done' ? new Date().toISOString() : null); }
+    if (req.body.no_billing_required !== undefined) { updates.push('no_billing_required=?'); values.push(noBillingRequired ? 1 : 0); }
     if (req.body.title !== undefined) { updates.push('title=?'); values.push(String(req.body.title).trim()); }
     if (req.body.description !== undefined) { updates.push('description=?'); values.push(String(req.body.description)); }
     if (req.body.due_date !== undefined) { updates.push('due_date=?'); values.push(req.body.due_date || null); }
-    if (req.body.invoice_type !== undefined) {
+    if (!noBillingRequired && req.body.invoice_type !== undefined) {
       const invoiceType = String(req.body.invoice_type || '').trim().toLowerCase();
       if (!INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invoice type must be Cash, GST, or IGST.' });
       updates.push('invoice_type=?'); values.push(invoiceType);
     }
-    if (req.body.invoice_number !== undefined) { updates.push('invoice_number=?'); values.push(String(req.body.invoice_number || '').trim() || null); }
-    if (req.body.invoice_date !== undefined) { updates.push('invoice_date=?'); values.push(req.body.invoice_date || null); }
-    if (req.body.customer_name !== undefined) { updates.push('customer_name=?'); values.push(String(req.body.customer_name || '').trim()); }
-    if (req.body.total_amount !== undefined) { updates.push('total_amount=?'); values.push(Math.max(0, Number(req.body.total_amount) || 0)); }
+    if (!noBillingRequired && req.body.invoice_number !== undefined) { updates.push('invoice_number=?'); values.push(String(req.body.invoice_number || '').trim() || null); }
+    if (!noBillingRequired && req.body.invoice_date !== undefined) { updates.push('invoice_date=?'); values.push(req.body.invoice_date || null); }
+    if (!noBillingRequired && req.body.customer_name !== undefined) { updates.push('customer_name=?'); values.push(String(req.body.customer_name || '').trim()); }
+    if (!noBillingRequired && req.body.total_amount !== undefined) { updates.push('total_amount=?'); values.push(Math.max(0, Number(req.body.total_amount) || 0)); }
     if (req.body.work_mode !== undefined) { updates.push('work_mode=?'); values.push(nextWorkMode); }
     if (req.body.assignee_id !== undefined) {
       if (req.body.assignee_id && !(await canAccessProject((await db.prepare('SELECT project_id FROM tasks WHERE id=?').get(req.params.id)).project_id, Number(req.body.assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });

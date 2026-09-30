@@ -1296,8 +1296,10 @@ async function renderTasks() {
     $$('.row-complete').forEach(button => {
       button.onclick = async () => {
         const reopening = button.classList.contains('row-reopen');
-        await api(`/tasks/${button.dataset.taskId}`, { method: 'PUT', body: { status: reopening ? 'open' : 'done' } });
-        reloadWithActionMessage('project', reopening ? 'Task reopened successfully.' : 'Task completed successfully.', CURRENT_PROJECT.id);
+        try {
+          await api(`/tasks/${button.dataset.taskId}`, { method: 'PUT', body: { status: reopening ? 'open' : 'done' } });
+          reloadWithActionMessage('project', reopening ? 'Task reopened successfully.' : 'Task completed successfully.', CURRENT_PROJECT.id);
+        } catch (error) { alert(error.message); }
       };
     });
     $$('.task-row').forEach(row => {
@@ -1316,6 +1318,15 @@ async function renderTasks() {
   }
 }
 
+function setBillingFieldsDisabled(disabled) {
+  const billingBox = $('#drawer-billing-details');
+  billingBox?.classList.toggle('billing-disabled', disabled);
+  ['drawer-customer-name', 'drawer-invoice-type', 'drawer-invoice-number', 'drawer-invoice-date', 'drawer-total-amount'].forEach(id => {
+    const field = $(`#${id}`);
+    if (field) field.disabled = disabled;
+  });
+}
+
 async function showNewTaskDrawer() {
   if (!CURRENT_PROJECT) return;
   const drawer = $('#task-drawer');
@@ -1332,6 +1343,7 @@ async function showNewTaskDrawer() {
   const invoiceType = $('#drawer-invoice-type');
   const invoiceDate = $('#drawer-invoice-date');
   const totalAmount = $('#drawer-total-amount');
+  const noBillingRequired = $('#drawer-no-billing-required');
   const status = $('#drawer-status');
   const workMode = $('#drawer-work-mode');
   const description = $('#drawer-desc');
@@ -1348,6 +1360,9 @@ async function showNewTaskDrawer() {
   if (invoiceType) { invoiceType.value = 'gst'; invoiceType.disabled = false; }
   if (invoiceDate) { invoiceDate.value = ''; invoiceDate.disabled = false; }
   if (totalAmount) { totalAmount.value = ''; totalAmount.disabled = false; }
+  if (noBillingRequired) { noBillingRequired.checked = false; noBillingRequired.disabled = false; }
+  setBillingFieldsDisabled(false);
+  $('#drawer-billing-error')?.classList.add('hidden');
   if (due) due.removeAttribute('min');
   if (created) created.textContent = 'Created when saved';
   if (status) { status.value = 'open'; status.disabled = true; }
@@ -1369,6 +1384,12 @@ async function showNewTaskDrawer() {
   $('#app').classList.add('drawer-open');
   title?.focus();
   $('#drawer-close').onclick = closeDrawer;
+  if (noBillingRequired) {
+    noBillingRequired.onchange = () => {
+      setBillingFieldsDisabled(noBillingRequired.checked);
+      $('#drawer-billing-error')?.classList.add('hidden');
+    };
+  }
   completeButton.onclick = async () => {
     if (!title.value.trim()) { title.focus(); return; }
     try {
@@ -1377,6 +1398,7 @@ async function showNewTaskDrawer() {
         description: description.value.trim(),
         assignee_id: assignee.value || null,
         due_date: due.value || null,
+        no_billing_required: noBillingRequired.checked,
         customer_name: customerName.value.trim(),
         invoice_type: invoiceType.value,
         invoice_number: invoiceNumber.value.trim() || null,
@@ -1463,6 +1485,13 @@ async function openTaskDrawer(taskId) {
     $('#drawer-invoice-date').disabled = taskActionsLocked;
     $('#drawer-total-amount').value = task.total_amount ? Number(task.total_amount).toFixed(2) : '';
     $('#drawer-total-amount').disabled = taskActionsLocked;
+    const noBillingRequired = $('#drawer-no-billing-required');
+    if (noBillingRequired) {
+      noBillingRequired.checked = Number(task.no_billing_required) === 1;
+      noBillingRequired.disabled = taskActionsLocked || !canEditTask;
+    }
+    setBillingFieldsDisabled(Number(task.no_billing_required) === 1 || taskActionsLocked || !canEditTask);
+    $('#drawer-billing-error')?.classList.add('hidden');
     $('#drawer-due').removeAttribute('min');
     $('#drawer-created').textContent = fmtDateTime(task.created_at);
     $('#drawer-status').value = task.status || 'open';
@@ -1577,6 +1606,7 @@ async function openTaskDrawer(taskId) {
       description: $('#drawer-desc').value,
       assignee_id: $('#drawer-assignee').value || null,
       due_date: $('#drawer-due').value || null,
+      no_billing_required: $('#drawer-no-billing-required').checked,
       customer_name: $('#drawer-customer-name').value.trim(),
       invoice_type: $('#drawer-invoice-type').value,
       invoice_number: $('#drawer-invoice-number').value.trim() || null,
@@ -1644,6 +1674,11 @@ async function openTaskDrawer(taskId) {
     };
     $('#drawer-assignee').onchange = queueAutosave;
     $('#drawer-due').onchange = queueAutosave;
+    $('#drawer-no-billing-required').onchange = () => {
+      setBillingFieldsDisabled($('#drawer-no-billing-required').checked || taskActionsLocked || !canEditTask);
+      $('#drawer-billing-error')?.classList.add('hidden');
+      queueAutosave();
+    };
     $('#drawer-customer-name').onchange = queueAutosave;
     $('#drawer-invoice-number').onchange = queueAutosave;
     $('#drawer-invoice-type').onchange = queueAutosave;
@@ -1690,8 +1725,31 @@ async function openTaskDrawer(taskId) {
     }
     const isCompleted = task.status === 'done';
     $('#btn-complete-task').onclick = async () => {
-      await api(`/tasks/${taskId}`, { method: 'PUT', body: { status: isCompleted ? 'open' : 'done' } });
-      reloadWithActionMessage('project', isCompleted ? 'Task reopened successfully.' : 'Task completed successfully.', CURRENT_PROJECT.id);
+      if (!isCompleted && !$('#drawer-no-billing-required').checked) {
+        const billingError = $('#drawer-billing-error');
+        const missingField = !$('#drawer-customer-name').value.trim() ? $('#drawer-customer-name')
+          : !$('#drawer-invoice-number').value.trim() ? $('#drawer-invoice-number')
+            : !$('#drawer-invoice-date').value ? $('#drawer-invoice-date')
+              : !(Number($('#drawer-total-amount').value) > 0) ? $('#drawer-total-amount') : null;
+        if (missingField) {
+          billingError.textContent = 'Enter customer, invoice number, invoice date, and a total amount greater than zero, or select No billing required.';
+          billingError.classList.remove('hidden');
+          missingField.focus();
+          return;
+        }
+      }
+      $('#drawer-billing-error')?.classList.add('hidden');
+      try {
+        clearTimeout(autosaveTimer);
+        if (!isCompleted) await saveChanges();
+        await api(`/tasks/${taskId}`, { method: 'PUT', body: { status: isCompleted ? 'open' : 'done' } });
+        reloadWithActionMessage('project', isCompleted ? 'Task reopened successfully.' : 'Task completed successfully.', CURRENT_PROJECT.id);
+      } catch (error) {
+        if (!isCompleted && /billing details/i.test(error.message)) {
+          const billingError = $('#drawer-billing-error');
+          if (billingError) { billingError.textContent = error.message; billingError.classList.remove('hidden'); }
+        } else alert(error.message);
+      }
     };
     $('#btn-delete-task').onclick = async () => {
       if (!confirm('Delete this task permanently?')) return;

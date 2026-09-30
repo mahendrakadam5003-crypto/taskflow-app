@@ -123,6 +123,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       title TEXT NOT NULL,
       description TEXT DEFAULT '',
+      no_billing_required INTEGER NOT NULL DEFAULT 0,
       created_by INTEGER REFERENCES users(id),
       assignee_id INTEGER REFERENCES users(id),
       due_date TEXT,
@@ -144,6 +145,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     );`);
     const taskSchemaColumns = await dbDriverInterface.prepare('PRAGMA table_info(tasks)').all();
     const taskSchemaColumnNames = (taskSchemaColumns || []).map(row => row.name || row.NAME);
+    if (!taskSchemaColumnNames.includes('no_billing_required')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN no_billing_required INTEGER NOT NULL DEFAULT 0');
     if (!taskSchemaColumnNames.includes('invoice_type')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN invoice_type TEXT NOT NULL DEFAULT 'gst'");
     if (!taskSchemaColumnNames.includes('invoice_number')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN invoice_number TEXT');
     if (!taskSchemaColumnNames.includes('invoice_date')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN invoice_date TEXT');

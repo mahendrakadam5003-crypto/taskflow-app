@@ -311,6 +311,10 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .field-block { display: flex; flex-direction: column; gap: 8px; }
 .field-block > label { font-size: 13px; color: var(--muted); font-weight: 500; }
 .billing-details-box { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fafcfb; }
+.no-billing-toggle { display: flex; align-items: center; gap: 8px; width: fit-content; margin: 4px 0; color: var(--ink); font-size: 13px; }
+.no-billing-toggle input { accent-color: var(--green); }
+.billing-details-box.billing-disabled { border-color: #d9dedb; background: #eef1ef; opacity: .62; }
+.billing-details-box.billing-disabled input, .billing-details-box.billing-disabled select { background: #e6eae7; cursor: not-allowed; }
 .billing-details-fields { display: grid; gap: 8px; }
 .field-block-header { display: flex; align-items: center; justify-content: space-between; }
 .field-block textarea {
