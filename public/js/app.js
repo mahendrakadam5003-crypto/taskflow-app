@@ -577,11 +577,14 @@ async function renderPaymentHistory() {
     if (!wrap) return;
     wrap.innerHTML = `<div class="project-header"><div><h1>Payment History</h1><div class="hint">Track invoices, received payments, and pending balances.</div></div></div>
       <div class="admin-block">
-        <div class="payment-summary-period" id="payment-summary-period">Last 30 days</div>
+        <div class="payment-summary-period" id="payment-summary-period">All time</div>
         <div class="payment-summary-cards">
           <div class="payment-summary-card revenue"><span>Total revenue</span><b id="payment-summary-revenue">0.00</b><small id="payment-summary-invoices">0 invoices</small></div>
           <div class="payment-summary-card received"><span>Payment received</span><b id="payment-summary-received">0.00</b></div>
           <div class="payment-summary-card pending"><span>Payment pending</span><b id="payment-summary-pending">0.00</b></div>
+          <div class="payment-summary-card cash-pending"><span>Cash remaining</span><b id="payment-summary-cash-pending">0.00</b></div>
+          <div class="payment-summary-card gst-pending"><span>GST remaining</span><b id="payment-summary-gst-pending">0.00</b></div>
+          <div class="payment-summary-card igst-pending"><span>IGST remaining</span><b id="payment-summary-igst-pending">0.00</b></div>
         </div>
         <div class="attendance-filters">
           <label>From <input type="date" id="payment-history-from"></label>
@@ -600,14 +603,19 @@ async function renderPaymentHistory() {
       if ($('#payment-history-to').value) params.set('to', $('#payment-history-to').value);
       if ($('#payment-history-assignee').value) params.set('assignee_id', $('#payment-history-assignee').value);
       if ($('#payment-history-invoice-type').value) params.set('invoice_type', $('#payment-history-invoice-type').value);
+      if ($('#payment-history-status').value) params.set('status', $('#payment-history-status').value);
       const summary = await api(`/payment-history/summary?${params.toString()}`);
       $('#payment-summary-revenue').textContent = Number(summary.total_revenue || 0).toFixed(2);
       $('#payment-summary-received').textContent = Number(summary.payment_received || 0).toFixed(2);
       $('#payment-summary-pending').textContent = Number(summary.payment_pending || 0).toFixed(2);
+      $('#payment-summary-cash-pending').textContent = Number(summary.cash_pending || 0).toFixed(2);
+      $('#payment-summary-gst-pending').textContent = Number(summary.gst_pending || 0).toFixed(2);
+      $('#payment-summary-igst-pending').textContent = Number(summary.igst_pending || 0).toFixed(2);
       $('#payment-summary-invoices').textContent = `${summary.invoice_count} invoice${summary.invoice_count === 1 ? '' : 's'}`;
       const selectedMember = $('#payment-history-assignee').selectedOptions[0]?.textContent;
       const selectedInvoiceType = $('#payment-history-invoice-type').selectedOptions[0]?.textContent;
-      $('#payment-summary-period').textContent = `${summary.from || summary.to ? `Selected period${summary.from ? ` from ${summary.from}` : ''}${summary.to ? ` to ${summary.to}` : ''}` : 'Last 30 days'}${summary.assignee_id ? ` · ${selectedMember}` : ''}${summary.invoice_type ? ` · ${selectedInvoiceType}` : ''}`;
+      const selectedStatus = $('#payment-history-status').selectedOptions[0]?.textContent;
+      $('#payment-summary-period').textContent = `${summary.from || summary.to ? `Selected period${summary.from ? ` from ${summary.from}` : ''}${summary.to ? ` to ${summary.to}` : ''}` : 'All time'}${summary.assignee_id ? ` · ${selectedMember}` : ''}${summary.invoice_type ? ` · ${selectedInvoiceType}` : ''}${summary.status ? ` · ${selectedStatus}` : ''}`;
     };
     const renderRows = async () => {
       const params = new URLSearchParams();

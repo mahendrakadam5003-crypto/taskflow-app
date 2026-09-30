@@ -373,20 +373,20 @@ router.get('/payment-history/summary', async (req, res) => {
   const params = [];
   const invoiceType = String(req.query.invoice_type || '').trim().toLowerCase();
   if (invoiceType && !INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invalid invoice type.' });
-  if (req.query.from || req.query.to) {
-    conditions.push('t.invoice_date >= ?', 't.invoice_date <= ?');
-    params.push(req.query.from || '0000-01-01', req.query.to || '9999-12-31');
-  } else {
-    conditions.push("(t.invoice_date IS NULL OR t.invoice_date >= date('now', '-30 days'))", "(t.invoice_date IS NULL OR t.invoice_date <= date('now'))");
-  }
+  if (req.query.from) { conditions.push('(t.invoice_date IS NULL OR t.invoice_date >= ?)'); params.push(req.query.from); }
+  if (req.query.to) { conditions.push('(t.invoice_date IS NULL OR t.invoice_date <= ?)'); params.push(req.query.to); }
   if (req.query.assignee_id) { conditions.push('COALESCE(t.payment_member_id, t.assignee_id) = ?'); params.push(Number(req.query.assignee_id)); }
   if (invoiceType) { conditions.push('t.invoice_type = ?'); params.push(invoiceType); }
+  if (req.query.status) { conditions.push('t.payment_status = ?'); params.push(req.query.status); }
   const row = await db.prepare(`SELECT COUNT(*) AS invoice_count,
       COALESCE(SUM(t.total_amount), 0) AS total_revenue,
       COALESCE(SUM(t.amount_received), 0) AS payment_received,
-      COALESCE(SUM(CASE WHEN t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS payment_pending
+      COALESCE(SUM(CASE WHEN t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS payment_pending,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='cash' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS cash_pending,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS gst_pending,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='igst' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS igst_pending
     FROM tasks t WHERE ${conditions.join(' AND ')}`).get(...params);
-  res.json({ invoice_count: Number(row?.invoice_count || 0), total_revenue: Number(row?.total_revenue || 0), payment_received: Number(row?.payment_received || 0), payment_pending: Number(row?.payment_pending || 0), from: req.query.from || null, to: req.query.to || null, assignee_id: req.query.assignee_id || null, invoice_type: invoiceType || null });
+  res.json({ invoice_count: Number(row?.invoice_count || 0), total_revenue: Number(row?.total_revenue || 0), payment_received: Number(row?.payment_received || 0), payment_pending: Number(row?.payment_pending || 0), cash_pending: Number(row?.cash_pending || 0), gst_pending: Number(row?.gst_pending || 0), igst_pending: Number(row?.igst_pending || 0), from: req.query.from || null, to: req.query.to || null, assignee_id: req.query.assignee_id || null, invoice_type: invoiceType || null, status: req.query.status || null });
 });
 
 router.put('/payment-history/:id', async (req, res) => {
