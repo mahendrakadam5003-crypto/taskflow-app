@@ -70,7 +70,6 @@ const telegramChannelId = process.env.TELEGRAM_CHANNEL_ID || null;
 async function cleanupExpiredUploads() {
   const cutoff = Date.now() - imageRetentionMs;
   let removed = 0;
-  await db.prepare("DELETE FROM activity_log WHERE created_at < datetime('now', '-24 hours')").run();
   const expiredLocationPoints = await db.prepare("DELETE FROM attendance_locations WHERE recorded_at < datetime('now', '-60 days')").run();
   if (expiredLocationPoints.changes) console.log(`Removed ${expiredLocationPoints.changes} attendance location point(s) older than 60 days from Turso.`);
   const comments = await db.prepare('SELECT image_path, created_at FROM comments WHERE image_path IS NOT NULL').all();

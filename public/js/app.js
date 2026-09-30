@@ -2384,7 +2384,7 @@ async function renderAdmin() {
   if (!wrap) return;
   wrap.innerHTML = '<div class="hint" id="admin-loading-status" role="status">Loading administrator settings...</div>';
   try {
-    const adminPaths = ['/auth/users', '/auth/settings', '/auth/departments', '/auth/reimbursement-access', '/auth/activity', '/attendance/tracking-access', '/attendance/verification-access', '/payment-history/access', '/attendance/device-access', '/attendance/device-access/me', '/project-action-access', '/task-checkin-access', '/task-work-mode-access'];
+    const adminPaths = ['/auth/users', '/auth/settings', '/auth/departments', '/auth/reimbursement-access', '/attendance/tracking-access', '/attendance/verification-access', '/payment-history/access', '/attendance/device-access', '/attendance/device-access/me', '/project-action-access', '/task-checkin-access', '/task-work-mode-access'];
     const pendingPaths = new Set(adminPaths);
     const loadAdminData = async (path) => {
       const controller = new AbortController();
@@ -2401,7 +2401,7 @@ async function renderAdmin() {
         if (status && pendingPaths.size) status.textContent = `Loading administrator settings... ${pendingPaths.size} requests remaining.`;
       }
     };
-    const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess, paymentAccess, deviceAccess, myDeviceAccess, projectActionAccess, taskCheckinAccess, taskWorkModeAccess] = await Promise.all(adminPaths.map(loadAdminData));
+    const [users, settings, departments, reimbursementAccess, trackingAccess, verificationAccess, paymentAccess, deviceAccess, myDeviceAccess, projectActionAccess, taskCheckinAccess, taskWorkModeAccess] = await Promise.all(adminPaths.map(loadAdminData));
     const verificationByUser = new Map(verificationAccess.map(person => [Number(person.id), Number(person.verification_required) === 1]));
     const departmentOptions = departments.map(d => `<option value="${escapeHtml(d.name || d.NAME)}">${escapeHtml(d.name || d.NAME)}</option>`).join('');
 
@@ -2711,16 +2711,24 @@ async function renderAdmin() {
     });
 
     const activityList = $('#activity-log-list');
-    if (!activity.length) {
-      activityList.innerHTML = '<p class="hint">No activity recorded yet.</p>';
-    } else {
-      activityList.innerHTML = activity.map((entry) => `
+    activityList.innerHTML = '<p class="hint" role="status">Loading recent activity...</p>';
+    loadAdminData('/auth/activity').then(activity => {
+      if (!activityList.isConnected) return;
+      if (!activity.length) {
+        activityList.innerHTML = '<p class="hint">No activity recorded yet.</p>';
+      } else {
+        activityList.innerHTML = activity.map((entry) => `
         <div class="member-option" style="display:block; padding:10px 0; border-bottom:1px solid #eee;">
           <b>${escapeHtml(entry.action)}</b>
           <span class="hint"> by ${escapeHtml(entry.actor_name || 'Unknown user')} on ${escapeHtml(new Date(entry.created_at).toLocaleString())}</span>
           ${entry.details ? `<div>${escapeHtml(entry.details)}</div>` : ''}
         </div>`).join('');
-    }
+      }
+    }).catch(error => {
+      if (!activityList.isConnected) return;
+      activityList.innerHTML = `<p class="form-error">Recent activity unavailable: ${escapeHtml(error.message)}</p><button class="btn btn-secondary" id="activity-retry" type="button">Retry</button>`;
+      $('#activity-retry').onclick = () => renderAdmin();
+    });
     $$('.save-reimbursement-access').forEach((button) => {
       button.onclick = async () => {
         const select = document.querySelector(`.reimbursement-access-level[data-user-id="${button.dataset.userId}"]`);
