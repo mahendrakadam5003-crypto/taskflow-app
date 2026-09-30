@@ -824,34 +824,37 @@ async function renderReimbursements() {
   const canPay = isAdmin || Number(access.can_pay) === 1;
   const peopleOptions = PEOPLE.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('');
   const categoryOptions = ['Travel', 'Fuel', 'Meals', 'Lodging', 'Supplies', 'Other'].map(category => `<option>${category}</option>`).join('');
-  let allEmployeeRows = [];
-
-  wrap.innerHTML = `
-    <div class="project-header"><div><h1>Reimbursements</h1><div class="hint">Submit field expenses with receipts and track approval status.</div></div></div>
-    ${!isAdmin ? `<div class="admin-block">
+  const reimbursementSummary = `
+    <div class="reimbursement-summary">
+      <div class="reimbursement-summary-card"><span>Total claims</span><b id="reimbursement-total-amount">INR 0.00</b><small id="reimbursement-total-count">0 claims</small></div>
+      <div class="reimbursement-summary-card"><span>Pending</span><b class="pending" id="reimbursement-pending-amount">INR 0.00</b></div>
+      <div class="reimbursement-summary-card"><span>Approved</span><b class="approved" id="reimbursement-approved-amount">INR 0.00</b></div>
+    </div>`;
+  const employeeOverview = isAdmin ? `<div class="admin-block">${reimbursementSummary}</div>` : `
+    <div class="admin-block">
       <div id="employee-reimbursement-overview">
-        <div class="reimbursement-summary">
-          <div class="reimbursement-summary-card"><span>Total claims</span><b id="reimbursement-total-amount">INR 0.00</b><small id="reimbursement-total-count">0 claims</small></div>
-          <div class="reimbursement-summary-card"><span>Pending</span><b class="pending" id="reimbursement-pending-amount">INR 0.00</b></div>
-          <div class="reimbursement-summary-card"><span>Approved</span><b class="approved" id="reimbursement-approved-amount">INR 0.00</b></div>
-        </div>
+        ${reimbursementSummary}
         <div class="reimbursement-section-heading"><h3>Recent expenses</h3><button class="btn btn-primary" id="reimbursement-new-expense" type="button">+ New expense</button></div>
       </div>
       <div id="employee-reimbursement-form" class="hidden">
         <div class="reimbursement-section-heading"><h3>Submit expense</h3><button class="btn btn-secondary" id="reimbursement-cancel-new" type="button">Back to expenses</button></div>
-      <form id="reimbursement-form" class="admin-form-row">
-        <input id="reimbursement-amount" type="number" min="0.01" step="0.01" placeholder="Amount" required>
-        <select id="reimbursement-currency"><option>INR</option><option>USD</option><option>EUR</option></select>
-        <select id="reimbursement-category">${categoryOptions}</select>
-        <input id="reimbursement-date" type="date" value="${todayISO()}" required>
-        <input id="reimbursement-description" placeholder="Description" required>
-        <input id="reimbursement-receipt" type="file" accept="image/*,.pdf" multiple aria-label="Choose receipt photos or files">
-        <button class="btn btn-primary" type="submit">Submit claim</button>
-      </form>
-      <div id="reimbursement-form-error" class="form-error"></div>
-      <div id="reimbursement-form-success" style="color:#25602a; font-size:13px; min-height:16px;"></div>
+        <form id="reimbursement-form" class="admin-form-row">
+          <input id="reimbursement-amount" type="number" min="0.01" step="0.01" placeholder="Amount" required>
+          <select id="reimbursement-currency"><option>INR</option><option>USD</option><option>EUR</option></select>
+          <select id="reimbursement-category">${categoryOptions}</select>
+          <input id="reimbursement-date" type="date" value="${todayISO()}" required>
+          <input id="reimbursement-description" placeholder="Description" required>
+          <input id="reimbursement-receipt" type="file" accept="image/*,.pdf" multiple aria-label="Choose receipt photos or files">
+          <button class="btn btn-primary" type="submit">Submit claim</button>
+        </form>
+        <div id="reimbursement-form-error" class="form-error"></div>
+        <div id="reimbursement-form-success" style="color:#25602a; font-size:13px; min-height:16px;"></div>
       </div>
-    </div>` : ''}
+    </div>`;
+
+  wrap.innerHTML = `
+    <div class="project-header"><div><h1>Reimbursements</h1><div class="hint">Submit field expenses with receipts and track approval status.</div></div></div>
+    ${employeeOverview}
     <div class="admin-block">
       <h3>${canReview ? 'Expense approvals' : 'My expense claims'}</h3>
       <div class="attendance-filters">
@@ -873,20 +876,14 @@ async function renderReimbursements() {
     </div>`;
 
   const table = $('#reimbursements-table');
-  const renderEmployeeSummary = () => {
-    if (isAdmin) return;
-    const total = allEmployeeRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
-    const pending = allEmployeeRows.filter(row => ['submitted', 'approved_level_1'].includes(row.status)).reduce((sum, row) => sum + Number(row.amount || 0), 0);
-    const approved = allEmployeeRows.filter(row => ['approved', 'paid'].includes(row.status)).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const renderSummary = rows => {
+    const total = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const pending = rows.filter(row => ['submitted', 'approved_level_1'].includes(row.status)).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const approved = rows.filter(row => ['approved', 'paid'].includes(row.status)).reduce((sum, row) => sum + Number(row.amount || 0), 0);
     $('#reimbursement-total-amount').textContent = `INR ${total.toFixed(2)}`;
-    $('#reimbursement-total-count').textContent = `${allEmployeeRows.length} claim${allEmployeeRows.length === 1 ? '' : 's'}`;
+    $('#reimbursement-total-count').textContent = `${rows.length} claim${rows.length === 1 ? '' : 's'}`;
     $('#reimbursement-pending-amount').textContent = `INR ${pending.toFixed(2)}`;
     $('#reimbursement-approved-amount').textContent = `INR ${approved.toFixed(2)}`;
-  };
-  const refreshEmployeeSummary = async () => {
-    if (isAdmin) return;
-    allEmployeeRows = await api('/reimbursements');
-    renderEmployeeSummary();
   };
   const renderRows = async () => {
     const params = new URLSearchParams();
@@ -896,6 +893,7 @@ async function renderReimbursements() {
     if ($('#reimbursement-to')?.value) params.set('to', $('#reimbursement-to').value);
     try {
       const rows = await api(`/reimbursements?${params.toString()}`);
+      renderSummary(rows);
       table.innerHTML = rows.length ? rows.map(row => {
         const canApprove = canReview && ((row.status === 'submitted' && (isAdmin || Number(access.approval_level) === 1)) || (row.status === 'approved_level_1' && (isAdmin || Number(access.approval_level) >= 2)));
         return `<tr class="reimbursement-row" data-reimbursement-id="${row.id}">
@@ -981,7 +979,6 @@ async function renderReimbursements() {
       $('#reimbursement-form-success').textContent = 'Expense submitted successfully.';
       $('#employee-reimbursement-form').classList.add('hidden');
       $('#employee-reimbursement-overview').classList.remove('hidden');
-      await refreshEmployeeSummary();
       await renderRows();
       showAppNotification('Expense submitted successfully.');
     };
@@ -996,7 +993,6 @@ async function renderReimbursements() {
     window.open(`/api/reimbursements/export.csv?${params.toString()}`, '_blank');
   };
   renderRows();
-  refreshEmployeeSummary().catch(error => console.warn('Expense summary refresh failed:', error.message));
 }
 
 // ================= PROJECTS MODULE =================
