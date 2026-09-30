@@ -295,6 +295,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .payment-history-table input, .payment-history-table select { max-width: 120px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 7px; font-size: 12px; }
 .payment-history-table td small { display: block; margin-top: 3px; }
 .payment-summary-period { margin-bottom: 8px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.payment-summary-section { margin-top: 16px; }
+.payment-summary-section h2 { margin: 0 0 8px; color: var(--navy); font-size: 14px; }
 .payment-summary-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }
 .payment-summary-card { min-height: 112px; display: flex; flex-direction: column; justify-content: space-between; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: 0 7px 20px rgba(20,33,61,.06); }
 .payment-summary-card span { color: var(--muted); font-size: 13px; font-weight: 600; }

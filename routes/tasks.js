@@ -382,11 +382,25 @@ router.get('/payment-history/summary', async (req, res) => {
       COALESCE(SUM(t.total_amount), 0) AS total_revenue,
       COALESCE(SUM(t.amount_received), 0) AS payment_received,
       COALESCE(SUM(CASE WHEN t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS payment_pending,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='cash' THEN t.total_amount ELSE 0 END), 0) AS cash_revenue,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='cash' THEN t.amount_received ELSE 0 END), 0) AS cash_received,
       COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='cash' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS cash_pending,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' THEN t.total_amount ELSE 0 END), 0) AS gst_revenue,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' THEN t.amount_received ELSE 0 END), 0) AS gst_received,
       COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS gst_pending,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='igst' THEN t.total_amount ELSE 0 END), 0) AS igst_revenue,
+      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='igst' THEN t.amount_received ELSE 0 END), 0) AS igst_received,
       COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='igst' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS igst_pending
     FROM tasks t WHERE ${conditions.join(' AND ')}`).get(...params);
-  res.json({ invoice_count: Number(row?.invoice_count || 0), total_revenue: Number(row?.total_revenue || 0), payment_received: Number(row?.payment_received || 0), payment_pending: Number(row?.payment_pending || 0), cash_pending: Number(row?.cash_pending || 0), gst_pending: Number(row?.gst_pending || 0), igst_pending: Number(row?.igst_pending || 0), from: req.query.from || null, to: req.query.to || null, assignee_id: req.query.assignee_id || null, invoice_type: invoiceType || null, status: req.query.status || null });
+  const amount = key => Number(row?.[key] || 0);
+  res.json({
+    invoice_count: amount('invoice_count'),
+    total_revenue: amount('total_revenue'), payment_received: amount('payment_received'), payment_pending: amount('payment_pending'),
+    cash_revenue: amount('cash_revenue'), cash_received: amount('cash_received'), cash_pending: amount('cash_pending'),
+    gst_revenue: amount('gst_revenue'), gst_received: amount('gst_received'), gst_pending: amount('gst_pending'),
+    igst_revenue: amount('igst_revenue'), igst_received: amount('igst_received'), igst_pending: amount('igst_pending'),
+    from: req.query.from || null, to: req.query.to || null, assignee_id: req.query.assignee_id || null, invoice_type: invoiceType || null, status: req.query.status || null
+  });
 });
 
 router.put('/payment-history/:id', async (req, res) => {

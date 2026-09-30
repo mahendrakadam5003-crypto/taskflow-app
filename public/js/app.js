@@ -575,17 +575,22 @@ async function renderDashboard() {
 async function renderPaymentHistory() {
     const wrap = $('#payment-history-content');
     if (!wrap) return;
+    const summarySection = (title, key, includeInvoiceCount = false) => `
+      <section class="payment-summary-section">
+        <h2>${title}</h2>
+        <div class="payment-summary-cards">
+          <div class="payment-summary-card revenue"><span>Total revenue</span><b id="payment-summary-${key}-revenue">0.00</b>${includeInvoiceCount ? `<small id="payment-summary-invoices">0 invoices</small>` : ''}</div>
+          <div class="payment-summary-card received"><span>Payment received</span><b id="payment-summary-${key}-received">0.00</b></div>
+          <div class="payment-summary-card pending"><span>Payment pending</span><b id="payment-summary-${key}-pending">0.00</b></div>
+        </div>
+      </section>`;
     wrap.innerHTML = `<div class="project-header"><div><h1>Payment History</h1><div class="hint">Track invoices, received payments, and pending balances.</div></div></div>
       <div class="admin-block">
         <div class="payment-summary-period" id="payment-summary-period">All time</div>
-        <div class="payment-summary-cards">
-          <div class="payment-summary-card revenue"><span>Total revenue</span><b id="payment-summary-revenue">0.00</b><small id="payment-summary-invoices">0 invoices</small></div>
-          <div class="payment-summary-card received"><span>Payment received</span><b id="payment-summary-received">0.00</b></div>
-          <div class="payment-summary-card pending"><span>Payment pending</span><b id="payment-summary-pending">0.00</b></div>
-          <div class="payment-summary-card cash-pending"><span>Cash remaining</span><b id="payment-summary-cash-pending">0.00</b></div>
-          <div class="payment-summary-card gst-pending"><span>GST remaining</span><b id="payment-summary-gst-pending">0.00</b></div>
-          <div class="payment-summary-card igst-pending"><span>IGST remaining</span><b id="payment-summary-igst-pending">0.00</b></div>
-        </div>
+        ${summarySection('Overall', 'overall', true)}
+        ${summarySection('Cash invoices', 'cash')}
+        ${summarySection('GST invoices', 'gst')}
+        ${summarySection('IGST invoices', 'igst')}
         <div class="attendance-filters">
           <label>From <input type="date" id="payment-history-from"></label>
           <label>To <input type="date" id="payment-history-to"></label>
@@ -605,12 +610,19 @@ async function renderPaymentHistory() {
       if ($('#payment-history-invoice-type').value) params.set('invoice_type', $('#payment-history-invoice-type').value);
       if ($('#payment-history-status').value) params.set('status', $('#payment-history-status').value);
       const summary = await api(`/payment-history/summary?${params.toString()}`);
-      $('#payment-summary-revenue').textContent = Number(summary.total_revenue || 0).toFixed(2);
-      $('#payment-summary-received').textContent = Number(summary.payment_received || 0).toFixed(2);
-      $('#payment-summary-pending').textContent = Number(summary.payment_pending || 0).toFixed(2);
-      $('#payment-summary-cash-pending').textContent = Number(summary.cash_pending || 0).toFixed(2);
-      $('#payment-summary-gst-pending').textContent = Number(summary.gst_pending || 0).toFixed(2);
-      $('#payment-summary-igst-pending').textContent = Number(summary.igst_pending || 0).toFixed(2);
+      const setAmount = (id, value) => { $(`#payment-summary-${id}`).textContent = Number(value || 0).toFixed(2); };
+      setAmount('overall-revenue', summary.total_revenue);
+      setAmount('overall-received', summary.payment_received);
+      setAmount('overall-pending', summary.payment_pending);
+      setAmount('cash-revenue', summary.cash_revenue);
+      setAmount('cash-received', summary.cash_received);
+      setAmount('cash-pending', summary.cash_pending);
+      setAmount('gst-revenue', summary.gst_revenue);
+      setAmount('gst-received', summary.gst_received);
+      setAmount('gst-pending', summary.gst_pending);
+      setAmount('igst-revenue', summary.igst_revenue);
+      setAmount('igst-received', summary.igst_received);
+      setAmount('igst-pending', summary.igst_pending);
       $('#payment-summary-invoices').textContent = `${summary.invoice_count} invoice${summary.invoice_count === 1 ? '' : 's'}`;
       const selectedMember = $('#payment-history-assignee').selectedOptions[0]?.textContent;
       const selectedInvoiceType = $('#payment-history-invoice-type').selectedOptions[0]?.textContent;
