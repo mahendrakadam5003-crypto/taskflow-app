@@ -2041,6 +2041,7 @@ async function renderPunchCard() {
         button.disabled = true;
         try {
           await api('/attendance/device-registration/me', { method: 'DELETE' });
+          showAppNotification('Device reset successfully.');
           await renderPunchCard();
         } catch (err) { $('#attendance-device-error').textContent = err.message; button.disabled = false; }
       });
@@ -2068,6 +2069,7 @@ async function renderPunchCard() {
       button.disabled = true;
       try {
         await api('/attendance/device-registration/me', { method: 'DELETE' });
+        showAppNotification('Device reset successfully.');
         await renderPunchCard();
       } catch (err) { alert(err.message); button.disabled = false; }
     });
@@ -2554,7 +2556,7 @@ async function renderAdmin() {
         if (!confirmed) return;
         try {
           await api(`/attendance/device-registration/${button.dataset.deviceUser}`, { method: 'DELETE' });
-          showAppNotification('Registered attendance device reset.');
+          showAppNotification('Device reset successfully.');
           await renderAdmin();
         } catch (error) { alert(error.message); }
       };
