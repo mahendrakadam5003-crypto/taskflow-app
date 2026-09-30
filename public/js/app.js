@@ -2382,9 +2382,26 @@ async function loadTrackingTimeline(userId, selectedButton, selectedDate = today
 async function renderAdmin() {
   const wrap = $('#admin-content');
   if (!wrap) return;
-  wrap.innerHTML = '<div class="hint" role="status">Loading administrator settings...</div>';
+  wrap.innerHTML = '<div class="hint" id="admin-loading-status" role="status">Loading administrator settings...</div>';
   try {
-    const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess, paymentAccess, deviceAccess, myDeviceAccess, projectActionAccess, taskCheckinAccess, taskWorkModeAccess] = await Promise.all([api('/auth/users'), api('/auth/settings'), api('/auth/departments'), api('/auth/reimbursement-access'), api('/auth/activity'), api('/attendance/tracking-access'), api('/attendance/verification-access'), api('/payment-history/access'), api('/attendance/device-access'), api('/attendance/device-access/me'), api('/project-action-access'), api('/task-checkin-access'), api('/task-work-mode-access')]);
+    const adminPaths = ['/auth/users', '/auth/settings', '/auth/departments', '/auth/reimbursement-access', '/auth/activity', '/attendance/tracking-access', '/attendance/verification-access', '/payment-history/access', '/attendance/device-access', '/attendance/device-access/me', '/project-action-access', '/task-checkin-access', '/task-work-mode-access'];
+    const pendingPaths = new Set(adminPaths);
+    const loadAdminData = async (path) => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      try {
+        return await api(path, { signal: controller.signal });
+      } catch (error) {
+        if (error.name === 'AbortError') throw new Error(`${path} timed out after 15 seconds.`);
+        throw new Error(`${path}: ${error.message}`);
+      } finally {
+        clearTimeout(timeout);
+        pendingPaths.delete(path);
+        const status = $('#admin-loading-status');
+        if (status && pendingPaths.size) status.textContent = `Loading administrator settings... ${pendingPaths.size} requests remaining.`;
+      }
+    };
+    const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess, paymentAccess, deviceAccess, myDeviceAccess, projectActionAccess, taskCheckinAccess, taskWorkModeAccess] = await Promise.all(adminPaths.map(loadAdminData));
     const verificationByUser = new Map(verificationAccess.map(person => [Number(person.id), Number(person.verification_required) === 1]));
     const departmentOptions = departments.map(d => `<option value="${escapeHtml(d.name || d.NAME)}">${escapeHtml(d.name || d.NAME)}</option>`).join('');
 
