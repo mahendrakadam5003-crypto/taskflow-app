@@ -1013,6 +1013,10 @@ async function renderReimbursements() {
       showAppNotification('Expense submitted successfully.');
     };
   }
+  ['reimbursement-user', 'reimbursement-status', 'reimbursement-from', 'reimbursement-to'].forEach(id => {
+    const filter = $(`#${id}`);
+    if (filter) filter.onchange = renderRows;
+  });
   $('#reimbursement-filter').onclick = renderRows;
   $('#reimbursement-export').onclick = () => {
     const params = new URLSearchParams();
