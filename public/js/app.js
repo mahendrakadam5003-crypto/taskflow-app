@@ -892,14 +892,20 @@ async function renderReimbursements() {
     </div>`;
 
   const table = $('#reimbursements-table');
-  const renderSummary = rows => {
-    const total = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
-    const pending = rows.filter(row => ['submitted', 'approved_level_1'].includes(row.status)).reduce((sum, row) => sum + Number(row.amount || 0), 0);
-    const approved = rows.filter(row => ['approved', 'paid'].includes(row.status)).reduce((sum, row) => sum + Number(row.amount || 0), 0);
-    $('#reimbursement-total-amount').textContent = `INR ${total.toFixed(2)}`;
-    $('#reimbursement-total-count').textContent = `${rows.length} claim${rows.length === 1 ? '' : 's'}`;
-    $('#reimbursement-pending-amount').textContent = `INR ${pending.toFixed(2)}`;
-    $('#reimbursement-approved-amount').textContent = `INR ${approved.toFixed(2)}`;
+  const refreshReimbursementSummary = async () => {
+    try {
+      const summary = await api('/reimbursements/summary');
+      $('#reimbursement-total-amount').textContent = `INR ${Number(summary.total_amount || 0).toFixed(2)}`;
+      $('#reimbursement-total-count').textContent = `${Number(summary.claim_count || 0)} claim${Number(summary.claim_count || 0) === 1 ? '' : 's'}`;
+      $('#reimbursement-pending-amount').textContent = `INR ${Number(summary.pending_amount || 0).toFixed(2)}`;
+      $('#reimbursement-approved-amount').textContent = `INR ${Number(summary.approved_amount || 0).toFixed(2)}`;
+    } catch (error) {
+      $('#reimbursement-total-amount').textContent = '—';
+      $('#reimbursement-total-count').textContent = 'Unable to load claims';
+      $('#reimbursement-pending-amount').textContent = '—';
+      $('#reimbursement-approved-amount').textContent = '—';
+      console.warn('Expense summary refresh failed:', error.message);
+    }
   };
   const renderRows = async () => {
     const params = new URLSearchParams();
@@ -909,7 +915,6 @@ async function renderReimbursements() {
     if ($('#reimbursement-to')?.value) params.set('to', $('#reimbursement-to').value);
     try {
       const rows = await api(`/reimbursements?${params.toString()}`);
-      renderSummary(rows);
       table.innerHTML = rows.length ? rows.map(row => {
         const canApprove = canReview && ((row.status === 'submitted' && (isAdmin || Number(access.approval_level) === 1)) || (row.status === 'approved_level_1' && (isAdmin || Number(access.approval_level) >= 2)));
         const receiptItems = Array.isArray(row.receipt_items) ? row.receipt_items : (row.receipt_url ? [{ url: row.receipt_url, original_name: 'View receipt' }] : []);
@@ -939,6 +944,7 @@ async function renderReimbursements() {
             showAppNotification('Expense has been approved successfully.');
           }
           await renderRows();
+          await refreshReimbursementSummary();
           await refreshNotificationsAfterAction();
         };
       });
@@ -967,13 +973,10 @@ async function renderReimbursements() {
         await api('/reimbursements/bulk-status', { method: 'PUT', body: { ids } });
         showAppNotification('Expenses have been approved successfully.');
         await renderRows();
+        await refreshReimbursementSummary();
         await refreshNotificationsAfterAction();
       };
     } catch (err) {
-      $('#reimbursement-total-amount').textContent = '—';
-      $('#reimbursement-total-count').textContent = 'Unable to load claims';
-      $('#reimbursement-pending-amount').textContent = '—';
-      $('#reimbursement-approved-amount').textContent = '—';
       table.innerHTML = `<tr><td colspan="9" class="form-error">${escapeHtml(err.message)}</td></tr>`;
     }
   };
@@ -1009,6 +1012,7 @@ async function renderReimbursements() {
       $('#reimbursement-form-success').textContent = 'Expense submitted successfully.';
       $('#employee-reimbursement-form').classList.add('hidden');
       $('#employee-reimbursement-overview').classList.remove('hidden');
+      await refreshReimbursementSummary();
       await renderRows();
       showAppNotification('Expense submitted successfully.');
     };
@@ -1026,7 +1030,8 @@ async function renderReimbursements() {
     if ($('#reimbursement-to')?.value) params.set('to', $('#reimbursement-to').value);
     window.open(`/api/reimbursements/export.csv?${params.toString()}`, '_blank');
   };
-  await renderRows();
+  renderRows();
+  refreshReimbursementSummary();
 }
 
 // ================= PROJECTS MODULE =================

@@ -73,6 +73,26 @@ async function getReimbursementRows(req) {
   return db.prepare(sql).all(...params);
 }
 
+router.get('/summary', async (req, res) => {
+  try {
+    const access = await getAccess(req);
+    let sql = `SELECT COUNT(*) AS claim_count,
+      COALESCE(SUM(r.amount), 0) AS total_amount,
+      COALESCE(SUM(CASE WHEN r.status IN ('submitted', 'approved_level_1') THEN r.amount ELSE 0 END), 0) AS pending_amount,
+      COALESCE(SUM(CASE WHEN r.status IN ('approved', 'paid') THEN r.amount ELSE 0 END), 0) AS approved_amount
+      FROM reimbursements r JOIN users u ON u.id = r.user_id
+      WHERE r.expense_date <= date('now', 'localtime')`;
+    const params = [];
+    if (req.session.role !== 'admin' && !access.approval_level) {
+      sql += ' AND r.user_id = ?';
+      params.push(req.session.userId);
+    }
+    res.json(await db.prepare(sql).get(...params));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/', async (req, res) => {
   try {
     const rows = await getReimbursementRows(req);
