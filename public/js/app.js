@@ -2127,10 +2127,11 @@ async function renderHistory() {
     const rawRows = await api('/attendance/mine');
     const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
     if (!rows || !rows.length) {
-      table.innerHTML = '<tr><td colspan="6" class="hint" style="text-align:center; padding:15px; color:#888;">No tracking history entries generated.</td></tr>';
+      table.innerHTML = '<tr><td colspan="7" class="hint" style="text-align:center; padding:15px; color:#888;">No tracking history entries generated.</td></tr>';
       return;
     }
     table.innerHTML = rows.map(r => {
+      const present = r.present ?? Boolean(r.punch_in || r.PUNCH_IN);
       const inLat = r.in_lat || r.IN_LAT;
       const inLng = r.in_lng || r.IN_LNG;
       const outLat = r.out_lat || r.OUT_LAT;
@@ -2141,6 +2142,7 @@ async function renderHistory() {
       return `
       <tr style="border-bottom: 1px solid #eee;">
         <td style="padding:10px;">${fmtDate(r.date || r.DATE)}</td>
+        <td style="padding:10px;"><span class="tag ${present ? 'attendance-present' : 'attendance-absent'}">${present ? 'Present' : 'Not present'}</span></td>
         <td style="padding:10px; color:green;">${fmtTime(r.punch_in || r.PUNCH_IN) || '--'}</td>
         <td style="padding:10px;">${escapeHtml(r.in_device_info || r.in_device_type || '--')}</td>
         <td style="padding:10px; color:red;">${fmtTime(r.punch_out || r.PUNCH_OUT) || '--'}</td>

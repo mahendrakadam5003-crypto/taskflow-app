@@ -399,14 +399,26 @@ router.get('/mine', async (req, res) => {
   from.setDate(from.getDate() - 30);
   const fromQuery = req.query.from || from.toISOString().slice(0, 10);
   const toQuery = req.query.to || todayStr();
-  const rows = await db.prepare(`SELECT * FROM attendance WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date DESC`).all(req.session.userId, fromQuery, toQuery);
-  
-  const mappedRows = rows.map(r => ({
-    ...r,
-    in_map_url: makeMapLink(r.in_lat, r.in_lng),
-    out_map_url: makeMapLink(r.out_lat, r.out_lng)
-  }));
-  res.json(mappedRows);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromQuery) || !/^\d{4}-\d{2}-\d{2}$/.test(toQuery) || fromQuery > toQuery) {
+    return res.status(400).json({ error: 'Choose a valid attendance date range.' });
+  }
+  const rows = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date DESC')
+    .all(req.session.userId, fromQuery, toQuery);
+  const rowsByDate = new Map(rows.map(row => [row.date, row]));
+  const fromDate = new Date(`${fromQuery}T00:00:00Z`);
+  const toDate = new Date(`${toQuery}T00:00:00Z`);
+  const history = [];
+  for (const date = new Date(toDate); date >= fromDate; date.setUTCDate(date.getUTCDate() - 1)) {
+    const dateKey = date.toISOString().slice(0, 10);
+    const row = rowsByDate.get(dateKey);
+    history.push(row ? {
+      ...row,
+      present: !!row.punch_in,
+      in_map_url: makeMapLink(row.in_lat, row.in_lng),
+      out_map_url: makeMapLink(row.out_lat, row.out_lng)
+    } : { date: dateKey, present: false });
+  }
+  res.json(history);
 });
 
 // admin: view all attendance

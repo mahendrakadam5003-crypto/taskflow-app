@@ -443,6 +443,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .attendance-device-admin-person { display: flex; min-width: 190px; flex-direction: column; gap: 3px; }
 .attendance-device-admin-person span { color: var(--green); font-size: 13px; }
 .attendance-device-admin-person small { color: var(--muted); }
+.attendance-present { background: var(--green-bg); color: var(--green); }
+.attendance-absent { background: #fff0ef; color: #b42318; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 760px) {
