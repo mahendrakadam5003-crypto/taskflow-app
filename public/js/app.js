@@ -2016,7 +2016,7 @@ async function renderPunchCard() {
       card.innerHTML = `<div class="admin-block attendance-phone-only"><b>Attendance is disabled on this device</b><p class="hint">Ask an administrator to allow punching from your ${currentDeviceType()}.</p></div>`;
       return;
     }
-    if (!registration.registered) {
+    if (!registration.registered && !registration.rebind_pending) {
       card.innerHTML = `<div class="admin-block attendance-device-enrollment"><b>Register this device</b><p class="hint">Name the phone or computer you use for attendance. This account can punch only from this browser until an administrator resets the device.</p><label>Device name<input id="attendance-device-name" maxlength="60" placeholder="For example, Amit's Pixel"></label><button class="btn btn-primary" id="attendance-device-register" type="button">Register device</button><div class="form-error" id="attendance-device-error"></div></div>`;
       $('#attendance-device-register').onclick = async (event) => {
         const button = event.currentTarget;
@@ -2032,7 +2032,7 @@ async function renderPunchCard() {
       };
       return;
     }
-    if (!registration.is_current_device) {
+    if (registration.registered && !registration.is_current_device) {
       card.innerHTML = `<div class="admin-block attendance-phone-only"><b>This account is registered to ${escapeHtml(registration.device_name || 'another device')}</b><p class="hint">Punching from this browser is blocked. Ask an administrator to reset your registered device.${registration.can_manage ? ' You have permission to move your enrollment to this browser.' : ''}</p>${registration.can_manage ? '<button class="btn btn-secondary" id="attendance-device-self-reset" type="button">Reset my device</button>' : ''}<div class="form-error" id="attendance-device-error"></div></div>`;
       $('#attendance-device-self-reset')?.addEventListener('click', async (event) => {
         const button = event.currentTarget;
@@ -2046,7 +2046,9 @@ async function renderPunchCard() {
       });
       return;
     }
-    const registeredDeviceSummary = `<div class="attendance-registered-device"><span>Registered device</span><b>${escapeHtml(registration.device_name)}</b>${registration.can_manage ? `<div class="attendance-device-edit"><input id="attendance-device-rename" maxlength="60" value="${escapeHtml(registration.device_name)}" aria-label="Registered device name"><button class="btn btn-secondary btn-sm" id="attendance-device-rename-save" type="button">Save name</button><button class="btn btn-danger btn-sm" id="attendance-device-self-reset" type="button">Reset</button></div>` : ''}</div>`;
+    const registeredDeviceSummary = registration.registered
+      ? `<div class="attendance-registered-device"><span>Registered device</span><b>${escapeHtml(registration.device_name)}</b>${registration.can_manage ? `<div class="attendance-device-edit"><input id="attendance-device-rename" maxlength="60" value="${escapeHtml(registration.device_name)}" aria-label="Registered device name"><button class="btn btn-secondary btn-sm" id="attendance-device-rename-save" type="button">Save name</button><button class="btn btn-danger btn-sm" id="attendance-device-self-reset" type="button">Reset</button></div>` : ''}</div>`
+      : '<div class="attendance-registered-device"><span>Device reset by administrator.</span><b>This browser will be bound automatically when you punch.</b></div>';
     card.innerHTML = registeredDeviceSummary;
     $('#attendance-device-rename-save')?.addEventListener('click', async () => {
       const button = $('#attendance-device-rename-save');
@@ -2515,12 +2517,13 @@ async function renderAdmin() {
     deviceAccess.forEach((person) => {
       const row = document.createElement('div');
       row.className = 'admin-form-row';
-      row.innerHTML = `<div class="attendance-device-admin-person"><b>${escapeHtml(person.name)}</b><span>${escapeHtml(person.registered_device_name || 'No device registered')}</span>${person.registered_device_info ? `<small>${escapeHtml(person.registered_device_info)}</small>` : ''}</div>
+      const deviceStatus = person.registered_device_name || (Number(person.device_rebind_pending) === 1 ? 'Reset; next punch will auto-bind' : 'No device registered');
+      row.innerHTML = `<div class="attendance-device-admin-person"><b>${escapeHtml(person.name)}</b><span>${escapeHtml(deviceStatus)}</span>${person.registered_device_info ? `<small>${escapeHtml(person.registered_device_info)}</small>` : ''}</div>
         <label><input type="checkbox" data-device-phone="${person.id}" ${Number(person.allow_phone) === 1 ? 'checked' : ''}> Phone</label>
         <label><input type="checkbox" data-device-laptop="${person.id}" ${Number(person.allow_laptop) === 1 ? 'checked' : ''}> Laptop</label>
         <label><input type="checkbox" data-device-manage="${person.id}" ${Number(person.can_manage_device) === 1 ? 'checked' : ''}> Can manage own registered device</label>
         <button class="btn btn-secondary btn-sm save-device-access" data-device-user="${person.id}">Save access</button>
-        ${person.registered_device_name ? `<button class="btn btn-danger btn-sm reset-attendance-device" data-device-user="${person.id}" data-device-name="${escapeHtml(person.registered_device_name)}" type="button">Reset device</button>` : ''}`;
+        <button class="btn btn-danger btn-sm reset-attendance-device" data-device-user="${person.id}" data-device-name="${escapeHtml(person.registered_device_name || '')}" type="button">Reset device</button>`;
       deviceAccessList.appendChild(row);
     });
     $$('[data-device-phone], [data-device-laptop]').forEach((checkbox) => {
@@ -2547,7 +2550,7 @@ async function renderAdmin() {
     });
     $$('.reset-attendance-device').forEach(button => {
       button.onclick = async () => {
-        const confirmed = await confirmModal('Reset attendance device?', `Reset ${button.dataset.deviceName}'s registered device? Their next punch must register a device again.`, 'Reset device', true);
+        const confirmed = await confirmModal('Reset attendance device?', `${button.dataset.deviceName ? `Clear ${button.dataset.deviceName}'s device binding` : "Clear this employee's device binding"}? The employee's next punch will automatically bind that browser.`, 'Reset device', true);
         if (!confirmed) return;
         try {
           await api(`/attendance/device-registration/${button.dataset.deviceUser}`, { method: 'DELETE' });

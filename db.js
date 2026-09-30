@@ -280,6 +280,12 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       granted_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
 
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS attendance_device_rebind_pending (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      reset_by INTEGER REFERENCES users(id),
+      reset_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );`);
+
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS reimbursements (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id),

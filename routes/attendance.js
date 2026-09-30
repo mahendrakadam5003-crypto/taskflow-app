@@ -56,8 +56,26 @@ async function checkRegisteredDevice(req, res) {
   }
   const registration = await db.prepare('SELECT device_token_hash, device_name FROM attendance_registered_devices WHERE user_id=?').get(req.session.userId);
   if (!registration) {
-    res.status(409).json({ error: 'Register a named device before punching in.', code: 'DEVICE_REGISTRATION_REQUIRED' });
-    return false;
+    const pending = await db.prepare('SELECT user_id FROM attendance_device_rebind_pending WHERE user_id=?').get(req.session.userId);
+    if (!pending) {
+      res.status(409).json({ error: 'Register a named device before punching in.', code: 'DEVICE_REGISTRATION_REQUIRED' });
+      return false;
+    }
+    const device = getPunchDevice(req, req.body.device_model);
+    const deviceName = String(req.body.device_name || device.info).trim().slice(0, 60) || device.info;
+    try {
+      await db.prepare('INSERT INTO attendance_registered_devices (user_id, device_token_hash, device_name, device_info) VALUES (?, ?, ?, ?)')
+        .run(req.session.userId, getDeviceTokenHash(deviceId), deviceName, device.info);
+    } catch (error) {
+      const current = await db.prepare('SELECT device_token_hash FROM attendance_registered_devices WHERE user_id=?').get(req.session.userId);
+      if (!current || current.device_token_hash !== getDeviceTokenHash(deviceId)) {
+        res.status(409).json({ error: 'Device binding changed while punching. Try again or ask an administrator to reset it.', code: 'DEVICE_MISMATCH' });
+        return false;
+      }
+    }
+    await db.prepare('DELETE FROM attendance_device_rebind_pending WHERE user_id=?').run(req.session.userId);
+    await logActivity(req, 'Attendance device automatically rebound', 'user', req.session.userId, deviceName, req.session.userId);
+    return true;
   }
   if (registration.device_token_hash !== getDeviceTokenHash(deviceId)) {
     res.status(403).json({ error: `This account is registered to "${registration.device_name}". Ask an administrator to reset the device before punching from another one.`, code: 'DEVICE_MISMATCH' });
@@ -140,10 +158,12 @@ router.get('/device-access', requireAdmin, async (req, res) => {
     COALESCE(ada.allow_phone, 1) AS allow_phone,
     COALESCE(ada.allow_laptop, 0) AS allow_laptop,
     rd.device_name AS registered_device_name, rd.device_info AS registered_device_info, rd.registered_at,
-    CASE WHEN dma.user_id IS NULL THEN 0 ELSE 1 END AS can_manage_device
+    CASE WHEN dma.user_id IS NULL THEN 0 ELSE 1 END AS can_manage_device,
+    CASE WHEN drp.user_id IS NULL THEN 0 ELSE 1 END AS device_rebind_pending
     FROM users u LEFT JOIN attendance_device_access ada ON ada.user_id = u.id
     LEFT JOIN attendance_registered_devices rd ON rd.user_id=u.id
     LEFT JOIN attendance_device_management_access dma ON dma.user_id=u.id
+    LEFT JOIN attendance_device_rebind_pending drp ON drp.user_id=u.id
     WHERE u.active = 1 ORDER BY u.name`).all();
   res.json(rows || []);
 });
@@ -154,8 +174,10 @@ router.get('/device-registration/me', async (req, res) => {
     db.prepare('SELECT device_token_hash, device_name, device_info, registered_at FROM attendance_registered_devices WHERE user_id=?').get(req.session.userId),
     db.prepare('SELECT user_id FROM attendance_device_management_access WHERE user_id=?').get(req.session.userId)
   ]);
+  const pending = !registration && await db.prepare('SELECT user_id FROM attendance_device_rebind_pending WHERE user_id=?').get(req.session.userId);
   res.json({
     registered: !!registration,
+    rebind_pending: !!pending,
     device_name: registration?.device_name || null,
     device_info: registration?.device_info || null,
     registered_at: registration?.registered_at || null,
@@ -189,6 +211,7 @@ router.post('/device-registration/register', async (req, res) => {
       return res.status(409).json({ error: 'Device registration changed in another request. Reload and try again.' });
     }
   }
+  await db.prepare('DELETE FROM attendance_device_rebind_pending WHERE user_id=?').run(req.session.userId);
   await logActivity(req, existing ? 'Attendance device renamed' : 'Attendance device registered', 'user', req.session.userId, deviceName, req.session.userId);
   res.json({ ok: true, device_name: deviceName });
 });
@@ -196,6 +219,7 @@ router.post('/device-registration/register', async (req, res) => {
 router.delete('/device-registration/me', async (req, res) => {
   const allowed = req.session.role === 'admin' || !!(await db.prepare('SELECT user_id FROM attendance_device_management_access WHERE user_id=?').get(req.session.userId));
   if (!allowed) return res.status(403).json({ error: 'Only an administrator can reset your registered device.' });
+  await db.prepare('INSERT OR REPLACE INTO attendance_device_rebind_pending (user_id, reset_by) VALUES (?, ?)').run(req.session.userId, req.session.userId);
   await db.prepare('DELETE FROM attendance_registered_devices WHERE user_id=?').run(req.session.userId);
   await logActivity(req, 'Attendance device reset by user', 'user', req.session.userId, req.session.name || '', req.session.userId);
   res.json({ ok: true });
@@ -217,6 +241,7 @@ router.delete('/device-registration/:userId', requireAdmin, async (req, res) => 
   const userId = Number(req.params.userId);
   const target = await db.prepare('SELECT name FROM users WHERE id=? AND active=1').get(userId);
   if (!target) return res.status(404).json({ error: 'Active user not found.' });
+  await db.prepare('INSERT OR REPLACE INTO attendance_device_rebind_pending (user_id, reset_by) VALUES (?, ?)').run(userId, req.session.userId);
   await db.prepare('DELETE FROM attendance_registered_devices WHERE user_id=?').run(userId);
   await logActivity(req, 'Attendance device reset by admin', 'user', userId, target.name, userId);
   res.json({ ok: true });
