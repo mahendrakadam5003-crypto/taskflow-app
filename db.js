@@ -406,6 +406,35 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     if (!attendanceColumns.includes('out_device_type')) await dbDriverInterface.exec('ALTER TABLE attendance ADD COLUMN out_device_type TEXT');
     if (!attendanceColumns.includes('out_device_info')) await dbDriverInterface.exec('ALTER TABLE attendance ADD COLUMN out_device_info TEXT');
 
+    const duplicateAttendanceDays = await dbDriverInterface.prepare(`SELECT user_id, date
+      FROM attendance GROUP BY user_id, date HAVING COUNT(*) > 1`).all();
+    for (const duplicateDay of duplicateAttendanceDays) {
+      const records = await dbDriverInterface.prepare(`SELECT * FROM attendance
+        WHERE user_id = ? AND date = ? ORDER BY id`).all(duplicateDay.user_id, duplicateDay.date);
+      if (records.length < 2) continue;
+      const earliestPunchIn = records.filter(record => record.punch_in).sort((left, right) => String(left.punch_in).localeCompare(String(right.punch_in)))[0] || records[0];
+      const latestPunchOut = records.filter(record => record.punch_out).sort((left, right) => String(right.punch_out).localeCompare(String(left.punch_out)))[0] || records[0];
+      const notes = [...new Set(records.flatMap(record => String(record.notes || '').split('\n').map(note => note.trim()).filter(Boolean)))].join('\n') || null;
+      const locationStatus = [...records].reverse().find(record => record.location_status)?.location_status || null;
+      const keepId = records[0].id;
+      await dbDriverInterface.prepare(`UPDATE attendance SET punch_in = ?, in_lat = ?, in_lng = ?,
+        in_location_text = ?, in_device_type = ?, in_device_info = ?, punch_out = ?, out_lat = ?, out_lng = ?,
+        out_location_text = ?, out_device_type = ?, out_device_info = ?, location_status = ?, notes = ?
+        WHERE id = ?`).run(
+        earliestPunchIn.punch_in, earliestPunchIn.in_lat, earliestPunchIn.in_lng,
+        earliestPunchIn.in_location_text, earliestPunchIn.in_device_type, earliestPunchIn.in_device_info,
+        latestPunchOut.punch_out, latestPunchOut.out_lat, latestPunchOut.out_lng,
+        latestPunchOut.out_location_text, latestPunchOut.out_device_type, latestPunchOut.out_device_info,
+        locationStatus, notes, keepId
+      );
+      for (const duplicate of records.slice(1)) {
+        await dbDriverInterface.prepare('UPDATE attendance_locations SET attendance_id = ? WHERE attendance_id = ?').run(keepId, duplicate.id);
+        await dbDriverInterface.prepare("UPDATE activity_log SET entity_id = ? WHERE entity_type = 'attendance' AND entity_id = ?").run(keepId, duplicate.id);
+        await dbDriverInterface.prepare('DELETE FROM attendance WHERE id = ?').run(duplicate.id);
+      }
+    }
+    await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS attendance_user_date_unique ON attendance (user_id, date)');
+
     const rawTaskPragmaRows = await dbDriverInterface.prepare("PRAGMA table_info(tasks)").all();
     const taskColumns = (rawTaskPragmaRows || []).map(row => row.name || row.NAME);
     if (!taskColumns.includes('created_by')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN created_by INTEGER REFERENCES users(id)");

@@ -245,6 +245,33 @@ router.put('/verification-access/:userId', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+async function savePunchIn(userId, date, lat, lng, device) {
+  await db.ready;
+  const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(userId, date);
+  if (existing?.punch_in) return null;
+
+  const locationName = await getLocationName(lat, lng);
+  const now = new Date().toISOString();
+  const mapStr = `📍 In: ${locationName}`;
+  let attendanceId;
+  if (existing) {
+    const updated = await db.prepare(`UPDATE attendance SET punch_in = ?, in_lat = ?, in_lng = ?,
+      in_location_text = ?, in_device_type = ?, in_device_info = ?, location_status = ?
+      WHERE id = ? AND punch_in IS NULL`)
+      .run(now, lat, lng, locationName, device.type, device.info, mapStr, existing.id);
+    if (!updated.changes) return null;
+    attendanceId = existing.id;
+  } else {
+    const inserted = await db.prepare(`INSERT OR IGNORE INTO attendance
+      (user_id, date, punch_in, in_lat, in_lng, in_location_text, in_device_type, in_device_info, location_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(userId, date, now, lat, lng, locationName, device.type, device.info, mapStr);
+    if (!inserted.changes) return null;
+    attendanceId = inserted.lastInsertRowid;
+  }
+  return { attendanceId, locationName, now, mapStr };
+}
+
 // PUNCH IN ROUTE WITH AUTOMATIC LOCATION NAMING
 router.post('/punch-in', async (req, res) => {
   const { lat, lng } = req.body;
@@ -255,31 +282,18 @@ router.post('/punch-in', async (req, res) => {
   if (lat == null || lng == null) return res.status(400).json({ error: 'Location is required to punch in.' });
   
   const date = todayStr();
-  const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(req.session.userId, date);
-  if (existing && existing.punch_in) return res.status(400).json({ error: 'Already punched in today' });
-  
-  // Automatically fetch the readable address name
-  const locationName = await getLocationName(lat, lng);
-  const mapStr = `📍 In: ${locationName}`;
-  const now = new Date().toISOString();
-  
-  if (existing) {
-    await db.prepare('UPDATE attendance SET punch_in = ?, in_lat = ?, in_lng = ?, in_location_text = ?, in_device_type = ?, in_device_info = ?, location_status = ? WHERE id = ?')
-      .run(now, lat, lng, locationName, deviceType, device.info, mapStr, existing.id);
-  } else {
-    await db.prepare('INSERT INTO attendance (user_id, date, punch_in, in_lat, in_lng, in_location_text, in_device_type, in_device_info, location_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(req.session.userId, date, now, lat, lng, locationName, deviceType, device.info, mapStr);
-  }
-  const attendance = await db.prepare('SELECT id FROM attendance WHERE user_id = ? AND date = ?').get(req.session.userId, date);
+  const punchIn = await savePunchIn(req.session.userId, date, lat, lng, device);
+  if (!punchIn) return res.status(400).json({ error: 'Already punched in today' });
+  const { attendanceId, locationName, now, mapStr } = punchIn;
   const recordedAt = new Date().toISOString();
-  const locationInfo = await recordLocationPoint(attendance.id, req.session.userId, lat, lng, recordedAt);
+  const locationInfo = await recordLocationPoint(attendanceId, req.session.userId, lat, lng, recordedAt);
   try {
     const telegramMessageId = await sendLocationToTelegram(lat, lng, `Live tracking started: ${req.session.userId}`);
     await db.prepare('UPDATE attendance_locations SET telegram_message_id = ? WHERE id = ?').run(telegramMessageId, locationInfo.id);
   } catch (error) {
     console.error(error.message);
   }
-  await logActivity(req, 'Punched in', 'attendance', existing ? existing.id : null, `${date} - ${locationName}`, req.session.userId);
+  await logActivity(req, 'Punched in', 'attendance', attendanceId, `${date} - ${locationName}`, req.session.userId);
   res.json({ ok: true, time: now, status: mapStr });
 });
 
@@ -362,18 +376,8 @@ router.post('/admin-punch-in', requireAdmin, async (req, res) => {
   if (!(await canPunchFromDevice(req.session.userId, device.type))) return res.status(403).json({ error: 'Punching from this device is not allowed for your admin account.' });
   if (!user_id || lat == null || lng == null) return res.status(400).json({ error: 'Employee and location are required.' });
   const date = todayStr();
-  const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(user_id, date);
-  if (existing && existing.punch_in) return res.status(400).json({ error: 'This employee is already punched in today.' });
-  const locationName = await getLocationName(lat, lng);
-  const now = new Date().toISOString();
-  const mapStr = `📍 In: ${locationName}`;
-  if (existing) {
-    await db.prepare('UPDATE attendance SET punch_in = ?, in_lat = ?, in_lng = ?, in_location_text = ?, in_device_type = ?, in_device_info = ?, location_status = ? WHERE id = ?')
-      .run(now, lat, lng, locationName, device.type, device.info, mapStr, existing.id);
-  } else {
-    await db.prepare('INSERT INTO attendance (user_id, date, punch_in, in_lat, in_lng, in_location_text, in_device_type, in_device_info, location_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(user_id, date, now, lat, lng, locationName, device.type, device.info, mapStr);
-  }
+  const punchIn = await savePunchIn(user_id, date, lat, lng, device);
+  if (!punchIn) return res.status(400).json({ error: 'This employee is already punched in today.' });
   res.json({ ok: true });
 });
 
