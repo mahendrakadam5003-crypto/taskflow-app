@@ -20,13 +20,14 @@ function todayStr() {
 
 function getPunchDevice(req) {
   const userAgent = String(req.get('user-agent') || '').slice(0, 500);
+  const clientHintModel = String(req.get('sec-ch-ua-model') || '').trim().replace(/^"|"$/g, '');
   const isPhone = /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent);
-  const androidModel = userAgent.match(/Android\s+[^;;)]+;\s*([^;)]+)/i)?.[1]?.replace(/\s+Build\/.*$/i, '').trim();
+  const androidModel = clientHintModel || userAgent.match(/Android\s+[^;;)]+;\s*([^;)]+)/i)?.[1]?.replace(/\s+Build\/.*$/i, '').trim();
   const iosVersion = userAgent.match(/OS\s+(\d+[._]\d+)/i)?.[1]?.replace('_', '.');
   let deviceName = 'Desktop browser';
   if (/iPhone/i.test(userAgent)) deviceName = `iPhone${iosVersion ? ` · iOS ${iosVersion}` : ''}`;
   else if (/iPad/i.test(userAgent)) deviceName = `iPad${iosVersion ? ` · iOS ${iosVersion}` : ''}`;
-  else if (/Android/i.test(userAgent)) deviceName = androidModel ? `Android · ${androidModel}` : 'Android device';
+  else if (/Android/i.test(userAgent)) deviceName = androidModel && !/^k$/i.test(androidModel) ? `Android · ${androidModel}` : 'Android device';
   else if (/Macintosh|Mac OS X/i.test(userAgent)) deviceName = 'Mac browser';
   else if (/Windows/i.test(userAgent)) deviceName = 'Windows browser';
   let browserName = 'Browser';

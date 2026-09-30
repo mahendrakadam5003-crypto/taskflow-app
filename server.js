@@ -101,6 +101,10 @@ async function cleanupExpiredUploads() {
 }
 
 app.use(express.json({ limit: '2mb' }));
+app.use((req, res, next) => {
+  res.set('Accept-CH', 'Sec-CH-UA-Model, Sec-CH-UA-Platform-Version');
+  next();
+});
 const sessionOptions = {
   secret: process.env.SESSION_SECRET || 'change-this-secret-before-real-use',
   resave: false,
