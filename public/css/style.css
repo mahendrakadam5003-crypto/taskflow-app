@@ -424,6 +424,14 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .modal input { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 14px; margin-bottom: 10px; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
 .modal p.hint { font-size: 12.5px; color: var(--muted); margin: -4px 0 12px; }
+.modal.user-edit-modal { width: 420px; max-width: min(92vw, 420px); box-sizing: border-box; }
+.user-edit-dialog h3 { margin-bottom: 18px; }
+.user-edit-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 13px; }
+.user-edit-field { display: flex; min-width: 0; flex-direction: column; gap: 6px; color: var(--ink); font-size: 13px; }
+.user-edit-field input, .user-edit-field select { width: 100%; min-width: 0; min-height: 40px; box-sizing: border-box; margin: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; }
+.user-edit-field input:focus, .user-edit-field select:focus { outline: 2px solid color-mix(in srgb, var(--green) 25%, transparent); border-color: var(--green); }
+.user-edit-actions { align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 20px; }
+.user-edit-actions button { min-height: 40px; white-space: nowrap; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 760px) {

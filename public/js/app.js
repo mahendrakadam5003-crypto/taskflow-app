@@ -114,6 +114,7 @@ function showModal(html) {
   const backdropEl = $('#modal-backdrop');
   if (modalEl && backdropEl) {
     modalEl.innerHTML = html;
+    modalEl.classList.toggle('user-edit-modal', html.includes('user-edit-dialog'));
     backdropEl.classList.remove('hidden');
   }
 }
@@ -123,6 +124,7 @@ function closeModal() {
   if (modalEl && backdropEl) {
     backdropEl.classList.add('hidden'); 
     modalEl.innerHTML = ''; 
+    modalEl.classList.remove('user-edit-modal');
   }
 }
 
@@ -2698,23 +2700,25 @@ function adminEditUser(user, departments) {
   const role = user.role || user.ROLE || 'employee';
   const active = Number(user.active ?? user.ACTIVE) === 1;
   showModal(`
-    <h3>Edit employee</h3>
-    <div class="form-grid">
-      <label>Employee name<input id="admin-edit-name" value="${escapeHtml(user.name || user.NAME || '')}" autocomplete="name"></label>
-      <label>Username<input id="admin-edit-username" value="${escapeHtml(user.username || user.USERNAME || '')}" autocomplete="username"></label>
-      <label>Department<select id="admin-edit-department"><option value="">No department</option>${departments.map(item => {
+    <div class="user-edit-dialog">
+      <h3>Edit employee</h3>
+      <div class="user-edit-fields">
+        <label class="user-edit-field">Employee name<input id="admin-edit-name" value="${escapeHtml(user.name || user.NAME || '')}" autocomplete="name"></label>
+        <label class="user-edit-field">Username<input id="admin-edit-username" value="${escapeHtml(user.username || user.USERNAME || '')}" autocomplete="username"></label>
+        <label class="user-edit-field">Department<select id="admin-edit-department"><option value="">No department</option>${departments.map(item => {
         const name = item.name || item.NAME || '';
         return `<option value="${escapeHtml(name)}" ${name === department ? 'selected' : ''}>${escapeHtml(name)}</option>`;
       }).join('')}</select></label>
-      <label>Role<select id="admin-edit-role" ${isSelf ? 'disabled' : ''}><option value="employee" ${role === 'employee' ? 'selected' : ''}>Employee</option><option value="admin" ${role === 'admin' ? 'selected' : ''}>Admin</option></select></label>
-      <label>Account status<select id="admin-edit-active" ${isSelf ? 'disabled' : ''}><option value="1" ${active ? 'selected' : ''}>Active</option><option value="0" ${!active ? 'selected' : ''}>Disabled</option></select></label>
-      <label>New password<input id="admin-edit-password" type="password" placeholder="Leave blank to keep current password" autocomplete="new-password"></label>
-    </div>
-    <div id="admin-edit-error" class="form-error"></div>
-    <div class="modal-actions">
-      ${!isSelf && active ? '<button class="btn btn-danger" id="admin-edit-remove" type="button">Remove user</button>' : ''}
-      <button class="btn btn-secondary" id="admin-edit-cancel" type="button">Cancel</button>
-      <button class="btn btn-primary" id="admin-edit-save" type="button">Save changes</button>
+        <label class="user-edit-field">Role<select id="admin-edit-role" ${isSelf ? 'disabled' : ''}><option value="employee" ${role === 'employee' ? 'selected' : ''}>Employee</option><option value="admin" ${role === 'admin' ? 'selected' : ''}>Admin</option></select></label>
+        <label class="user-edit-field">Account status<select id="admin-edit-active" ${isSelf ? 'disabled' : ''}><option value="1" ${active ? 'selected' : ''}>Active</option><option value="0" ${!active ? 'selected' : ''}>Disabled</option></select></label>
+        <label class="user-edit-field">New password<input id="admin-edit-password" type="password" placeholder="Leave blank to keep current password" autocomplete="new-password"></label>
+      </div>
+      <div id="admin-edit-error" class="form-error"></div>
+      <div class="modal-actions user-edit-actions">
+        ${!isSelf && active ? '<button class="btn btn-danger" id="admin-edit-remove" type="button">Remove user</button>' : ''}
+        <button class="btn btn-secondary" id="admin-edit-cancel" type="button">Cancel</button>
+        <button class="btn btn-primary" id="admin-edit-save" type="button">Save changes</button>
+      </div>
     </div>`);
   $('#admin-edit-cancel').onclick = closeModal;
   $('#admin-edit-save').onclick = async () => {
