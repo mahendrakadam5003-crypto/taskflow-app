@@ -27,6 +27,26 @@ body {
 }
 .hidden { display: none !important; }
 .app.booting { visibility: hidden; }
+.startup-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+}
+.startup-panel {
+  width: 100%;
+  max-width: 360px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: center;
+}
+.startup-panel p { color: var(--muted); }
 .app-notification {
   position: fixed;
   top: 68px;

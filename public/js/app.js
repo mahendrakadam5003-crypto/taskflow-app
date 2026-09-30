@@ -18,7 +18,11 @@ async function api(path, opts = {}) {
     const loginError = $('#login-error');
     if (loginError) loginError.textContent = 'Your session expired. Please sign in again.';
   }
-  if (!res.ok) throw new Error((data && data.error) || 'Request failed');
+  if (!res.ok) {
+    const error = new Error((data && data.error) || 'Request failed');
+    error.status = res.status;
+    throw error;
+  }
   return data;
 }
 
@@ -393,10 +397,16 @@ function stopTaskListPolling() {
     ME = Array.isArray(rawMe) ? rawMe[0] : rawMe;
     enterApp();
   } catch (e) {
-    const loginScreen = $('#login-screen');
-    if (loginScreen) loginScreen.classList.remove('hidden');
+    if (e.status !== 401) {
+      $('#startup-message').textContent = 'Unable to connect. Check your connection and try again.';
+      $('#startup-retry').classList.remove('hidden');
+    } else {
+      $('#startup-screen').classList.add('hidden');
+      $('#login-screen')?.classList.remove('hidden');
+    }
   }
 })();
+$('#startup-retry').onclick = () => location.reload();
 
 const loginForm = $('#login-form');
 if (loginForm) {
@@ -692,10 +702,13 @@ async function enterApp() {
   if (ME.role === 'admin' && navAdmin) navAdmin.style.display = '';
   
   try {
-    const rawPeople = await api('/auth/users/directory');
+    const [rawPeople, paymentAccess, projectActionAccess] = await Promise.all([
+      api('/auth/users/directory'),
+      api('/payment-history/access/me'),
+      api('/project-action-access/me')
+    ]);
     PEOPLE = Array.isArray(rawPeople) ? rawPeople.flat(5) : [];
-    const paymentAccess = await api('/payment-history/access/me');
-    PROJECT_ACTION_ACCESS = await api('/project-action-access/me');
+    PROJECT_ACTION_ACCESS = projectActionAccess;
     const paymentAllowed = ME.role === 'admin' || paymentAccess.allowed;
     $('#nav-payment-history')?.style.setProperty('display', paymentAllowed ? '' : 'none');
     $('#dashboard-payment-history-card')?.style.setProperty('display', paymentAllowed ? '' : 'none');
@@ -716,11 +729,13 @@ async function enterApp() {
       showView(returnView);
     }
     appEl?.classList.remove('booting');
+    $('#startup-screen')?.classList.add('hidden');
     if (flashMessage) showAppNotification(flashMessage);
   } catch (err) {
     console.error('App boot failure:', err);
     appEl?.classList.remove('booting');
     appEl?.classList.add('hidden');
+    $('#startup-screen')?.classList.add('hidden');
     loginScreen?.classList.remove('hidden');
     const loginError = $('#login-error');
     if (loginError) loginError.textContent = `Unable to start the app: ${err.message}`;
@@ -2365,11 +2380,12 @@ async function loadTrackingTimeline(userId, selectedButton, selectedDate = today
 
 // ================= ADMINISTRATIVE CORE VIEW MODULE =================
 async function renderAdmin() {
+  const wrap = $('#admin-content');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="hint" role="status">Loading administrator settings...</div>';
   try {
     const [users, settings, departments, reimbursementAccess, activity, trackingAccess, verificationAccess, paymentAccess, deviceAccess, myDeviceAccess, projectActionAccess, taskCheckinAccess, taskWorkModeAccess] = await Promise.all([api('/auth/users'), api('/auth/settings'), api('/auth/departments'), api('/auth/reimbursement-access'), api('/auth/activity'), api('/attendance/tracking-access'), api('/attendance/verification-access'), api('/payment-history/access'), api('/attendance/device-access'), api('/attendance/device-access/me'), api('/project-action-access'), api('/task-checkin-access'), api('/task-work-mode-access')]);
     const verificationByUser = new Map(verificationAccess.map(person => [Number(person.id), Number(person.verification_required) === 1]));
-    const wrap = $('#admin-content');
-    if (!wrap) return;
     const departmentOptions = departments.map(d => `<option value="${escapeHtml(d.name || d.NAME)}">${escapeHtml(d.name || d.NAME)}</option>`).join('');
 
     wrap.innerHTML = `
@@ -2762,7 +2778,9 @@ async function renderAdmin() {
 
 
   } catch (err) {
-    console.error("Failed loading administrative template layers:", err);
+    console.error('Failed loading administrator settings:', err);
+    wrap.innerHTML = `<div class="admin-block" role="alert"><p class="form-error">Unable to load administrator settings: ${escapeHtml(err.message)}</p><button class="btn btn-secondary" id="admin-retry" type="button">Retry</button></div>`;
+    $('#admin-retry').onclick = () => renderAdmin();
   }
 }
 
