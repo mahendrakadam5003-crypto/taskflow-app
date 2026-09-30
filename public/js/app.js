@@ -2033,46 +2033,13 @@ async function renderPunchCard() {
       return;
     }
     if (registration.registered && !registration.is_current_device) {
-      card.innerHTML = `<div class="admin-block attendance-phone-only"><b>This account is registered to ${escapeHtml(registration.device_name || 'another device')}</b><p class="hint">Punching from this browser is blocked. Ask an administrator to reset your registered device.${registration.can_manage ? ' You have permission to move your enrollment to this browser.' : ''}</p>${registration.can_manage ? '<button class="btn btn-secondary" id="attendance-device-self-reset" type="button">Reset my device</button>' : ''}<div class="form-error" id="attendance-device-error"></div></div>`;
-      $('#attendance-device-self-reset')?.addEventListener('click', async (event) => {
-        const button = event.currentTarget;
-        const confirmed = await confirmModal('Reset registered device?', 'This removes the current device binding so this browser can be registered instead.', 'Reset device', true);
-        if (!confirmed) return;
-        button.disabled = true;
-        try {
-          await api('/attendance/device-registration/me', { method: 'DELETE' });
-          showAppNotification('Device reset successfully.');
-          await renderPunchCard();
-        } catch (err) { $('#attendance-device-error').textContent = err.message; button.disabled = false; }
-      });
+      card.innerHTML = `<div class="admin-block attendance-phone-only"><b>This account is registered to ${escapeHtml(registration.device_name || 'another device')}</b><p class="hint">Punching from this browser is blocked. Ask an administrator to reset your registered device.</p></div>`;
       return;
     }
     const registeredDeviceSummary = registration.registered
-      ? `<div class="attendance-registered-device"><span>Registered device</span><b>${escapeHtml(registration.device_name)}</b>${registration.can_manage ? `<div class="attendance-device-edit"><input id="attendance-device-rename" maxlength="60" value="${escapeHtml(registration.device_name)}" aria-label="Registered device name"><button class="btn btn-secondary btn-sm" id="attendance-device-rename-save" type="button">Save name</button><button class="btn btn-danger btn-sm" id="attendance-device-self-reset" type="button">Reset</button></div>` : ''}</div>`
+      ? `<div class="attendance-registered-device"><span>Registered device</span><b>${escapeHtml(registration.device_name)}</b></div>`
       : '<div class="attendance-registered-device"><span>Device reset by administrator.</span><b>This browser will be bound automatically when you punch.</b></div>';
     card.innerHTML = registeredDeviceSummary;
-    $('#attendance-device-rename-save')?.addEventListener('click', async () => {
-      const button = $('#attendance-device-rename-save');
-      const deviceName = $('#attendance-device-rename').value.trim();
-      if (!deviceName) return alert('Enter a name for this device.');
-      button.disabled = true;
-      try {
-        const devicePayload = await getPunchDevicePayload();
-        await api('/attendance/device-registration/register', { method: 'POST', body: { ...devicePayload, device_name: deviceName } });
-        await renderPunchCard();
-      } catch (err) { alert(err.message); button.disabled = false; }
-    });
-    $('#attendance-device-self-reset')?.addEventListener('click', async (event) => {
-      const button = event.currentTarget;
-      const confirmed = await confirmModal('Reset registered device?', 'This removes the current device binding so another browser can be registered.', 'Reset device', true);
-      if (!confirmed) return;
-      button.disabled = true;
-      try {
-        await api('/attendance/device-registration/me', { method: 'DELETE' });
-        showAppNotification('Device reset successfully.');
-        await renderPunchCard();
-      } catch (err) { alert(err.message); button.disabled = false; }
-    });
     if (!status) {
       card.insertAdjacentHTML('beforeend', `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`);
       $('#btn-punch-in').onclick = async () => {
@@ -2523,7 +2490,6 @@ async function renderAdmin() {
       row.innerHTML = `<div class="attendance-device-admin-person"><b>${escapeHtml(person.name)}</b><span>${escapeHtml(deviceStatus)}</span>${person.registered_device_info ? `<small>${escapeHtml(person.registered_device_info)}</small>` : ''}</div>
         <label><input type="checkbox" data-device-phone="${person.id}" ${Number(person.allow_phone) === 1 ? 'checked' : ''}> Phone</label>
         <label><input type="checkbox" data-device-laptop="${person.id}" ${Number(person.allow_laptop) === 1 ? 'checked' : ''}> Laptop</label>
-        <label><input type="checkbox" data-device-manage="${person.id}" ${Number(person.can_manage_device) === 1 ? 'checked' : ''}> Can manage own registered device</label>
         <button class="btn btn-secondary btn-sm save-device-access" data-device-user="${person.id}">Save access</button>
         <button class="btn btn-danger btn-sm reset-attendance-device" data-device-user="${person.id}" data-device-name="${escapeHtml(person.registered_device_name || '')}" type="button">Reset device</button>`;
       deviceAccessList.appendChild(row);
@@ -2542,10 +2508,8 @@ async function renderAdmin() {
         const row = button.closest('.admin-form-row');
         const phone = row.querySelector(`[data-device-phone="${userId}"]`);
         const laptop = row.querySelector(`[data-device-laptop="${userId}"]`);
-        const manage = row.querySelector(`[data-device-manage="${userId}"]`);
         try {
           await api(`/attendance/device-access/${userId}`, { method: 'PUT', body: { allow_phone: phone.checked, allow_laptop: laptop.checked } });
-          await api(`/attendance/device-registration/access/${userId}`, { method: 'PUT', body: { allowed: manage.checked } });
           showAppNotification('Attendance device access updated.');
         } catch (error) { alert(error.message); }
       };

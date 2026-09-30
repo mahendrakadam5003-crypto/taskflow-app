@@ -158,11 +158,9 @@ router.get('/device-access', requireAdmin, async (req, res) => {
     COALESCE(ada.allow_phone, 1) AS allow_phone,
     COALESCE(ada.allow_laptop, 0) AS allow_laptop,
     rd.device_name AS registered_device_name, rd.device_info AS registered_device_info, rd.registered_at,
-    CASE WHEN dma.user_id IS NULL THEN 0 ELSE 1 END AS can_manage_device,
     CASE WHEN drp.user_id IS NULL THEN 0 ELSE 1 END AS device_rebind_pending
     FROM users u LEFT JOIN attendance_device_access ada ON ada.user_id = u.id
     LEFT JOIN attendance_registered_devices rd ON rd.user_id=u.id
-    LEFT JOIN attendance_device_management_access dma ON dma.user_id=u.id
     LEFT JOIN attendance_device_rebind_pending drp ON drp.user_id=u.id
     WHERE u.active = 1 ORDER BY u.name`).all();
   res.json(rows || []);
@@ -170,10 +168,7 @@ router.get('/device-access', requireAdmin, async (req, res) => {
 
 router.get('/device-registration/me', async (req, res) => {
   const deviceId = String(req.query.device_id || '');
-  const [registration, access] = await Promise.all([
-    db.prepare('SELECT device_token_hash, device_name, device_info, registered_at FROM attendance_registered_devices WHERE user_id=?').get(req.session.userId),
-    db.prepare('SELECT user_id FROM attendance_device_management_access WHERE user_id=?').get(req.session.userId)
-  ]);
+  const registration = await db.prepare('SELECT device_token_hash, device_name, device_info, registered_at FROM attendance_registered_devices WHERE user_id=?').get(req.session.userId);
   const pending = !registration && await db.prepare('SELECT user_id FROM attendance_device_rebind_pending WHERE user_id=?').get(req.session.userId);
   res.json({
     registered: !!registration,
@@ -181,8 +176,7 @@ router.get('/device-registration/me', async (req, res) => {
     device_name: registration?.device_name || null,
     device_info: registration?.device_info || null,
     registered_at: registration?.registered_at || null,
-    is_current_device: !!registration && isValidDeviceId(deviceId) && registration.device_token_hash === getDeviceTokenHash(deviceId),
-    can_manage: req.session.role === 'admin' || !!access
+    is_current_device: !!registration && isValidDeviceId(deviceId) && registration.device_token_hash === getDeviceTokenHash(deviceId)
   });
 });
 
@@ -196,13 +190,8 @@ router.post('/device-registration/register', async (req, res) => {
   if (existing && existing.device_token_hash !== tokenHash) {
     return res.status(403).json({ error: `This account is already registered to "${existing.device_name}". Ask an administrator to reset it before using another device.` });
   }
-  const canManage = req.session.role === 'admin' || !!(await db.prepare('SELECT user_id FROM attendance_device_management_access WHERE user_id=?').get(req.session.userId));
-  if (existing && existing.device_name !== deviceName && !canManage) {
-    return res.status(403).json({ error: 'You do not have permission to rename your registered device.' });
-  }
   if (existing) {
-    await db.prepare('UPDATE attendance_registered_devices SET device_name=?, device_info=?, updated_at=datetime(\'now\') WHERE user_id=?')
-      .run(deviceName, getPunchDevice(req, req.body.device_model).info, req.session.userId);
+    return res.json({ ok: true, device_name: existing.device_name });
   } else {
     try {
       await db.prepare('INSERT INTO attendance_registered_devices (user_id, device_token_hash, device_name, device_info) VALUES (?, ?, ?, ?)')
@@ -214,27 +203,6 @@ router.post('/device-registration/register', async (req, res) => {
   await db.prepare('DELETE FROM attendance_device_rebind_pending WHERE user_id=?').run(req.session.userId);
   await logActivity(req, existing ? 'Attendance device renamed' : 'Attendance device registered', 'user', req.session.userId, deviceName, req.session.userId);
   res.json({ ok: true, device_name: deviceName });
-});
-
-router.delete('/device-registration/me', async (req, res) => {
-  const allowed = req.session.role === 'admin' || !!(await db.prepare('SELECT user_id FROM attendance_device_management_access WHERE user_id=?').get(req.session.userId));
-  if (!allowed) return res.status(403).json({ error: 'Only an administrator can reset your registered device.' });
-  await db.prepare('INSERT OR REPLACE INTO attendance_device_rebind_pending (user_id, reset_by) VALUES (?, ?)').run(req.session.userId, req.session.userId);
-  await db.prepare('DELETE FROM attendance_registered_devices WHERE user_id=?').run(req.session.userId);
-  await logActivity(req, 'Attendance device reset by user', 'user', req.session.userId, req.session.name || '', req.session.userId);
-  res.json({ ok: true });
-});
-
-router.put('/device-registration/access/:userId', requireAdmin, async (req, res) => {
-  const userId = Number(req.params.userId);
-  const target = await db.prepare('SELECT id FROM users WHERE id=? AND active=1').get(userId);
-  if (!target) return res.status(404).json({ error: 'Active user not found.' });
-  if (req.body.allowed) {
-    await db.prepare('INSERT OR REPLACE INTO attendance_device_management_access (user_id, granted_by) VALUES (?, ?)').run(userId, req.session.userId);
-  } else {
-    await db.prepare('DELETE FROM attendance_device_management_access WHERE user_id=?').run(userId);
-  }
-  res.json({ ok: true });
 });
 
 router.delete('/device-registration/:userId', requireAdmin, async (req, res) => {

@@ -274,12 +274,6 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
 
-    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS attendance_device_management_access (
-      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-      granted_by INTEGER REFERENCES users(id),
-      granted_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );`);
-
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS attendance_device_rebind_pending (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       reset_by INTEGER REFERENCES users(id),
