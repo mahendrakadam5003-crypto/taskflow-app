@@ -524,16 +524,21 @@ router.put('/task-work-mode-access/:userId', requireAdmin, async (req, res) => {
 });
 
 router.put('/project-action-access/:userId', requireAdmin, async (req, res) => {
-  const userId = Number(req.params.userId);
-  if (!userId) return res.status(400).json({ error: 'Valid user is required.' });
-  const target = await db.prepare('SELECT role FROM users WHERE id=? AND active=1').get(userId);
-  if (!target) return res.status(404).json({ error: 'Active user not found.' });
-  const values = PROJECT_ACTIONS.map(action => target.role === 'admin' ? 1 : (req.body[action] ? 1 : 0));
-  await db.prepare(`INSERT INTO project_action_access (user_id, ${PROJECT_ACTIONS.join(', ')}, updated_by)
-    VALUES (?, ${PROJECT_ACTIONS.map(() => '?').join(', ')}, ?)
-    ON CONFLICT(user_id) DO UPDATE SET ${PROJECT_ACTIONS.map(action => `${action}=excluded.${action}`).join(', ')}, updated_by=excluded.updated_by, updated_at=datetime('now')}`)
-    .run(userId, ...values, req.session.userId);
-  res.json({ ok: true });
+  try {
+    const userId = Number(req.params.userId);
+    if (!userId) return res.status(400).json({ error: 'Valid user is required.' });
+    const target = await db.prepare('SELECT role FROM users WHERE id=? AND active=1').get(userId);
+    if (!target) return res.status(404).json({ error: 'Active user not found.' });
+    const values = PROJECT_ACTIONS.map(action => target.role === 'admin' ? 1 : (req.body[action] ? 1 : 0));
+    await db.prepare(`INSERT INTO project_action_access (user_id, ${PROJECT_ACTIONS.join(', ')}, updated_by)
+      VALUES (?, ${PROJECT_ACTIONS.map(() => '?').join(', ')}, ?)
+      ON CONFLICT(user_id) DO UPDATE SET ${PROJECT_ACTIONS.map(action => `${action}=excluded.${action}`).join(', ')}, updated_by=excluded.updated_by, updated_at=datetime('now')`)
+      .run(userId, ...values, req.session.userId);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Project and task permission save failed:', error);
+    res.status(500).json({ error: `Unable to save permissions: ${error.message}` });
+  }
 });
 
 router.put('/projects/:id', async (req, res) => {

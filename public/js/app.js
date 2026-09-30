@@ -19,7 +19,7 @@ async function api(path, opts = {}) {
     if (loginError) loginError.textContent = 'Your session expired. Please sign in again.';
   }
   if (!res.ok) {
-    const error = new Error((data && data.error) || 'Request failed');
+    const error = new Error((data && data.error) || `Request failed (${res.status} ${res.statusText})`);
     error.status = res.status;
     throw error;
   }
