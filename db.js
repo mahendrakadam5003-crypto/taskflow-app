@@ -151,6 +151,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     if (!taskSchemaColumnNames.includes('invoice_date')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN invoice_date TEXT');
     if (!taskSchemaColumnNames.includes('customer_name')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN customer_name TEXT NOT NULL DEFAULT ''");
     if (!taskSchemaColumnNames.includes('total_amount')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN total_amount REAL NOT NULL DEFAULT 0');
+    await dbDriverInterface.exec("UPDATE tasks SET invoice_type='gst' WHERE lower(invoice_type)='igst'");
     if (!taskSchemaColumnNames.includes('payment_member_id')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN payment_member_id INTEGER REFERENCES users(id)');
     if (!taskSchemaColumnNames.includes('payment_status')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN payment_status TEXT NOT NULL DEFAULT 'not_received'");
     if (!taskSchemaColumnNames.includes('payment_received_date')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN payment_received_date TEXT');

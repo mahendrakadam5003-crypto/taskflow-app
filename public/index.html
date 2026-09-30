@@ -12,7 +12,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/taskflow.svg">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📋</text></svg>">
-<link rel="stylesheet" href="/css/style.css?v=20260930-7">
+<link rel="stylesheet" href="/css/style.css?v=20260930-8">
 </head>
 <body>
 
@@ -239,7 +239,7 @@
         <label>Billing description</label>
         <div class="billing-details-fields">
           <div class="field-row"><label>Customer</label><input type="text" id="drawer-customer-name" placeholder="Customer name"></div>
-          <div class="field-row"><label>Invoice type</label><select id="drawer-invoice-type"><option value="cash">Cash</option><option value="gst" selected>GST</option><option value="igst">IGST</option></select></div>
+          <div class="field-row"><label>Invoice type</label><select id="drawer-invoice-type"><option value="cash">Cash</option><option value="gst" selected>GST</option></select></div>
           <div class="field-row"><label>Invoice number</label><input type="text" id="drawer-invoice-number" placeholder="Invoice number"></div>
           <div class="field-row"><label>Invoice date</label><input type="date" id="drawer-invoice-date"></div>
           <div class="field-row"><label>Total amount</label><input type="number" id="drawer-total-amount" min="0" step="0.01" placeholder="0.00"></div>
@@ -311,7 +311,7 @@
   <div class="modal" id="modal"></div>
 </div>
 
-<script src="/js/app.js?v=20260930-14"></script>
+<script src="/js/app.js?v=20260930-15"></script>
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', async () => {

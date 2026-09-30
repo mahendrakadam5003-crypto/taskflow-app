@@ -158,7 +158,7 @@ async function canViewPaymentHistory(req) {
   return !!(await db.prepare('SELECT 1 FROM payment_history_access WHERE user_id=?').get(req.session.userId));
 }
 const PROJECT_ACTIONS = ['create_project', 'edit_project', 'delete_project', 'create_task', 'edit_task', 'delete_task', 'complete_task'];
-const INVOICE_TYPES = ['cash', 'gst', 'igst'];
+const INVOICE_TYPES = ['cash', 'gst'];
 async function canProjectAction(req, action) {
   if (req.session.role === 'admin') return true;
   if (!PROJECT_ACTIONS.includes(action)) return false;
@@ -389,10 +389,7 @@ router.get('/payment-history/summary', async (req, res) => {
       COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='cash' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS cash_pending,
       COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' THEN t.total_amount ELSE 0 END), 0) AS gst_revenue,
       COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' THEN t.amount_received ELSE 0 END), 0) AS gst_received,
-      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS gst_pending,
-      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='igst' THEN t.total_amount ELSE 0 END), 0) AS igst_revenue,
-      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='igst' THEN t.amount_received ELSE 0 END), 0) AS igst_received,
-      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='igst' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS igst_pending
+      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS gst_pending
     FROM tasks t WHERE ${conditions.join(' AND ')}`).get(...params);
   const amount = key => Number(row?.[key] || 0);
   res.json({
@@ -400,7 +397,6 @@ router.get('/payment-history/summary', async (req, res) => {
     total_revenue: amount('total_revenue'), payment_received: amount('payment_received'), payment_pending: amount('payment_pending'),
     cash_revenue: amount('cash_revenue'), cash_received: amount('cash_received'), cash_pending: amount('cash_pending'),
     gst_revenue: amount('gst_revenue'), gst_received: amount('gst_received'), gst_pending: amount('gst_pending'),
-    igst_revenue: amount('igst_revenue'), igst_received: amount('igst_received'), igst_pending: amount('igst_pending'),
     from: req.query.from || null, to: req.query.to || null, assignee_id: req.query.assignee_id || null, invoice_type: invoiceType || null, status: req.query.status || null
   });
 });
@@ -633,7 +629,7 @@ router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     const workMode = req.body.work_mode === 'on_field' ? 'on_field' : 'office';
     const noBillingRequired = req.body.no_billing_required === true || Number(req.body.no_billing_required) === 1;
     const invoiceType = String(invoice_type || 'gst').trim().toLowerCase();
-    if (!INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invoice type must be Cash, GST, or IGST.' });
+    if (!INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invoice type must be Cash or GST.' });
     if (!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
     if (assignee_id && !(await canAccessProject(req.params.id, Number(assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
     const normalizedInvoiceNumber = noBillingRequired ? null : String(invoice_number || '').trim() || null;
@@ -709,7 +705,7 @@ router.put('/tasks/:id', async (req, res) => {
     if (req.body.due_date !== undefined) { updates.push('due_date=?'); values.push(req.body.due_date || null); }
     if (!noBillingRequired && req.body.invoice_type !== undefined) {
       const invoiceType = String(req.body.invoice_type || '').trim().toLowerCase();
-      if (!INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invoice type must be Cash, GST, or IGST.' });
+      if (!INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invoice type must be Cash or GST.' });
       updates.push('invoice_type=?'); values.push(invoiceType);
     }
     if (!noBillingRequired && req.body.invoice_number !== undefined) { updates.push('invoice_number=?'); values.push(String(req.body.invoice_number || '').trim() || null); }

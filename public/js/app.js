@@ -590,12 +590,11 @@ async function renderPaymentHistory() {
         ${summarySection('Overall', 'overall', true)}
         ${summarySection('Cash invoices', 'cash')}
         ${summarySection('GST invoices', 'gst')}
-        ${summarySection('IGST invoices', 'igst')}
         <div class="attendance-filters">
           <label>From <input type="date" id="payment-history-from"></label>
           <label>To <input type="date" id="payment-history-to"></label>
           <label>Member <select id="payment-history-assignee"><option value="">All members</option>${PEOPLE.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('')}</select></label>
-          <label>Invoice type <select id="payment-history-invoice-type"><option value="">All types</option><option value="cash">Cash</option><option value="gst">GST</option><option value="igst">IGST</option></select></label>
+          <label>Invoice type <select id="payment-history-invoice-type"><option value="">All types</option><option value="cash">Cash</option><option value="gst">GST</option></select></label>
           <label>Status <select id="payment-history-status"><option value="">All statuses</option><option value="received">Received</option><option value="not_received">Not received</option><option value="pending">Pending</option></select></label>
           <button class="btn btn-primary" id="payment-history-filter">Filter</button>
         </div>
@@ -620,9 +619,6 @@ async function renderPaymentHistory() {
       setAmount('gst-revenue', summary.gst_revenue);
       setAmount('gst-received', summary.gst_received);
       setAmount('gst-pending', summary.gst_pending);
-      setAmount('igst-revenue', summary.igst_revenue);
-      setAmount('igst-received', summary.igst_received);
-      setAmount('igst-pending', summary.igst_pending);
       $('#payment-summary-invoices').textContent = `${summary.invoice_count} invoice${summary.invoice_count === 1 ? '' : 's'}`;
       const selectedMember = $('#payment-history-assignee').selectedOptions[0]?.textContent;
       const selectedInvoiceType = $('#payment-history-invoice-type').selectedOptions[0]?.textContent;
@@ -640,7 +636,7 @@ async function renderPaymentHistory() {
         const rows = await api(`/payment-history?${params.toString()}`);
         table.innerHTML = rows.length ? rows.map(row => {
           const selectedMemberId = row.payment_member_id ?? row.assignee_id ?? '';
-          const invoiceTypeLabel = ({ cash: 'Cash', gst: 'GST', igst: 'IGST' })[row.invoice_type] || 'GST';
+          const invoiceTypeLabel = ({ cash: 'Cash', gst: 'GST' })[row.invoice_type] || 'GST';
           return `<tr>
           <td><select class="payment-row-member" data-id="${row.id}"><option value="">Unassigned</option>${PEOPLE.map(person => `<option value="${person.id}" ${Number(selectedMemberId) === Number(person.id) ? 'selected' : ''}>${escapeHtml(person.name || person.NAME)}</option>`).join('')}</select></td><td><b>${escapeHtml(row.invoice_number || '—')}</b></td><td>${invoiceTypeLabel}</td><td>${escapeHtml(row.invoice_date || '—')}</td><td>${escapeHtml(row.customer_name || '—')}</td>
           <td>${escapeHtml(row.title)}<small class="hint">${escapeHtml(row.project_name || '')}</small></td><td>${Number(row.total_amount || 0).toFixed(2)}</td>
@@ -846,9 +842,9 @@ async function renderReimbursements() {
   const categoryOptions = ['Travel', 'Fuel', 'Meals', 'Lodging', 'Supplies', 'Other'].map(category => `<option>${category}</option>`).join('');
   const reimbursementSummary = `
     <div class="reimbursement-summary">
-      <div class="reimbursement-summary-card"><span>Total claims</span><b id="reimbursement-total-amount">INR 0.00</b><small id="reimbursement-total-count">0 claims</small></div>
-      <div class="reimbursement-summary-card"><span>Pending</span><b class="pending" id="reimbursement-pending-amount">INR 0.00</b></div>
-      <div class="reimbursement-summary-card"><span>Approved</span><b class="approved" id="reimbursement-approved-amount">INR 0.00</b></div>
+      <div class="reimbursement-summary-card"><span>Total claims</span><b id="reimbursement-total-amount">Loading...</b><small id="reimbursement-total-count">Loading claims...</small></div>
+      <div class="reimbursement-summary-card"><span>Pending</span><b class="pending" id="reimbursement-pending-amount">Loading...</b></div>
+      <div class="reimbursement-summary-card"><span>Approved</span><b class="approved" id="reimbursement-approved-amount">Loading...</b></div>
     </div>`;
   const employeeOverview = isAdmin ? `<div class="admin-block">${reimbursementSummary}</div>` : `
     <div class="admin-block">
@@ -974,6 +970,10 @@ async function renderReimbursements() {
         await refreshNotificationsAfterAction();
       };
     } catch (err) {
+      $('#reimbursement-total-amount').textContent = '—';
+      $('#reimbursement-total-count').textContent = 'Unable to load claims';
+      $('#reimbursement-pending-amount').textContent = '—';
+      $('#reimbursement-approved-amount').textContent = '—';
       table.innerHTML = `<tr><td colspan="9" class="form-error">${escapeHtml(err.message)}</td></tr>`;
     }
   };
@@ -1026,7 +1026,7 @@ async function renderReimbursements() {
     if ($('#reimbursement-to')?.value) params.set('to', $('#reimbursement-to').value);
     window.open(`/api/reimbursements/export.csv?${params.toString()}`, '_blank');
   };
-  renderRows();
+  await renderRows();
 }
 
 // ================= PROJECTS MODULE =================

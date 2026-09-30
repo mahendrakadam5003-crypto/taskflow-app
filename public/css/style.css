@@ -307,7 +307,6 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .payment-summary-card.pending b { color: var(--amber); }
 .payment-summary-card.cash-pending b { color: #0f766e; }
 .payment-summary-card.gst-pending b { color: #2563eb; }
-.payment-summary-card.igst-pending b { color: #7c4a16; }
 .field-block { display: flex; flex-direction: column; gap: 8px; }
 .field-block > label { font-size: 13px; color: var(--muted); font-weight: 500; }
 .billing-details-box { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fafcfb; }
