@@ -260,10 +260,41 @@ function autoGrowComment() {
 let ME = null;
 let PROJECTS = [];
 let PROJECT_ACTION_ACCESS = {};
+let projectActionRefreshInProgress = false;
 let PEOPLE = [];
 let CURRENT_PROJECT = null;
 let CURRENT_TASK_ID = null;
 const unlockedProjects = new Set();
+
+async function refreshProjectActionAccess() {
+  if (!ME || projectActionRefreshInProgress) return;
+  projectActionRefreshInProgress = true;
+  try {
+    const access = await api('/project-action-access/me');
+    if (JSON.stringify(access) === JSON.stringify(PROJECT_ACTION_ACCESS)) return;
+    PROJECT_ACTION_ACCESS = access;
+    const drawer = $('#task-drawer');
+    if (drawer && !drawer.classList.contains('hidden')) {
+      showAppNotification('Task permissions changed. Close and reopen this task to apply them.');
+      return;
+    }
+    const activeView = $$('.view').find(view => !view.classList.contains('hidden'));
+    if (activeView?.id.startsWith('view-')) showView(activeView.id.slice(5));
+  } catch (error) {
+    console.warn('Project permission refresh failed:', error.message);
+  } finally {
+    projectActionRefreshInProgress = false;
+  }
+}
+
+window.addEventListener('focus', refreshProjectActionAccess);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refreshProjectActionAccess();
+});
+setInterval(() => {
+  if (document.visibilityState === 'visible') refreshProjectActionAccess();
+}, 60000);
+
 let attendancePollTimer = null;
 let notificationsPollTimer = null;
 let taskListPollTimer = null;
