@@ -1724,6 +1724,7 @@ async function openTaskDrawer(taskId) {
         checkinControls.innerHTML = `<button class="btn btn-secondary btn-block" id="btn-task-check-in">📍 ${Number(task.assignee_id) === Number(ME?.id) ? 'Check in to task' : 'Take task & check in'}</button>`;
       } else if (!currentCheckin.check_out_at) {
         checkinControls.innerHTML = `<div class="hint">Checked in at ${escapeHtml(fmtDateTime(currentCheckin.check_in_at))}</div><button class="btn btn-secondary btn-block" id="btn-task-check-out">📍 Check out of task</button>`;
+      }
       if (taskActionsLocked) {
         checkinControls.insertAdjacentHTML('afterbegin', '<div class="hint">Check in to unlock task editing and comments. You may reassign this task before checking in.</div>');
       }
