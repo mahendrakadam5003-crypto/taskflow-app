@@ -1520,7 +1520,9 @@ async function openTaskDrawer(taskId) {
     ]);
     let taskHistory = taskHistoryResult;
     const currentCheckin = (task.checkin_users || []).find(user => Number(user.id) === Number(ME?.id));
-    const taskCheckinRequired = ME?.role !== 'admin' && Number(task.checkin_required) === 1;
+    const taskCheckinRequired = ME?.role !== 'admin'
+      && task.work_mode === 'on_field'
+      && Number(task.checkin_required) === 1;
     const isCheckedIntoTask = !!currentCheckin?.check_in_at && !currentCheckin.check_out_at;
     const taskActionsLocked = taskCheckinRequired && !isCheckedIntoTask;
     const canEditTask = !!PROJECT_ACTION_ACCESS.edit_task;
@@ -2016,9 +2018,19 @@ async function showMembersModal() {
   const memberIds = new Set(members.map(member => Number(member.id)));
   showModal(`
     <h3>Project members</h3>
-    <div class="member-list">${users.map(user => `<label class="member-option"><input type="checkbox" class="project-member-check" value="${user.id}" ${memberIds.has(Number(user.id)) ? 'checked' : ''}>${escapeHtml(user.name || user.NAME)}</label>`).join('')}</div>
+    <input type="search" id="project-member-search" placeholder="Search employee name" aria-label="Search employee name" autocomplete="off">
+    <div class="member-list">${users.map(user => {
+      const name = String(user.name || user.NAME || '');
+      return `<label class="member-option project-member-option" data-member-name="${escapeHtml(name.toLocaleLowerCase())}"><input type="checkbox" class="project-member-check" value="${user.id}" ${memberIds.has(Number(user.id)) ? 'checked' : ''}><span class="project-member-name">${escapeHtml(name)}</span></label>`;
+    }).join('')}</div>
     <div id="members-error" class="form-error"></div>
     <div class="modal-actions"><button class="btn btn-secondary" id="members-cancel">Cancel</button><button class="btn btn-primary" id="members-save">Save members</button></div>`);
+  $('#project-member-search').oninput = event => {
+    const query = event.currentTarget.value.trim().toLocaleLowerCase();
+    $$('.project-member-option').forEach(option => {
+      option.hidden = !option.dataset.memberName.includes(query);
+    });
+  };
   $('#members-cancel').onclick = closeModal;
   $('#members-save').onclick = async () => {
     try {

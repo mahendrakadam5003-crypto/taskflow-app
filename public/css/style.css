@@ -536,6 +536,10 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .row-complete:hover { background:var(--green-bg); }
 .member-list { max-height:300px; overflow:auto; display:flex; flex-direction:column; gap:8px; margin-bottom:14px; }
 .member-option { display:flex; gap:8px; align-items:center; padding:7px 8px; border:1px solid var(--line); border-radius:6px; font-size:13.5px; }
+.project-member-option { min-width:0; min-height:40px; white-space:nowrap; }
+.project-member-option[hidden] { display:none; }
+.project-member-option input[type="checkbox"] { flex:0 0 16px; width:16px; height:16px; margin:0; }
+.project-member-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .attendance-filters { display:flex; flex-wrap:wrap; gap:8px; align-items:end; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:12px; margin-top:20px; }
 .attendance-filters label { display:flex; flex-direction:column; gap:4px; font-size:11px; color:var(--muted); font-weight:600; }
 .attendance-filters input, .attendance-filters select { border:1px solid var(--line); border-radius:6px; padding:7px 9px; font-size:13px; background:var(--surface); color:var(--ink); }
