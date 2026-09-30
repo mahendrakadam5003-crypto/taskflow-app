@@ -1979,6 +1979,17 @@ function currentDeviceType() {
   return isPhoneDevice() ? 'phone' : 'laptop';
 }
 
+async function getPunchDevicePayload() {
+  const payload = { device_type: currentDeviceType() };
+  try {
+    const details = await navigator.userAgentData?.getHighEntropyValues?.(['model']);
+    if (details?.model && !/^k$/i.test(details.model.trim())) payload.device_model = details.model.trim();
+  } catch (error) {
+    console.debug('Device model is unavailable from this browser.');
+  }
+  return payload;
+}
+
 async function renderPunchCard() {
   const card = $('#punch-card-container');
   if (!card) return;
@@ -1988,13 +1999,13 @@ async function renderPunchCard() {
       card.innerHTML = `<div class="admin-block attendance-phone-only"><b>Attendance is disabled on this device</b><p class="hint">Ask an administrator to allow punching from your ${currentDeviceType()}.</p></div>`;
       return;
     }
-    const devicePayload = { device_type: currentDeviceType() };
     if (!status) {
       card.innerHTML = `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`;
       $('#btn-punch-in').onclick = async () => {
         try {
           await verifyAttendanceIfRequired('in');
           const coords = await getLiveCoords();
+          const devicePayload = await getPunchDevicePayload();
           await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload } });
           reloadWithActionMessage('attendance', 'Punched in successfully.');
         } catch (err) { alert(err.message); }
@@ -2005,6 +2016,7 @@ async function renderPunchCard() {
         try {
           await verifyAttendanceIfRequired('in');
           const coords = await getLiveCoords();
+          const devicePayload = await getPunchDevicePayload();
           await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload } });
           reloadWithActionMessage('attendance', 'Punched in successfully.');
         } catch (err) { alert(err.message); }
@@ -2020,6 +2032,7 @@ async function renderPunchCard() {
         try {
           await verifyAttendanceIfRequired('out');
           const coords = await getLiveCoords();
+          const devicePayload = await getPunchDevicePayload();
           await api('/attendance/punch-out', { method: 'POST', body: { ...coords, ...devicePayload } });
           stopLiveTracking();
           reloadWithActionMessage('attendance', 'Punched out successfully.');
@@ -2646,8 +2659,9 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
           button.disabled = true;
           try {
             const coords = await getLiveCoords();
+            const devicePayload = await getPunchDevicePayload();
             await api(`/attendance/admin-punch-${button.dataset.action}`, {
-              method: 'POST', body: { user_id: Number(button.dataset.userId), ...coords, device_type: currentDeviceType() }
+              method: 'POST', body: { user_id: Number(button.dataset.userId), ...coords, ...devicePayload }
             });
             await renderRows();
           } catch (err) {

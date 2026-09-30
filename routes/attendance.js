@@ -18,11 +18,12 @@ function todayStr() {
   return d.toISOString().slice(0, 10);
 }
 
-function getPunchDevice(req) {
+function getPunchDevice(req, reportedModel) {
   const userAgent = String(req.get('user-agent') || '').slice(0, 500);
   const clientHintModel = String(req.get('sec-ch-ua-model') || '').trim().replace(/^"|"$/g, '');
   const isPhone = /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent);
-  const androidModel = clientHintModel || userAgent.match(/Android\s+[^;;)]+;\s*([^;)]+)/i)?.[1]?.replace(/\s+Build\/.*$/i, '').trim();
+  const suppliedModel = String(reportedModel || '').trim().slice(0, 80);
+  const androidModel = clientHintModel || suppliedModel || userAgent.match(/Android\s+[^;;)]+;\s*([^;)]+)/i)?.[1]?.replace(/\s+Build\/.*$/i, '').trim();
   const iosVersion = userAgent.match(/OS\s+(\d+[._]\d+)/i)?.[1]?.replace('_', '.');
   let deviceName = 'Desktop browser';
   if (/iPhone/i.test(userAgent)) deviceName = `iPhone${iosVersion ? ` · iOS ${iosVersion}` : ''}`;
@@ -149,7 +150,7 @@ router.put('/verification-access/:userId', requireAdmin, async (req, res) => {
 // PUNCH IN ROUTE WITH AUTOMATIC LOCATION NAMING
 router.post('/punch-in', async (req, res) => {
   const { lat, lng } = req.body;
-  const device = getPunchDevice(req);
+  const device = getPunchDevice(req, req.body.device_model);
   const deviceType = device.type;
   if (!(await canPunchFromDevice(req.session.userId, deviceType))) return res.status(403).json({ error: 'Punching from this device is not allowed. Ask an admin to enable it.' });
   if (lat == null || lng == null) return res.status(400).json({ error: 'Location is required to punch in.' });
@@ -203,7 +204,7 @@ router.post('/location-update', async (req, res) => {
 // PUNCH OUT ROUTE WITH AUTOMATIC LOCATION NAMING
 router.post('/punch-out', async (req, res) => {
   const { lat, lng } = req.body;
-  const device = getPunchDevice(req);
+  const device = getPunchDevice(req, req.body.device_model);
   const deviceType = device.type;
   if (!(await canPunchFromDevice(req.session.userId, deviceType))) return res.status(403).json({ error: 'Punching from this device is not allowed. Ask an admin to enable it.' });
   if (lat == null || lng == null) return res.status(400).json({ error: 'Location is required to punch out.' });
@@ -255,7 +256,7 @@ router.get('/overview', requireAdmin, async (req, res) => {
 // admin: punch on behalf of an employee from the monitoring screen
 router.post('/admin-punch-in', requireAdmin, async (req, res) => {
   const { user_id, lat, lng } = req.body;
-  const device = getPunchDevice(req);
+  const device = getPunchDevice(req, req.body.device_model);
   if (!(await canPunchFromDevice(req.session.userId, device.type))) return res.status(403).json({ error: 'Punching from this device is not allowed for your admin account.' });
   if (!user_id || lat == null || lng == null) return res.status(400).json({ error: 'Employee and location are required.' });
   const date = todayStr();
@@ -276,7 +277,7 @@ router.post('/admin-punch-in', requireAdmin, async (req, res) => {
 
 router.post('/admin-punch-out', requireAdmin, async (req, res) => {
   const { user_id, lat, lng } = req.body;
-  const device = getPunchDevice(req);
+  const device = getPunchDevice(req, req.body.device_model);
   if (!(await canPunchFromDevice(req.session.userId, device.type))) return res.status(403).json({ error: 'Punching from this device is not allowed for your admin account.' });
   if (!user_id || lat == null || lng == null) return res.status(400).json({ error: 'Employee and location are required.' });
   const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(user_id, todayStr());
