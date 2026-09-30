@@ -10,7 +10,7 @@ async function requireAuth(req, res, next) {
     return res.status(401).json({ error: 'Not logged in' });
   }
   try {
-    const user = await db.prepare('SELECT role, name, active FROM users WHERE id = ?').get(req.session.userId);
+    const user = await db.prepare('SELECT role, name, active FROM users WHERE id = ?').getStrict(req.session.userId);
     if (!user || Number(user.active ?? user.ACTIVE ?? 1) !== 1) {
       req.session.destroy(() => {});
       return res.status(401).json({ error: 'Account is inactive. Contact an administrator.' });
@@ -28,7 +28,7 @@ async function requireAdmin(req, res, next) {
     return res.status(403).json({ error: 'Admin only' });
   }
   try {
-    const user = await db.prepare('SELECT role, active FROM users WHERE id = ?').get(req.session.userId);
+    const user = await db.prepare('SELECT role, active FROM users WHERE id = ?').getStrict(req.session.userId);
     if (!user || Number(user.active ?? user.ACTIVE ?? 1) !== 1) {
       req.session.destroy(() => {});
       return res.status(401).json({ error: 'Account is inactive. Contact an administrator.' });
@@ -49,7 +49,7 @@ router.post('/login', async (req, res) => {
     }
 
     // Removed the active status requirement directly from the SQL string to guarantee matches clear
-    const rawResult = await db.prepare('SELECT * FROM users WHERE username = ?').get(username.trim().toLowerCase());
+    const rawResult = await db.prepare('SELECT * FROM users WHERE username = ?').getStrict(username.trim().toLowerCase());
     
     let user = null;
     if (Array.isArray(rawResult)) {
@@ -84,8 +84,14 @@ router.post('/login', async (req, res) => {
     req.session.userId = Number(userId);
     req.session.role = String(userRole);
     req.session.name = String(userName);
-    
-    res.json({ id: userId, name: userName, username: userUsername, role: userRole });
+
+    req.session.save(saveError => {
+      if (saveError) {
+        console.error('Could not persist login session:', saveError);
+        return res.status(500).json({ error: 'Unable to save your login session. Please try again.' });
+      }
+      res.json({ id: userId, name: userName, username: userUsername, role: userRole });
+    });
   } catch (error) {
     console.error("Critical authentication loop error:", error);
     res.status(500).json({ error: 'Internal server error during login operation.' });
@@ -124,7 +130,7 @@ router.post('/change-password', requireAuth, async (req, res) => {
 router.get('/me', async (req, res) => {
   if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Not logged in' });
   try {
-    const rawResult = await db.prepare('SELECT id, name, username, role FROM users WHERE id = ?').get(req.session.userId);
+    const rawResult = await db.prepare('SELECT id, name, username, role FROM users WHERE id = ?').getStrict(req.session.userId);
     let user = Array.isArray(rawResult) ? rawResult[0] : rawResult;
     
     if (!user) return res.status(401).json({ error: 'User record not found' });

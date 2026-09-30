@@ -29,6 +29,15 @@ const dbDriverInterface = {
   },
   prepare: (sql) => {
     return {
+      getStrict: async (...params) => {
+        try {
+          const res = await db.execute({ sql, args: params });
+          return res.rows && res.rows.length > 0 ? res.rows[0] : null;
+        } catch (err) {
+          console.error('Driver GET error:', err.message);
+          throw err;
+        }
+      },
       get: async (...params) => {
         try {
           const res = await db.execute({ sql, args: params });

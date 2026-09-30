@@ -15,7 +15,7 @@ const db = require('./db');
 
 class TursoSessionStore extends session.Store {
   get(sid, callback) {
-    db.prepare('SELECT data, expires_at FROM web_sessions WHERE sid = ?').get(sid)
+    db.prepare('SELECT data, expires_at FROM web_sessions WHERE sid = ?').getStrict(sid)
       .then(row => {
         if (!row || Number(row.expires_at) <= Date.now()) {
           if (row) db.prepare('DELETE FROM web_sessions WHERE sid = ?').run(sid).catch(() => {});
