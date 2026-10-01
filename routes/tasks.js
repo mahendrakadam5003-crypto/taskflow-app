@@ -571,11 +571,6 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
       }
       const duplicate = await db.prepare('SELECT id, name FROM projects WHERE asana_gid = ?').get(projectGid);
       if (duplicate) {
-        const existingTaskCount = await db.prepare('SELECT COUNT(*) AS count FROM tasks WHERE project_id = ?').get(duplicate.id);
-        if (Number(existingTaskCount?.count || 0) > 0) {
-          results.push({ file: file.originalname, status: 'already imported', project_id: Number(duplicate.id), project_name: duplicate.name, tasks: Number(existingTaskCount.count) });
-          continue;
-        }
         projectId = Number(duplicate.id);
       } else {
         const projectInfo = await db.prepare('INSERT INTO projects (name, created_by, asana_gid, created_at) VALUES (?, ?, ?, ?)')
@@ -641,20 +636,33 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
         if (customFieldLines.length) descriptionParts.push(`Asana custom fields:\n${customFieldLines.join('\n')}`);
         const taskCreatorId = mapPerson(task.created_by) || req.session.userId;
         const taskAssigneeId = mapPerson(task.assignee);
-        const taskInfo = await taskInsert.run(
-          projectId,
-          String(task.name || 'Untitled task'),
-          descriptionParts.join('\n\n'),
-          taskCreatorId,
-          taskAssigneeId,
-          task.due_on || null,
-          task.completed ? 'done' : 'open',
-          position++,
-          String(task.gid || ''),
-          task.created_at || new Date().toISOString(),
-          task.modified_at || task.created_at || new Date().toISOString(),
-          task.completed_at || null
-        );
+        const taskGid = String(task.gid || '');
+        const taskTitle = String(task.name || 'Untitled task');
+        const existingTask = await db.prepare(`SELECT id FROM tasks
+          WHERE project_id = ? AND (asana_gid = ? OR title = ?)
+          ORDER BY CASE WHEN asana_gid = ? THEN 0 ELSE 1 END LIMIT 1`)
+          .get(projectId, taskGid, taskTitle, taskGid);
+        let taskInfo;
+        if (existingTask) {
+          await db.prepare(`UPDATE tasks SET title=?, description=?, assignee_id=?, due_date=?, status=?, asana_gid=?, updated_at=?, completed_at=? WHERE id=?`)
+            .run(taskTitle, descriptionParts.join('\n\n'), taskAssigneeId, task.due_on || null, task.completed ? 'done' : 'open', taskGid, task.modified_at || task.created_at || new Date().toISOString(), task.completed_at || null, existingTask.id);
+          taskInfo = { lastInsertRowid: existingTask.id };
+        } else {
+          taskInfo = await taskInsert.run(
+            projectId,
+            taskTitle,
+            descriptionParts.join('\n\n'),
+            taskCreatorId,
+            taskAssigneeId,
+            task.due_on || null,
+            task.completed ? 'done' : 'open',
+            position++,
+            taskGid,
+            task.created_at || new Date().toISOString(),
+            task.modified_at || task.created_at || new Date().toISOString(),
+            task.completed_at || null
+          );
+        }
         importedTaskCount++;
         await importTaskActivity(bundle, Number(taskInfo.lastInsertRowid));
       }
