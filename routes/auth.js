@@ -180,10 +180,33 @@ router.get('/activity', requireAuth, async (req, res) => {
   try {
     const visibilityFilter = req.session.role === 'admin' ? '' : ' WHERE a.actor_id = ? OR a.subject_user_id = ?';
     const visibilityParams = req.session.role === 'admin' ? [] : [req.session.userId, req.session.userId];
-    const rows = await db.prepare(`SELECT a.*, u.name AS actor_name
+    const activityRowsPromise = db.prepare(`SELECT a.*, u.name AS actor_name
       FROM activity_log a LEFT JOIN users u ON u.id = a.actor_id
       ${visibilityFilter}
       ORDER BY a.id DESC LIMIT 100`).all(...visibilityParams);
+    if (req.session.role !== 'admin') return res.json(await activityRowsPromise || []);
+
+    const [activityRows, taskHistoryRows] = await Promise.all([
+      activityRowsPromise,
+      db.prepare(`SELECT h.id, h.actor_id, u.name AS actor_name, h.field_name,
+          h.old_value, h.new_value, h.created_at, t.title AS task_title
+        FROM task_history h
+        JOIN tasks t ON t.id = h.task_id
+        LEFT JOIN users u ON u.id = h.actor_id
+        WHERE h.field_name <> 'Task created'
+        ORDER BY h.id DESC LIMIT 100`).all()
+    ]);
+    const taskActivity = (taskHistoryRows || []).map(row => ({
+      id: row.id,
+      actor_id: row.actor_id,
+      actor_name: row.actor_name,
+      action: `Task ${String(row.field_name || 'details').toLowerCase()} updated`,
+      details: `${row.task_title}: ${row.old_value || '—'} -> ${row.new_value || '—'}`,
+      created_at: row.created_at
+    }));
+    const rows = [...(activityRows || []), ...taskActivity]
+      .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+      .slice(0, 100);
     res.json(rows || []);
   } catch (err) {
     res.status(500).json({ error: err.message });
