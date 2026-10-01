@@ -175,6 +175,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     if (!taskSchemaColumnNames.includes('payment_received_date')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN payment_received_date TEXT');
     if (!taskSchemaColumnNames.includes('amount_received')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN amount_received REAL NOT NULL DEFAULT 0');
     if (!taskSchemaColumnNames.includes('work_mode')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN work_mode TEXT NOT NULL DEFAULT 'office'");
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS idx_tasks_project_position_created ON tasks(project_id, position, created_at)');
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS task_checkin_users (
       task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
