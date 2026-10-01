@@ -590,9 +590,15 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
       const taskInsert = db.prepare(`INSERT INTO tasks
         (project_id, title, description, no_billing_required, created_by, assignee_id, due_date, status, position, asana_gid, created_at, updated_at, completed_at)
         VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      const subtaskInsert = db.prepare('INSERT INTO subtasks (task_id, title, done, position) VALUES (?, ?, ?, ?)');
-      const commentInsert = db.prepare('INSERT INTO comments (task_id, user_id, body, created_at) VALUES (?, ?, ?, ?)');
-      const historyInsert = db.prepare('INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)');
+      const subtaskInsert = db.prepare(`INSERT INTO subtasks (task_id, title, done, position)
+        SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM subtasks
+          WHERE task_id=? AND title=? AND done=? AND position=?)`);
+      const commentInsert = db.prepare(`INSERT INTO comments (task_id, user_id, body, created_at)
+        SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM comments
+          WHERE task_id=? AND user_id IS ? AND body=? AND created_at=?)`);
+      const historyInsert = db.prepare(`INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value, created_at)
+        SELECT ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM task_history
+          WHERE task_id=? AND actor_id IS ? AND field_name=? AND old_value=? AND new_value=? AND created_at=?)`);
       let importedTaskCount = 0;
       let importedSubtaskCount = 0;
       let importedCommentCount = 0;
@@ -608,10 +614,13 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
           const text = String(story.text || stripHtml(story.html_text));
           if (story.resource_subtype === 'comment_added' && text.trim()) {
             const commentBody = pathNames.length ? `[Asana subtask: ${currentPath.slice(1).join(' / ')}] ${text}` : text;
-            await commentInsert.run(rootTaskId, actorId, commentBody, story.created_at || new Date().toISOString());
+            const createdAt = story.created_at || new Date().toISOString();
+            await commentInsert.run(rootTaskId, actorId, commentBody, createdAt, rootTaskId, actorId, commentBody, createdAt);
             importedCommentCount++;
           } else if (story.resource_subtype && story.resource_subtype !== 'added_to_project' && text.trim()) {
-            await historyInsert.run(rootTaskId, actorId, `Asana: ${story.resource_subtype}`, '', text, story.created_at || new Date().toISOString());
+            const fieldName = `Asana: ${story.resource_subtype}`;
+            const createdAt = story.created_at || new Date().toISOString();
+            await historyInsert.run(rootTaskId, actorId, fieldName, '', text, createdAt, rootTaskId, actorId, fieldName, '', text, createdAt);
             importedStoryCount++;
           }
         }
@@ -619,7 +628,9 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
           const child = childBundle.task || {};
           const childPath = [...currentPath, String(child.name || 'Untitled subtask')];
           const subtaskTitle = pathNames.length ? childPath.slice(1).join(' / ') : String(child.name || 'Untitled subtask');
-          await subtaskInsert.run(rootTaskId, subtaskTitle, child.completed ? 1 : 0, importedSubtaskCount++);
+          const subtaskDone = child.completed ? 1 : 0;
+          const subtaskPosition = importedSubtaskCount++;
+          await subtaskInsert.run(rootTaskId, subtaskTitle, subtaskDone, subtaskPosition, rootTaskId, subtaskTitle, subtaskDone, subtaskPosition);
           await importTaskActivity(childBundle, rootTaskId, currentPath);
         }
       };
@@ -1115,15 +1126,24 @@ router.get('/tasks/:id', async (req, res) => {
     const task = await db.prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id);
     if (!task) return res.status(404).json({ error: 'Not found' });
     task.can_change_work_mode = await canChangeTaskWorkMode(req) ? 1 : 0;
-    task.subtasks = await db.prepare('SELECT * FROM subtasks WHERE task_id=? ORDER BY position').all(task.id);
-    task.comments = await db.prepare('SELECT c.*,u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE task_id=? ORDER BY c.created_at').all(task.id);
+    const uniqueRows = (rows, fields) => {
+      const seen = new Set();
+      return rows.filter(row => {
+        const key = JSON.stringify(fields.map(field => row[field] ?? null));
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
+    task.subtasks = uniqueRows(await db.prepare('SELECT * FROM subtasks WHERE task_id=? ORDER BY position,id').all(task.id), ['title', 'done', 'position']);
+    task.comments = uniqueRows(await db.prepare('SELECT c.*,u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE task_id=? ORDER BY c.created_at,c.id').all(task.id), ['user_id', 'body', 'image_path', 'attachment_name', 'attachment_type', 'created_at']);
     task.comments = task.comments.map(comment => ({
       ...comment,
       attachment_available: !!(comment.image_path && (comment.image_path.startsWith('/api/download/') || fs.existsSync(path.join(__dirname, '..', comment.image_path.replace(/^\/uploads\//, 'uploads/')))))
     }));
-    task.history = await db.prepare(`SELECT h.*, u.name AS actor_name
+    task.history = uniqueRows(await db.prepare(`SELECT h.*, u.name AS actor_name
       FROM task_history h LEFT JOIN users u ON u.id = h.actor_id
-      WHERE h.task_id = ? ORDER BY h.created_at ASC, h.id ASC`).all(task.id);
+      WHERE h.task_id = ? ORDER BY h.created_at ASC, h.id ASC`).all(task.id), ['actor_id', 'field_name', 'old_value', 'new_value', 'created_at']);
     task.checkin_users = await db.prepare(`SELECT u.id, u.name, c.check_in_at, c.check_in_lat, c.check_in_lng, c.check_out_at, c.check_out_lat, c.check_out_lng
       FROM users u JOIN task_checkin_access r ON r.user_id=u.id
       LEFT JOIN task_checkins c ON c.id=(SELECT latest.id FROM task_checkins latest
