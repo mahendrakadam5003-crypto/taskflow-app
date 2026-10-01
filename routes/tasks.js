@@ -638,10 +638,9 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
         const taskAssigneeId = mapPerson(task.assignee);
         const taskGid = String(task.gid || '');
         const taskTitle = String(task.name || 'Untitled task');
-        const existingTask = await db.prepare(`SELECT id FROM tasks
-          WHERE project_id = ? AND (asana_gid = ? OR title = ?)
-          ORDER BY CASE WHEN asana_gid = ? THEN 0 ELSE 1 END LIMIT 1`)
-          .get(projectId, taskGid, taskTitle, taskGid);
+        const existingTask = taskGid
+          ? await db.prepare('SELECT id FROM tasks WHERE project_id = ? AND asana_gid = ?').get(projectId, taskGid)
+          : await db.prepare('SELECT id FROM tasks WHERE project_id = ? AND title = ? ORDER BY id LIMIT 1').get(projectId, taskTitle);
         let taskInfo;
         if (existingTask) {
           await db.prepare(`UPDATE tasks SET title=?, description=?, assignee_id=?, due_date=?, status=?, asana_gid=?, updated_at=?, completed_at=? WHERE id=?`)
