@@ -297,6 +297,7 @@ setInterval(() => {
 
 let attendancePollTimer = null;
 let notificationsPollTimer = null;
+let notificationsPollBusy = false;
 let taskListPollTimer = null;
 let taskListPollBusy = false;
 let taskListVisibilityHandler = null;
@@ -363,11 +364,9 @@ async function syncLiveTracking() {
 
 function startNotificationsPolling() {
   stopNotificationsPolling();
-  api('/auth/activity').then((entries) => {
-    latestNotificationId = entries.length ? Math.max(...entries.map(entry => Number(entry.id) || 0)) : 0;
-  }).catch(() => {});
   notificationsPollTimer = setInterval(async () => {
-    if (document.hidden) return;
+    if (document.hidden || currentViewName() === 'notifications' || notificationsPollBusy) return;
+    notificationsPollBusy = true;
     try {
       const entries = await api('/auth/activity');
       const newestId = entries.length ? Math.max(...entries.map(entry => Number(entry.id) || 0)) : 0;
@@ -375,8 +374,10 @@ function startNotificationsPolling() {
       latestNotificationId = Math.max(latestNotificationId || 0, newestId);
     } catch (error) {
       // Notifications are supplementary and should not interrupt the current screen.
+    } finally {
+      notificationsPollBusy = false;
     }
-  }, 10000);
+  }, 60000);
 }
 
 function stopNotificationsPolling() {
@@ -863,7 +864,7 @@ async function renderNotifications() {
   list.innerHTML = '<p class="hint" role="status">Loading recent activity...</p>';
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20000);
+    const timeout = setTimeout(() => controller.abort(), 60000);
     let activity;
     try {
       activity = await api('/auth/activity', { signal: controller.signal });
@@ -871,9 +872,11 @@ async function renderNotifications() {
       clearTimeout(timeout);
     }
     if (!activity.length) {
+      latestNotificationId = Math.max(latestNotificationId || 0, 0);
       list.innerHTML = '<p class="hint">No recent activity is available for your account yet.</p>';
       return;
     }
+    latestNotificationId = Math.max(latestNotificationId || 0, ...activity.map(entry => Number(entry.id) || 0));
     list.innerHTML = activity.map((entry) => `
       <div style="padding:12px 0; border-bottom:1px solid #eee;">
         <b>${escapeHtml(entry.action)}</b>
@@ -881,7 +884,7 @@ async function renderNotifications() {
         ${entry.details ? `<div>${escapeHtml(entry.details)}</div>` : ''}
       </div>`).join('');
   } catch (error) {
-    const message = error.name === 'AbortError' ? 'The activity request is taking too long.' : error.message;
+    const message = error.name === 'AbortError' ? 'The activity request timed out after 60 seconds.' : error.message;
     list.innerHTML = `<p class="form-error" role="alert">Unable to load recent activity: ${escapeHtml(message)}</p><button class="btn btn-secondary" id="notifications-retry" type="button">Retry</button>`;
     $('#notifications-retry').onclick = () => renderNotifications();
   }
