@@ -2680,9 +2680,7 @@ async function renderAdmin() {
       if (!confirmed) return;
       importProjectsButton.disabled = true;
       let importedCount = 0;
-      let lastImportedProjectId = null;
-      let lastImportedProjectName = '';
-      let lastImportedTaskCount = 0;
+      const synchronizedProjects = [];
       let attachmentCount = 0;
       let missingFileCount = 0;
       let unavailableFileCount = 0;
@@ -2705,9 +2703,11 @@ async function renderAdmin() {
             continue;
           }
           if (projectResult.status === 'imported') importedCount++;
-          lastImportedProjectId = Number(projectResult.project_id) || null;
-          lastImportedProjectName = entry.source.project.name;
-          lastImportedTaskCount = Number(projectResult.tasks || 0);
+          synchronizedProjects.push({
+            id: Number(projectResult.project_id) || null,
+            name: entry.source.project.name,
+            tasks: Number(projectResult.tasks || 0)
+          });
           if (projectResult.unmatched_users?.length) failures.push(`${entry.source.project.name}: no active TaskFlow user matched ${projectResult.unmatched_users.join(', ')}.`);
 
           const taskAttachments = [];
@@ -2756,7 +2756,8 @@ async function renderAdmin() {
             setDataToolsProgress(((index + 1) / projectsToImport.length) * 100, `Project ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name}; ${attachmentCount} attachments uploaded...`);
           }
         }
-        const summary = [`${importedCount} new project${importedCount === 1 ? '' : 's'} imported.`, `${lastImportedTaskCount} tasks synchronized in ${lastImportedProjectName || 'the imported project'}.`, `${attachmentCount} attachments copied.`];
+        const projectSummary = synchronizedProjects.map(project => `${project.name}: ${project.tasks} tasks`).join('; ');
+        const summary = [`${importedCount} new project${importedCount === 1 ? '' : 's'} imported.`, `Synchronized ${synchronizedProjects.length} project${synchronizedProjects.length === 1 ? '' : 's'}${projectSummary ? ` (${projectSummary})` : ''}.`, `${attachmentCount} attachments copied.`];
         if (missingFileCount) summary.push(`${missingFileCount} attachment file(s) were not found in the selected folder.`);
         if (unavailableFileCount) summary.push(`${unavailableFileCount} Asana task attachment(s) had no downloaded file in the JSON export.`);
         if (unsupportedProjectAttachmentCount) summary.push(`${unsupportedProjectAttachmentCount} project-level attachment(s) are not supported yet.`);
@@ -2765,7 +2766,8 @@ async function renderAdmin() {
         finishDataToolsProgress();
         if (importedCount || attachmentCount) {
           await loadProjects();
-          if (lastImportedProjectId) await openProject(lastImportedProjectId);
+          const projectToOpen = synchronizedProjects.filter(project => project.id).sort((a, b) => b.tasks - a.tasks)[0];
+          if (projectToOpen) await openProject(projectToOpen.id);
         }
         if (importedCount) showAppNotification(`${importedCount} Asana project${importedCount === 1 ? '' : 's'} imported.`);
       } catch (error) {
