@@ -833,7 +833,7 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     const assignee = String(req.query.assignee_id || '').trim();
     const search = String(req.query.q || '').trim();
     const status = String(req.query.status || 'open').trim();
-    let sql = `SELECT t.*,u.name AS assignee_name,creator.name AS creator_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id LEFT JOIN users creator ON creator.id=t.created_by WHERE t.project_id=?`;
+    let sql = `SELECT t.id,t.project_id,t.title,t.description,t.no_billing_required,t.created_by,t.assignee_id,t.due_date,t.status,t.position,t.created_at,t.updated_at,t.completed_at,t.invoice_type,t.invoice_number,t.invoice_date,t.customer_name,t.total_amount,t.payment_status,t.payment_received_date,t.work_mode,t.asana_gid,u.name AS assignee_name,creator.name AS creator_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id LEFT JOIN users creator ON creator.id=t.created_by WHERE t.project_id=?`;
     const params = [req.params.id];
     if (status !== 'all') {
       sql += status === 'done' ? " AND t.status='done'" : " AND COALESCE(t.status, 'open') <> 'done'";
@@ -854,10 +854,10 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     if (req.query.completed_on) { sql += ' AND date(t.completed_at)=?'; params.push(req.query.completed_on); }
     if (search) {
       const exact = `%${search}%`;
-      sql += ' ORDER BY CASE WHEN t.title LIKE ? THEN 0 WHEN t.description LIKE ? THEN 1 ELSE 2 END, t.position, t.created_at';
+      sql += ' ORDER BY CASE WHEN t.title LIKE ? THEN 0 WHEN t.description LIKE ? THEN 1 ELSE 2 END, t.position, t.created_at LIMIT 10000';
       params.push(exact, exact);
     } else {
-      sql += ' ORDER BY t.position,t.created_at';
+      sql += ' ORDER BY t.position,t.created_at LIMIT 10000';
     }
     res.json(await db.prepare(sql).all(...params));
   } catch (err) { res.status(500).json({ error: err.message }); }
