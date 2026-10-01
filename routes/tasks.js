@@ -548,7 +548,15 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
   const users = await db.prepare('SELECT id, name FROM users WHERE active = 1').all();
   const usersByName = new Map((users || []).map(user => [String(user.name || '').trim().toLocaleLowerCase(), Number(user.id)]));
   let unmatchedNames = new Set();
-  const getPersonName = person => String((typeof person === 'string' ? person : person?.name) || '').trim();
+  let sourcePeopleByGid = new Map();
+  const getPersonName = person => {
+    if (typeof person === 'string') {
+      const value = person.trim();
+      return sourcePeopleByGid.get(value) || value;
+    }
+    const name = String(person?.name || person?.full_name || person?.display_name || '').trim();
+    return name || sourcePeopleByGid.get(String(person?.gid || '').trim()) || '';
+  };
   const mapPerson = person => {
     const name = getPersonName(person);
     if (!name) return null;
@@ -571,6 +579,24 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
       if (!projectGid || !sourceProject?.name || !Array.isArray(source.tasks)) {
         throw new Error('Expected an Asana project JSON with project metadata and a tasks array.');
       }
+      sourcePeopleByGid = new Map();
+      const indexPerson = person => {
+        if (!person || typeof person !== 'object' || Array.isArray(person)) return;
+        const gid = String(person.gid || '').trim();
+        const name = String(person.name || person.full_name || person.display_name || '').trim();
+        if (gid && name) sourcePeopleByGid.set(gid, name);
+      };
+      const sourcePersonRecords = records => Array.isArray(records)
+        ? records
+        : (records && typeof records === 'object' ? Object.values(records) : []);
+      [...sourcePersonRecords(source.users), ...sourcePersonRecords(source.people), ...sourcePersonRecords(sourceProject.members)].forEach(indexPerson);
+      const indexTaskPeople = bundle => {
+        const task = bundle?.task || {};
+        [task.created_by, task.assignee, task.owner].forEach(indexPerson);
+        (bundle?.stories || []).forEach(story => indexPerson(story.created_by));
+        (bundle?.subtasks || []).forEach(indexTaskPeople);
+      };
+      source.tasks.forEach(indexTaskPeople);
       const duplicate = await db.prepare('SELECT id, name FROM projects WHERE asana_gid = ?').get(projectGid);
       if (duplicate) {
         projectId = Number(duplicate.id);
@@ -589,8 +615,8 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
       }
 
       const taskInsert = db.prepare(`INSERT INTO tasks
-        (project_id, title, description, no_billing_required, created_by, assignee_id, due_date, status, position, asana_gid, created_at, updated_at, completed_at)
-        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        (project_id, title, description, no_billing_required, created_by, assignee_id, asana_assignee_name, due_date, status, position, asana_gid, created_at, updated_at, completed_at)
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       const subtaskInsert = db.prepare(`INSERT INTO subtasks (task_id, title, done, position)
         SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM subtasks
           WHERE task_id=? AND title=? AND done=? AND position=?)`);
@@ -656,6 +682,7 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
         if (customFieldLines.length) descriptionParts.push(`Asana custom fields:\n${customFieldLines.join('\n')}`);
         const taskCreatorId = mapPerson(task.created_by) || req.session.userId;
         const taskAssigneeId = mapPerson(task.assignee);
+        const taskAssigneeName = getPersonName(task.assignee) || null;
         const taskGid = String(task.gid || '');
         const taskTitle = String(task.name || 'Untitled task');
         const existingTask = taskGid
@@ -663,8 +690,8 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
           : await db.prepare('SELECT id FROM tasks WHERE project_id = ? AND title = ? ORDER BY id LIMIT 1').get(projectId, taskTitle);
         let taskInfo;
         if (existingTask) {
-          await db.prepare(`UPDATE tasks SET title=?, description=?, assignee_id=?, due_date=?, status=?, asana_gid=?, updated_at=?, completed_at=? WHERE id=?`)
-            .run(taskTitle, descriptionParts.join('\n\n'), taskAssigneeId, task.due_on || null, task.completed ? 'done' : 'open', taskGid, task.modified_at || task.created_at || new Date().toISOString(), task.completed_at || null, existingTask.id);
+          await db.prepare(`UPDATE tasks SET title=?, description=?, assignee_id=?, asana_assignee_name=?, due_date=?, status=?, asana_gid=?, updated_at=?, completed_at=? WHERE id=?`)
+            .run(taskTitle, descriptionParts.join('\n\n'), taskAssigneeId, taskAssigneeName, task.due_on || null, task.completed ? 'done' : 'open', taskGid, task.modified_at || task.created_at || new Date().toISOString(), task.completed_at || null, existingTask.id);
           taskInfo = { lastInsertRowid: existingTask.id };
         } else {
           taskInfo = await taskInsert.run(
@@ -673,6 +700,7 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
             descriptionParts.join('\n\n'),
             taskCreatorId,
             taskAssigneeId,
+            taskAssigneeName,
             task.due_on || null,
             task.completed ? 'done' : 'open',
             position++,
@@ -856,7 +884,7 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     const afterId = Math.max(0, Number(req.query.after_id) || 0);
     const requestedLimit = Number.parseInt(req.query.limit, 10);
     const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 200) : 200;
-    let sql = `SELECT t.id,t.project_id,t.title,t.created_by,t.assignee_id,t.due_date,t.status,t.position,t.created_at,t.updated_at,t.completed_at,t.work_mode,t.asana_gid FROM tasks t WHERE t.project_id=? AND t.id>?`;
+    let sql = `SELECT t.id,t.project_id,t.title,t.created_by,t.assignee_id,COALESCE(u.name,t.asana_assignee_name) AS assignee_name,t.due_date,t.status,t.position,t.created_at,t.updated_at,t.completed_at,t.work_mode,t.asana_gid FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? AND t.id>?`;
     const params = [req.params.id, afterId];
     if (status !== 'all') {
       sql += status === 'done' ? " AND t.status='done'" : " AND COALESCE(t.status, 'open') <> 'done'";
@@ -892,7 +920,7 @@ router.get('/my-tasks', async (req, res) => {
   try {
     const userId = req.session.userId;
     const sql = `SELECT t.id,t.project_id,t.title,t.description,t.assignee_id,t.due_date,t.status,t.position,t.created_at,
-        p.name AS project_name,u.name AS assignee_name
+      p.name AS project_name,COALESCE(u.name,t.asana_assignee_name) AS assignee_name
       FROM tasks t JOIN projects p ON p.id=t.project_id
       LEFT JOIN users u ON u.id=t.assignee_id
       WHERE t.assignee_id=? AND COALESCE(t.status, 'open') <> 'done'
@@ -907,15 +935,15 @@ router.get('/tasks/search', async (req, res) => {
     if (!q) return res.json([]);
     const words = q.split(/\s+/).filter(Boolean);
     const admin = req.session.role === 'admin';
-    const sql = `SELECT t.id,t.project_id,t.title,t.status,t.due_date,p.name AS project_name,u.name AS assignee_name
+    const sql = `SELECT t.id,t.project_id,t.title,t.status,t.due_date,p.name AS project_name,COALESCE(u.name,t.asana_assignee_name) AS assignee_name
       FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN users u ON u.id=t.assignee_id
       LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=?
       WHERE (p.created_by=? OR pm.user_id=? OR ?=1)
-      ${words.map(() => 'AND (t.title LIKE ? OR t.description LIKE ? OR u.name LIKE ? OR p.name LIKE ?)').join(' ')}
+      ${words.map(() => 'AND (t.title LIKE ? OR t.description LIKE ? OR u.name LIKE ? OR t.asana_assignee_name LIKE ? OR p.name LIKE ?)').join(' ')}
       ORDER BY CASE WHEN t.title LIKE ? THEN 0 WHEN t.description LIKE ? THEN 1 ELSE 2 END,
         CASE WHEN t.status='open' THEN 0 ELSE 1 END,t.created_at DESC LIMIT 50`;
     const params = [req.session.userId, req.session.userId, req.session.userId, admin ? 1 : 0];
-    words.forEach(word => { const like = `%${word}%`; params.push(like, like, like, like); });
+    words.forEach(word => { const like = `%${word}%`; params.push(like, like, like, like, like); });
     params.push(`%${q}%`, `%${q}%`);
     res.json(await db.prepare(sql).all(...params));
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1018,6 +1046,7 @@ router.put('/tasks/:id', async (req, res) => {
     if (req.body.assignee_id !== undefined) {
       if (req.body.assignee_id && !(await canAccessProject((await db.prepare('SELECT project_id FROM tasks WHERE id=?').get(req.params.id)).project_id, Number(req.body.assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
       updates.push('assignee_id=?'); values.push(req.body.assignee_id || null);
+      updates.push('asana_assignee_name=NULL');
     }
     if (!updates.length) return res.json({ ok: true });
     updates.push("updated_at=datetime('now')");
@@ -1131,9 +1160,8 @@ router.post('/tasks/:id/check-out', async (req, res) => {
 router.get('/tasks/:id', async (req, res) => {
   try {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
-    const task = await db.prepare('SELECT t.*, u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.id=?').get(req.params.id);
+    const task = await db.prepare('SELECT t.*, COALESCE(u.name, t.asana_assignee_name) AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.id=?').get(req.params.id);
     if (!task) return res.status(404).json({ error: 'Not found' });
-    task.can_change_work_mode = await canChangeTaskWorkMode(req) ? 1 : 0;
     const uniqueRows = (rows, fields) => {
       const seen = new Set();
       return rows.filter(row => {
@@ -1143,20 +1171,28 @@ router.get('/tasks/:id', async (req, res) => {
         return true;
       });
     };
-    task.subtasks = uniqueRows(await db.prepare('SELECT * FROM subtasks WHERE task_id=? ORDER BY position,id').all(task.id), ['title', 'done', 'position']);
-    task.comments = uniqueRows(await db.prepare('SELECT c.*,u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE task_id=? ORDER BY c.created_at,c.id').all(task.id), ['user_id', 'author_name', 'body', 'image_path', 'attachment_name', 'attachment_type', 'created_at']);
+    const [canChangeWorkMode, subtasks, comments, history, checkinUsers] = await Promise.all([
+      canChangeTaskWorkMode(req),
+      db.prepare('SELECT * FROM subtasks WHERE task_id=? ORDER BY position,id').all(task.id),
+      db.prepare('SELECT c.*,u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE task_id=? ORDER BY c.created_at,c.id').all(task.id),
+      db.prepare(`SELECT h.*, u.name AS actor_name
+        FROM task_history h LEFT JOIN users u ON u.id = h.actor_id
+        WHERE h.task_id = ? ORDER BY h.created_at ASC, h.id ASC`).all(task.id),
+      db.prepare(`SELECT u.id, u.name, c.check_in_at, c.check_in_lat, c.check_in_lng, c.check_out_at, c.check_out_lat, c.check_out_lng
+        FROM users u JOIN task_checkin_access r ON r.user_id=u.id
+        LEFT JOIN task_checkins c ON c.id=(SELECT latest.id FROM task_checkins latest
+          WHERE latest.task_id=? AND latest.user_id=u.id ORDER BY latest.id DESC LIMIT 1)
+        WHERE u.id=?`).all(task.id, req.session.userId)
+    ]);
+    task.can_change_work_mode = canChangeWorkMode ? 1 : 0;
+    task.subtasks = uniqueRows(subtasks, ['title', 'done', 'position']);
+    task.comments = uniqueRows(comments, ['user_id', 'author_name', 'body', 'image_path', 'attachment_name', 'attachment_type', 'created_at']);
     task.comments = task.comments.map(comment => ({
       ...comment,
       attachment_available: !!(comment.image_path && (comment.image_path.startsWith('/api/download/') || fs.existsSync(path.join(__dirname, '..', comment.image_path.replace(/^\/uploads\//, 'uploads/')))))
     }));
-    task.history = uniqueRows(await db.prepare(`SELECT h.*, u.name AS actor_name
-      FROM task_history h LEFT JOIN users u ON u.id = h.actor_id
-      WHERE h.task_id = ? ORDER BY h.created_at ASC, h.id ASC`).all(task.id), ['actor_id', 'author_name', 'field_name', 'old_value', 'new_value', 'created_at']);
-    task.checkin_users = await db.prepare(`SELECT u.id, u.name, c.check_in_at, c.check_in_lat, c.check_in_lng, c.check_out_at, c.check_out_lat, c.check_out_lng
-      FROM users u JOIN task_checkin_access r ON r.user_id=u.id
-      LEFT JOIN task_checkins c ON c.id=(SELECT latest.id FROM task_checkins latest
-        WHERE latest.task_id=? AND latest.user_id=u.id ORDER BY latest.id DESC LIMIT 1)
-      WHERE u.id=?`).all(task.id, req.session.userId);
+    task.history = uniqueRows(history, ['actor_id', 'author_name', 'field_name', 'old_value', 'new_value', 'created_at']);
+    task.checkin_users = checkinUsers;
     task.checkin_required = task.checkin_users.length ? 1 : 0;
     res.json(task);
   } catch (err) { res.status(500).json({ error: err.message }); }

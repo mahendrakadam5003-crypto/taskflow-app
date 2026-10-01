@@ -1,6 +1,7 @@
 // ---------- tiny helpers ----------
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+let activeTaskDrawerController = null;
 
 async function api(path, opts = {}) {
   const res = await fetch('/api' + path, {
@@ -175,6 +176,8 @@ function rejectionModal() {
 }
 
 function closeDrawer() {
+  activeTaskDrawerController?.abort();
+  activeTaskDrawerController = null;
   const drawer = $('#task-drawer');
   if (drawer) drawer.classList.add('hidden');
   const reimbursementDrawer = $('#reimbursement-drawer');
@@ -1629,12 +1632,16 @@ function showTaskDrawerLoading() {
 async function openTaskDrawer(taskId) {
   const drawer = $('#task-drawer');
   if (!drawer) return;
+  activeTaskDrawerController?.abort();
   showTaskDrawerLoading();
   const controller = new AbortController();
+  activeTaskDrawerController = controller;
   const loadTimeout = setTimeout(() => controller.abort(), 15000);
   try {
     const task = await api(`/tasks/${taskId}`, { signal: controller.signal });
+    if (activeTaskDrawerController !== controller) { clearTimeout(loadTimeout); return; }
     const members = await api(`/projects/${task.project_id}/members`, { signal: controller.signal });
+    if (activeTaskDrawerController !== controller) { clearTimeout(loadTimeout); return; }
     clearTimeout(loadTimeout);
     let taskHistory = task.history || [];
     const currentCheckin = (task.checkin_users || []).find(user => Number(user.id) === Number(ME?.id));
@@ -1649,7 +1656,7 @@ async function openTaskDrawer(taskId) {
     drawer.classList.remove('loading');
     $('#drawer-title').value = task.title || '';
     $('#drawer-title').disabled = taskActionsLocked;
-    $('#drawer-assignee').innerHTML = '<option value="">No assignee</option>' + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
+    $('#drawer-assignee').innerHTML = `<option value="">No assignee</option>${!task.assignee_id && task.asana_assignee_name ? `<option value="asana-unlinked" disabled>${escapeHtml(task.asana_assignee_name)}</option>` : ''}` + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
     const currentAssigneeId = String(task.assignee_id ?? '');
     if (currentAssigneeId && !members.some(member => String(member.id) === currentAssigneeId)) {
       const option = document.createElement('option');
@@ -1658,7 +1665,7 @@ async function openTaskDrawer(taskId) {
       $('#drawer-assignee').append(option);
     }
     $('#drawer-assignee').disabled = !canEditTask;
-    $('#drawer-assignee').value = task.assignee_id || '';
+    $('#drawer-assignee').value = task.assignee_id || (task.asana_assignee_name ? 'asana-unlinked' : '');
     const workModeInput = $('#drawer-work-mode');
     if (workModeInput) {
       workModeInput.value = task.work_mode || 'office';
@@ -2101,6 +2108,7 @@ async function openTaskDrawer(taskId) {
     };
   } catch (err) {
     clearTimeout(loadTimeout);
+    if (activeTaskDrawerController !== controller) return;
     drawer.classList.remove('loading');
     $('#drawer-title').value = 'Unable to load task';
     const message = err.name === 'AbortError' ? 'Task loading timed out. Close and reopen the task to try again.' : err.message;
