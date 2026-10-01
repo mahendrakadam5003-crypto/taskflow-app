@@ -860,10 +860,18 @@ function showView(view) {
 async function renderNotifications() {
   const list = $('#notifications-list');
   if (!list) return;
+  list.innerHTML = '<p class="hint" role="status">Loading recent activity...</p>';
   try {
-    const activity = await api('/auth/activity');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    let activity;
+    try {
+      activity = await api('/auth/activity', { signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!activity.length) {
-      list.innerHTML = '<p class="hint">No notifications yet.</p>';
+      list.innerHTML = '<p class="hint">No recent activity is available for your account yet.</p>';
       return;
     }
     list.innerHTML = activity.map((entry) => `
@@ -872,8 +880,10 @@ async function renderNotifications() {
         <span class="hint"> by ${escapeHtml(entry.actor_name || 'Unknown user')} on ${escapeHtml(fmtDateTime(entry.created_at))}</span>
         ${entry.details ? `<div>${escapeHtml(entry.details)}</div>` : ''}
       </div>`).join('');
-  } catch (err) {
-    list.innerHTML = `<p class="form-error">${escapeHtml(err.message)}</p>`;
+  } catch (error) {
+    const message = error.name === 'AbortError' ? 'The activity request is taking too long.' : error.message;
+    list.innerHTML = `<p class="form-error" role="alert">Unable to load recent activity: ${escapeHtml(message)}</p><button class="btn btn-secondary" id="notifications-retry" type="button">Retry</button>`;
+    $('#notifications-retry').onclick = () => renderNotifications();
   }
 }
 
