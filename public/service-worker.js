@@ -1,4 +1,4 @@
-const CACHE_NAME = 'taskflow-shell-v17';
+const CACHE_NAME = 'taskflow-shell-v18';
 const APP_SHELL = [
   '/',
   '/index.html',

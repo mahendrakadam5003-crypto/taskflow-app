@@ -2506,6 +2506,17 @@ async function renderAdmin() {
 
     wrap.innerHTML = `
       <div class="admin-block">
+        <h3>Project data import / export</h3>
+        <p class="hint">Import Asana project JSON files or download a backup of TaskFlow projects, tasks, comments, task history, and check-ins. User accounts, reimbursements, attendance records, and attachment file contents are not included. Asana section names and custom fields are preserved in task descriptions. Project text may contain secrets; store backups securely.</p>
+        <div class="admin-form-row">
+          <input id="asana-project-import-files" type="file" accept=".json,application/json" multiple aria-label="Choose Asana project JSON files">
+          <button class="btn btn-primary" id="asana-project-import" type="button">Import Asana projects</button>
+          <button class="btn btn-secondary" id="taskflow-project-export" type="button">Export TaskFlow backup</button>
+        </div>
+        <div id="project-data-tools-status" class="hint" role="status"></div>
+      </div>
+
+      <div class="admin-block">
         <h3>Office location (for on-site detection)</h3>
         <p class="hint">Set your office's coordinates once – punches within the radius are marked 🟢 On-site, others 🟡 Remote.</p>
         <div class="admin-form-row">
@@ -2603,12 +2614,80 @@ async function renderAdmin() {
         </table>
       </div>`;
 
+    const dataToolsStatus = $('#project-data-tools-status');
+    const importProjectsButton = $('#asana-project-import');
+    if (importProjectsButton) importProjectsButton.onclick = async () => {
+      const files = Array.from($('#asana-project-import-files')?.files || []);
+      if (!files.length) {
+        dataToolsStatus.textContent = 'Choose one or more Asana project JSON files first.';
+        return;
+      }
+      const confirmed = await confirmModal(
+        'Import Asana projects?',
+        `${files.length} project JSON file${files.length === 1 ? '' : 's'} will create new TaskFlow projects. Existing imports are skipped. Users map by exact name; attachment files are not copied by this import.`,
+        'Import projects',
+        false
+      );
+      if (!confirmed) return;
+      importProjectsButton.disabled = true;
+      dataToolsStatus.textContent = `Importing ${files.length} project file${files.length === 1 ? '' : 's'}...`;
+      try {
+        const formData = new FormData();
+        files.forEach(file => formData.append('projects', file, file.name));
+        const response = await fetch('/api/admin/asana-import', { method: 'POST', body: formData, credentials: 'same-origin' });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || `Import failed (${response.status}).`);
+        const imported = (payload.results || []).filter(result => result.status === 'imported');
+        const failed = (payload.results || []).filter(result => result.status !== 'imported');
+        const details = [
+          `${imported.length} project${imported.length === 1 ? '' : 's'} imported.`,
+          ...failed.map(result => `${result.file}: ${result.error}`),
+          ...imported.filter(result => result.unmatched_users?.length).map(result => `${result.project_name}: no active TaskFlow user matched ${result.unmatched_users.join(', ')}.`)
+        ];
+        dataToolsStatus.textContent = details.join(' ');
+        if (imported.length) {
+          await loadProjects();
+          showAppNotification(`${imported.length} Asana project${imported.length === 1 ? '' : 's'} imported.`);
+        }
+      } catch (error) {
+        dataToolsStatus.textContent = error.message;
+      } finally {
+        importProjectsButton.disabled = false;
+      }
+    };
+
+    const exportProjectsButton = $('#taskflow-project-export');
+    if (exportProjectsButton) exportProjectsButton.onclick = async () => {
+      exportProjectsButton.disabled = true;
+      dataToolsStatus.textContent = 'Preparing TaskFlow project backup...';
+      try {
+        const response = await fetch('/api/admin/data-export', { credentials: 'same-origin' });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || `Export failed (${response.status}).`);
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `taskflow-projects-${todayISO()}.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+        dataToolsStatus.textContent = 'TaskFlow project backup downloaded.';
+      } catch (error) {
+        dataToolsStatus.textContent = error.message;
+      } finally {
+        exportProjectsButton.disabled = false;
+      }
+    };
+
     wrap.querySelectorAll('.admin-block').forEach((section) => {
       section.classList.add('is-collapsible');
       const sectionTitle = section.querySelector('h3')?.textContent || '';
       const storageKey = `taskflow-admin-section:${sectionTitle.trim()}`;
       const savedState = localStorage.getItem(storageKey);
       const isExpandedByDefault = sectionTitle.includes('Team members')
+        || sectionTitle.includes('Project data import / export')
         || sectionTitle.includes('Task check-in / check-out access')
         || sectionTitle.includes('Task work location access');
       const isCollapsed = savedState ? savedState === 'collapsed' : !isExpandedByDefault;

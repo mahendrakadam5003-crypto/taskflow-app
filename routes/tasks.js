@@ -148,6 +148,10 @@ const commentUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }
 });
+const asanaImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 10 }
+});
 
 async function canAccessProject(projectId, userId, admin = false) {
   if (admin) return true;
@@ -479,6 +483,188 @@ router.get('/project-action-access/me', async (req, res) => {
   if (req.session.role === 'admin') return res.json(Object.fromEntries(PROJECT_ACTIONS.map(action => [action, true])));
   const row = await db.prepare(`SELECT ${PROJECT_ACTIONS.join(', ')} FROM project_action_access WHERE user_id=?`).get(req.session.userId);
   res.json(Object.fromEntries(PROJECT_ACTIONS.map(action => [action, row ? Number(row[action]) === 1 : PROJECT_ACTION_DEFAULTS[action]])));
+});
+
+router.get('/admin/data-export', requireAdmin, async (req, res) => {
+  try {
+    const projects = await db.prepare('SELECT * FROM projects ORDER BY name, id').all();
+    const exportedProjects = [];
+    for (const project of projects || []) {
+      const [members, taskRows] = await Promise.all([
+        db.prepare(`SELECT u.id, u.name, u.username, u.role FROM project_members pm
+          JOIN users u ON u.id = pm.user_id WHERE pm.project_id = ? ORDER BY u.name`).all(project.id),
+        db.prepare(`SELECT t.*, assignee.name AS assignee_name, creator.name AS creator_name
+          FROM tasks t LEFT JOIN users assignee ON assignee.id = t.assignee_id
+          LEFT JOIN users creator ON creator.id = t.created_by
+          WHERE t.project_id = ? ORDER BY t.position, t.id`).all(project.id)
+      ]);
+      const taskIds = (taskRows || []).map(task => Number(task.id));
+      let subtasks = [], comments = [], history = [], checkins = [];
+      if (taskIds.length) {
+        const placeholders = taskIds.map(() => '?').join(',');
+        [subtasks, comments, history, checkins] = await Promise.all([
+          db.prepare(`SELECT * FROM subtasks WHERE task_id IN (${placeholders}) ORDER BY task_id, position, id`).all(...taskIds),
+          db.prepare(`SELECT c.*, u.name AS user_name FROM comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.task_id IN (${placeholders}) ORDER BY c.created_at, c.id`).all(...taskIds),
+          db.prepare(`SELECT h.*, u.name AS actor_name FROM task_history h LEFT JOIN users u ON u.id = h.actor_id WHERE h.task_id IN (${placeholders}) ORDER BY h.created_at, h.id`).all(...taskIds),
+          db.prepare(`SELECT * FROM task_checkins WHERE task_id IN (${placeholders}) ORDER BY task_id, id`).all(...taskIds)
+        ]);
+      }
+      exportedProjects.push({
+        project,
+        members: members || [],
+        tasks: (taskRows || []).map(task => ({
+          task,
+          subtasks: (subtasks || []).filter(item => Number(item.task_id) === Number(task.id)),
+          comments: (comments || []).filter(item => Number(item.task_id) === Number(task.id)),
+          history: (history || []).filter(item => Number(item.task_id) === Number(task.id)),
+          checkins: (checkins || []).filter(item => Number(item.task_id) === Number(task.id))
+        }))
+      });
+    }
+    const backup = {
+      format: 'taskflow-project-backup',
+      version: 1,
+      exported_at: new Date().toISOString(),
+      projects: exportedProjects
+    };
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="taskflow-projects-${new Date().toISOString().slice(0, 10)}.json"`);
+    res.json(backup);
+  } catch (error) {
+    console.error('TaskFlow data export failed:', error);
+    res.status(500).json({ error: `Unable to export TaskFlow data: ${error.message}` });
+  }
+});
+
+router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projects', 20), async (req, res) => {
+  const files = req.files || [];
+  if (!files.length) return res.status(400).json({ error: 'Choose one or more Asana project JSON files.' });
+
+  const users = await db.prepare('SELECT id, name FROM users WHERE active = 1').all();
+  const usersByName = new Map((users || []).map(user => [String(user.name || '').trim().toLocaleLowerCase(), Number(user.id)]));
+  let unmatchedNames = new Set();
+  const mapPerson = person => {
+    const name = typeof person === 'string' ? person : person?.name;
+    if (!name) return null;
+    const userId = usersByName.get(String(name).trim().toLocaleLowerCase()) || null;
+    if (!userId) unmatchedNames.add(String(name).trim());
+    return userId;
+  };
+  const stripHtml = value => String(value || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  const results = [];
+
+  for (const file of files) {
+    let projectId = null;
+    let projectGid = null;
+    unmatchedNames = new Set();
+    try {
+      const source = JSON.parse(file.buffer.toString('utf8').replace(/^\uFEFF/, ''));
+      const sourceProject = source.project;
+      projectGid = String(sourceProject?.gid || '');
+      if (!projectGid || !sourceProject?.name || !Array.isArray(source.tasks)) {
+        throw new Error('Expected an Asana project JSON with project metadata and a tasks array.');
+      }
+      const duplicate = await db.prepare('SELECT id, name FROM projects WHERE asana_gid = ?').get(projectGid);
+      if (duplicate) throw new Error(`This Asana project was already imported as "${duplicate.name}" (TaskFlow project ${duplicate.id}).`);
+
+      const projectInfo = await db.prepare('INSERT INTO projects (name, created_by, asana_gid, created_at) VALUES (?, ?, ?, ?)')
+        .run(String(sourceProject.name).trim(), req.session.userId, projectGid, sourceProject.created_at || new Date().toISOString());
+      projectId = Number(projectInfo.lastInsertRowid);
+      await db.prepare('INSERT OR IGNORE INTO project_members (project_id, user_id) VALUES (?, ?)').run(projectId, req.session.userId);
+      const memberInsert = db.prepare('INSERT OR IGNORE INTO project_members (project_id, user_id) VALUES (?, ?)');
+      for (const member of sourceProject.members || []) {
+        const memberId = mapPerson(member);
+        if (memberId) await memberInsert.run(projectId, memberId);
+      }
+
+      const taskInsert = db.prepare(`INSERT INTO tasks
+        (project_id, title, description, no_billing_required, created_by, assignee_id, due_date, status, position, asana_gid, created_at, updated_at, completed_at)
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      const subtaskInsert = db.prepare('INSERT INTO subtasks (task_id, title, done, position) VALUES (?, ?, ?, ?)');
+      const commentInsert = db.prepare('INSERT INTO comments (task_id, user_id, body, created_at) VALUES (?, ?, ?, ?)');
+      const historyInsert = db.prepare('INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)');
+      let importedTaskCount = 0;
+      let importedSubtaskCount = 0;
+      let importedCommentCount = 0;
+      let importedStoryCount = 0;
+      let position = 0;
+
+      const importTaskActivity = async (bundle, rootTaskId, pathNames = []) => {
+        const taskData = bundle?.task || {};
+        const currentPath = [...pathNames, String(taskData.name || 'Untitled task')];
+        const stories = Array.isArray(bundle?.stories) ? bundle.stories : [];
+        for (const story of stories) {
+          const actorId = mapPerson(story.created_by);
+          const text = String(story.text || stripHtml(story.html_text));
+          if (story.resource_subtype === 'comment_added' && text.trim()) {
+            const commentBody = pathNames.length ? `[Asana subtask: ${currentPath.slice(1).join(' / ')}] ${text}` : text;
+            await commentInsert.run(rootTaskId, actorId, commentBody, story.created_at || new Date().toISOString());
+            importedCommentCount++;
+          } else if (story.resource_subtype && story.resource_subtype !== 'added_to_project' && text.trim()) {
+            await historyInsert.run(rootTaskId, actorId, `Asana: ${story.resource_subtype}`, '', text, story.created_at || new Date().toISOString());
+            importedStoryCount++;
+          }
+        }
+        for (const childBundle of bundle?.subtasks || []) {
+          const child = childBundle.task || {};
+          const childPath = [...currentPath, String(child.name || 'Untitled subtask')];
+          const subtaskTitle = pathNames.length ? childPath.slice(1).join(' / ') : String(child.name || 'Untitled subtask');
+          await subtaskInsert.run(rootTaskId, subtaskTitle, child.completed ? 1 : 0, importedSubtaskCount++);
+          await importTaskActivity(childBundle, rootTaskId, currentPath);
+        }
+      };
+
+      for (const bundle of source.tasks) {
+        const task = bundle?.task || {};
+        const sectionMembership = (task.memberships || []).find(item => String(item.project?.gid || '') === projectGid) || (task.memberships || [])[0];
+        const sectionName = sectionMembership?.section?.name;
+        const customFieldLines = (task.custom_fields || []).filter(field => field?.name && field?.display_value)
+          .map(field => `${field.name}: ${field.display_value}`);
+        const descriptionParts = [];
+        if (sectionName) descriptionParts.push(`[Asana section: ${sectionName}]`);
+        if (task.notes) descriptionParts.push(String(task.notes));
+        else if (task.html_notes) descriptionParts.push(stripHtml(task.html_notes));
+        if (customFieldLines.length) descriptionParts.push(`Asana custom fields:\n${customFieldLines.join('\n')}`);
+        const taskCreatorId = mapPerson(task.created_by) || req.session.userId;
+        const taskAssigneeId = mapPerson(task.assignee);
+        const taskInfo = await taskInsert.run(
+          projectId,
+          String(task.name || 'Untitled task'),
+          descriptionParts.join('\n\n'),
+          taskCreatorId,
+          taskAssigneeId,
+          task.due_on || null,
+          task.completed ? 'done' : 'open',
+          position++,
+          String(task.gid || ''),
+          task.created_at || new Date().toISOString(),
+          task.modified_at || task.created_at || new Date().toISOString(),
+          task.completed_at || null
+        );
+        importedTaskCount++;
+        await importTaskActivity(bundle, Number(taskInfo.lastInsertRowid));
+      }
+      await logActivity(req, 'Asana project imported', 'project', projectId, `${sourceProject.name}: ${importedTaskCount} tasks`, req.session.userId);
+      results.push({ file: file.originalname, status: 'imported', project_id: projectId, project_name: sourceProject.name, tasks: importedTaskCount, subtasks: importedSubtaskCount, comments: importedCommentCount, activity_items: importedStoryCount, unmatched_users: Array.from(unmatchedNames) });
+    } catch (error) {
+      if (projectId) {
+        const taskIds = await db.prepare('SELECT id FROM tasks WHERE project_id = ?').all(projectId).catch(() => []);
+        const ids = (taskIds || []).map(row => Number(row.id));
+        if (ids.length) {
+          const marks = ids.map(() => '?').join(',');
+          await db.prepare(`DELETE FROM subtasks WHERE task_id IN (${marks})`).run(...ids).catch(() => {});
+          await db.prepare(`DELETE FROM comments WHERE task_id IN (${marks})`).run(...ids).catch(() => {});
+          await db.prepare(`DELETE FROM task_history WHERE task_id IN (${marks})`).run(...ids).catch(() => {});
+          await db.prepare(`DELETE FROM task_checkins WHERE task_id IN (${marks})`).run(...ids).catch(() => {});
+        }
+        await db.prepare('DELETE FROM project_members WHERE project_id = ?').run(projectId).catch(() => {});
+        await db.prepare('DELETE FROM tasks WHERE project_id = ?').run(projectId).catch(() => {});
+        await db.prepare('DELETE FROM projects WHERE id = ?').run(projectId).catch(() => {});
+      }
+      results.push({ file: file.originalname, status: 'failed', project_gid: projectGid, error: error.message });
+    }
+  }
+  res.json({ ok: results.every(result => result.status === 'imported'), results });
 });
 
 router.get('/task-checkin-access', requireAdmin, async (req, res) => {

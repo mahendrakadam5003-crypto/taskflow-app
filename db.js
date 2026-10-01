@@ -99,8 +99,14 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       name TEXT NOT NULL,
       pin_hash TEXT,
       created_by INTEGER REFERENCES users(id),
+      asana_gid TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
+    const projectColumns = await dbDriverInterface.prepare('PRAGMA table_info(projects)').all();
+    if (!(projectColumns || []).some(row => (row.name || row.NAME) === 'asana_gid')) {
+      await dbDriverInterface.exec('ALTER TABLE projects ADD COLUMN asana_gid TEXT');
+    }
+    await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS projects_asana_gid_unique ON projects(asana_gid) WHERE asana_gid IS NOT NULL');
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS project_members (
       project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -148,12 +154,15 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       work_mode TEXT NOT NULL DEFAULT 'office',
       status TEXT NOT NULL DEFAULT 'open',
       position INTEGER NOT NULL DEFAULT 0,
+      asana_gid TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       completed_at TEXT
     );`);
     const taskSchemaColumns = await dbDriverInterface.prepare('PRAGMA table_info(tasks)').all();
     const taskSchemaColumnNames = (taskSchemaColumns || []).map(row => row.name || row.NAME);
+    if (!taskSchemaColumnNames.includes('asana_gid')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN asana_gid TEXT');
+    await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS tasks_project_asana_gid_unique ON tasks(project_id, asana_gid) WHERE asana_gid IS NOT NULL');
     if (!taskSchemaColumnNames.includes('no_billing_required')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN no_billing_required INTEGER NOT NULL DEFAULT 0');
     if (!taskSchemaColumnNames.includes('invoice_type')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN invoice_type TEXT NOT NULL DEFAULT 'gst'");
     if (!taskSchemaColumnNames.includes('invoice_number')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN invoice_number TEXT');
