@@ -834,8 +834,11 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     const assignee = String(req.query.assignee_id || '').trim();
     const search = String(req.query.q || '').trim();
     const status = String(req.query.status || 'open').trim();
-    let sql = `SELECT t.id,t.project_id,t.title,t.created_by,t.assignee_id,t.due_date,t.status,t.position,t.created_at,t.updated_at,t.completed_at,t.work_mode,t.asana_gid FROM tasks t WHERE t.project_id=?`;
-    const params = [req.params.id];
+    const afterId = Math.max(0, Number(req.query.after_id) || 0);
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 200) : 200;
+    let sql = `SELECT t.id,t.project_id,t.title,t.created_by,t.assignee_id,t.due_date,t.status,t.position,t.created_at,t.updated_at,t.completed_at,t.work_mode,t.asana_gid FROM tasks t WHERE t.project_id=? AND t.id>?`;
+    const params = [req.params.id, afterId];
     if (status !== 'all') {
       sql += status === 'done' ? " AND t.status='done'" : " AND COALESCE(t.status, 'open') <> 'done'";
     }
@@ -855,10 +858,12 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     if (req.query.completed_on) { sql += ' AND date(t.completed_at)=?'; params.push(req.query.completed_on); }
     if (search) {
       const exact = `%${search}%`;
-      sql += ' ORDER BY CASE WHEN t.title LIKE ? THEN 0 WHEN t.description LIKE ? THEN 1 ELSE 2 END, t.position, t.created_at LIMIT 10000';
+      sql += ' ORDER BY CASE WHEN t.title LIKE ? THEN 0 WHEN t.description LIKE ? THEN 1 ELSE 2 END, t.position, t.created_at LIMIT ?';
       params.push(exact, exact);
+      params.push(limit);
     } else {
-      sql += ' ORDER BY t.id LIMIT 10000';
+      sql += ' ORDER BY t.id LIMIT ?';
+      params.push(limit);
     }
     res.json(await db.prepare(sql).all(...params));
   } catch (err) { res.status(500).json({ error: err.message }); }

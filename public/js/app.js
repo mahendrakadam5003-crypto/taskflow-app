@@ -1437,9 +1437,25 @@ async function renderTasks() {
       const value = $(`#${id}`)?.value;
       if (value) query.set(key, value);
     });
-    let tasks = search
-      ? await api(`/tasks/search?q=${encodeURIComponent(search)}`)
-      : await api(`/projects/${CURRENT_PROJECT.id}/tasks?${query.toString()}`);
+    let tasks;
+    if (search) {
+      tasks = await api(`/tasks/search?q=${encodeURIComponent(search)}`);
+    } else {
+      tasks = [];
+      let afterId = 0;
+      const pageSize = 200;
+      while (true) {
+        const pageQuery = new URLSearchParams(query);
+        pageQuery.set('after_id', String(afterId));
+        pageQuery.set('limit', String(pageSize));
+        const page = await api(`/projects/${CURRENT_PROJECT.id}/tasks?${pageQuery.toString()}`);
+        tasks.push(...page);
+        if (page.length < pageSize) break;
+        const nextAfterId = Number(page[page.length - 1].id);
+        if (!Number.isFinite(nextAfterId) || nextAfterId <= afterId) break;
+        afterId = nextAfterId;
+      }
+    }
     const resultsHeading = $('#task-search-results-heading');
     if (resultsHeading) {
       resultsHeading.classList.toggle('hidden', !search);
