@@ -2680,6 +2680,9 @@ async function renderAdmin() {
       if (!confirmed) return;
       importProjectsButton.disabled = true;
       let importedCount = 0;
+      let lastImportedProjectId = null;
+      let lastImportedProjectName = '';
+      let lastImportedTaskCount = 0;
       let attachmentCount = 0;
       let missingFileCount = 0;
       let unavailableFileCount = 0;
@@ -2702,6 +2705,9 @@ async function renderAdmin() {
             continue;
           }
           if (projectResult.status === 'imported') importedCount++;
+          lastImportedProjectId = Number(projectResult.project_id) || null;
+          lastImportedProjectName = entry.source.project.name;
+          lastImportedTaskCount = Number(projectResult.tasks || 0);
           if (projectResult.unmatched_users?.length) failures.push(`${entry.source.project.name}: no active TaskFlow user matched ${projectResult.unmatched_users.join(', ')}.`);
 
           const taskAttachments = [];
@@ -2750,14 +2756,17 @@ async function renderAdmin() {
             setDataToolsProgress(((index + 1) / projectsToImport.length) * 100, `Project ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name}; ${attachmentCount} attachments uploaded...`);
           }
         }
-        const summary = [`${importedCount} new project${importedCount === 1 ? '' : 's'} imported.`, `${attachmentCount} attachments copied.`];
+        const summary = [`${importedCount} new project${importedCount === 1 ? '' : 's'} imported.`, `${lastImportedTaskCount} tasks synchronized in ${lastImportedProjectName || 'the imported project'}.`, `${attachmentCount} attachments copied.`];
         if (missingFileCount) summary.push(`${missingFileCount} attachment file(s) were not found in the selected folder.`);
         if (unavailableFileCount) summary.push(`${unavailableFileCount} Asana task attachment(s) had no downloaded file in the JSON export.`);
         if (unsupportedProjectAttachmentCount) summary.push(`${unsupportedProjectAttachmentCount} project-level attachment(s) are not supported yet.`);
         if (failures.length) summary.push(`Issues: ${failures.join(' ')}`);
         dataToolsStatus.textContent = summary.join(' ');
         finishDataToolsProgress();
-        if (importedCount || attachmentCount) await loadProjects();
+        if (importedCount || attachmentCount) {
+          await loadProjects();
+          if (lastImportedProjectId) await openProject(lastImportedProjectId);
+        }
         if (importedCount) showAppNotification(`${importedCount} Asana project${importedCount === 1 ? '' : 's'} imported.`);
       } catch (error) {
         dataToolsStatus.textContent = error.message;
