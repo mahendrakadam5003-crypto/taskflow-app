@@ -2528,6 +2528,7 @@ async function renderAdmin() {
           <button class="btn btn-primary" id="asana-project-import" type="button">Import Asana projects</button>
           <button class="btn btn-secondary" id="taskflow-project-export" type="button">Export TaskFlow backup</button>
         </div>
+        <progress id="project-data-tools-progress" class="project-data-tools-progress" max="100" value="0" hidden></progress>
         <div id="project-data-tools-status" class="hint" role="status"></div>
       </div>
 
@@ -2630,6 +2631,21 @@ async function renderAdmin() {
       </div>`;
 
     const dataToolsStatus = $('#project-data-tools-status');
+    const dataToolsProgress = $('#project-data-tools-progress');
+    const setDataToolsProgress = (value, message, indeterminate = false) => {
+      if (dataToolsProgress) {
+        dataToolsProgress.hidden = false;
+        if (indeterminate) dataToolsProgress.removeAttribute('value');
+        else dataToolsProgress.value = Math.max(0, Math.min(100, Number(value) || 0));
+        dataToolsProgress.classList.toggle('indeterminate', indeterminate);
+      }
+      if (dataToolsStatus && message) dataToolsStatus.textContent = message;
+    };
+    const finishDataToolsProgress = () => {
+      if (!dataToolsProgress) return;
+      dataToolsProgress.classList.remove('indeterminate');
+      dataToolsProgress.value = 100;
+    };
     const importProjectsButton = $('#asana-project-import');
     if (importProjectsButton) importProjectsButton.onclick = async () => {
       const selectedJsonFiles = Array.from($('#asana-project-import-files')?.files || []);
@@ -2669,12 +2685,12 @@ async function renderAdmin() {
       let unavailableFileCount = 0;
       let unsupportedProjectAttachmentCount = 0;
       const failures = [...selectionErrors];
-      dataToolsStatus.textContent = `Importing ${projectsToImport.length} project file${projectsToImport.length === 1 ? '' : 's'}...`;
+      setDataToolsProgress(0, `Importing 0 of ${projectsToImport.length} project files...`);
       try {
         const directoryFilesByName = new Map(directoryFiles.map(file => [file.name.toLocaleLowerCase(), file]));
         for (let index = 0; index < projectsToImport.length; index++) {
           const entry = projectsToImport[index];
-          dataToolsStatus.textContent = `Importing project ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name}...`;
+          setDataToolsProgress((index / projectsToImport.length) * 100, `Importing project ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name}...`);
           const projectForm = new FormData();
           projectForm.append('projects', entry.file, entry.file.name);
           const projectResponse = await fetch('/api/admin/asana-import', { method: 'POST', body: projectForm, credentials: 'same-origin' });
@@ -2689,22 +2705,24 @@ async function renderAdmin() {
           if (projectResult.unmatched_users?.length) failures.push(`${entry.source.project.name}: no active TaskFlow user matched ${projectResult.unmatched_users.join(', ')}.`);
 
           const taskAttachments = [];
-          const collectTaskAttachments = (bundle, rootTaskGid = '', taskPath = []) => {
+          const collectTaskAttachments = (bundle, rootTaskGid = '', rootTaskTitle = '', taskPath = []) => {
             const task = bundle?.task || {};
             const taskGid = String(task.gid || '');
             const targetTaskGid = rootTaskGid || taskGid;
+            const targetTaskTitle = rootTaskTitle || String(task.name || '');
             const currentPath = [...taskPath, String(task.name || 'Untitled task')];
             for (const attachment of bundle?.attachments || []) {
               const filename = String(attachment.local_file || '').split(/[\\/]/).pop();
               if (!filename) unavailableFileCount++;
-              else if (targetTaskGid) taskAttachments.push({
+              else if (targetTaskGid || targetTaskTitle) taskAttachments.push({
                 attachment,
                 taskGid: targetTaskGid,
+                taskTitle: targetTaskTitle,
                 filename,
                 context: taskPath.length ? currentPath.slice(1).join(' / ') : ''
               });
             }
-            (bundle?.subtasks || []).forEach(child => collectTaskAttachments(child, targetTaskGid, currentPath));
+            (bundle?.subtasks || []).forEach(child => collectTaskAttachments(child, targetTaskGid, targetTaskTitle, currentPath));
           };
           (entry.source.tasks || []).forEach(collectTaskAttachments);
           unsupportedProjectAttachmentCount += (entry.source.project_attachments || []).length;
@@ -2717,7 +2735,7 @@ async function renderAdmin() {
           for (let start = 0; start < matchedAttachments.length; start += 5) {
             const batch = matchedAttachments.slice(start, start + 5);
             const attachmentForm = new FormData();
-            attachmentForm.append('mappings', JSON.stringify(batch.map(item => ({ task_gid: item.taskGid, attachment_gid: item.attachment.gid, name: item.attachment.name || item.filename, context: item.context, created_at: item.attachment.created_at }))));
+            attachmentForm.append('mappings', JSON.stringify(batch.map(item => ({ task_gid: item.taskGid, task_title: item.taskTitle, attachment_gid: item.attachment.gid, name: item.attachment.name || item.filename, context: item.context, created_at: item.attachment.created_at }))));
             batch.forEach(item => attachmentForm.append('attachments', item.file, item.file.name));
             const attachmentResponse = await fetch(`/api/admin/asana-import/${projectResult.project_id}/attachments`, { method: 'POST', body: attachmentForm, credentials: 'same-origin' });
             const attachmentPayload = await attachmentResponse.json().catch(() => ({}));
@@ -2729,7 +2747,7 @@ async function renderAdmin() {
               if (result.status === 'imported') attachmentCount++;
               else if (result.status === 'failed') failures.push(`${entry.source.project.name}/${result.filename}: ${result.error}`);
             }
-            dataToolsStatus.textContent = `Project ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name}; ${attachmentCount} attachments uploaded...`;
+            setDataToolsProgress(((index + 1) / projectsToImport.length) * 100, `Project ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name}; ${attachmentCount} attachments uploaded...`);
           }
         }
         const summary = [`${importedCount} new project${importedCount === 1 ? '' : 's'} imported.`, `${attachmentCount} attachments copied.`];
@@ -2738,6 +2756,7 @@ async function renderAdmin() {
         if (unsupportedProjectAttachmentCount) summary.push(`${unsupportedProjectAttachmentCount} project-level attachment(s) are not supported yet.`);
         if (failures.length) summary.push(`Issues: ${failures.join(' ')}`);
         dataToolsStatus.textContent = summary.join(' ');
+        finishDataToolsProgress();
         if (importedCount || attachmentCount) await loadProjects();
         if (importedCount) showAppNotification(`${importedCount} Asana project${importedCount === 1 ? '' : 's'} imported.`);
       } catch (error) {
@@ -2750,7 +2769,7 @@ async function renderAdmin() {
     const exportProjectsButton = $('#taskflow-project-export');
     if (exportProjectsButton) exportProjectsButton.onclick = async () => {
       exportProjectsButton.disabled = true;
-      dataToolsStatus.textContent = 'Preparing TaskFlow project backup...';
+      setDataToolsProgress(0, 'Preparing TaskFlow project backup...', true);
       try {
         const response = await fetch('/api/admin/data-export', { credentials: 'same-origin' });
         if (!response.ok) {
@@ -2764,6 +2783,7 @@ async function renderAdmin() {
         link.download = `taskflow-projects-${todayISO()}.json`;
         link.click();
         URL.revokeObjectURL(url);
+        finishDataToolsProgress();
         dataToolsStatus.textContent = 'TaskFlow project backup downloaded.';
       } catch (error) {
         dataToolsStatus.textContent = error.message;

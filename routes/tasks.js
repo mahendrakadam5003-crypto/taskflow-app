@@ -699,8 +699,10 @@ router.post('/admin/asana-import/:projectId/attachments', requireAdmin, asanaAtt
     const file = files[index];
     const mapping = mappings[index] || {};
     try {
-      const task = await db.prepare('SELECT id, title FROM tasks WHERE project_id = ? AND asana_gid = ?')
-        .get(projectId, String(mapping.task_gid || ''));
+      const task = await db.prepare(`SELECT id, title FROM tasks
+        WHERE project_id = ? AND (asana_gid = ? OR (? <> '' AND title = ?))
+        ORDER BY CASE WHEN asana_gid = ? THEN 0 ELSE 1 END LIMIT 1`)
+        .get(projectId, String(mapping.task_gid || ''), String(mapping.task_title || ''), String(mapping.task_title || ''), String(mapping.task_gid || ''));
       if (!task) throw new Error(`Task ${mapping.task_gid || '(unknown)'} was not found in the imported project.`);
       const attachmentGid = String(mapping.attachment_gid || '');
       const filename = String(mapping.name || file.originalname || 'Asana attachment');
