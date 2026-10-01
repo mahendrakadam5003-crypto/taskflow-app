@@ -178,12 +178,12 @@ router.get('/users/directory', requireAuth, async (req, res) => {
 
 router.get('/activity', requireAuth, async (req, res) => {
   try {
-    const visibilityFilter = req.session.role === 'admin' ? '' : ' AND (a.actor_id = ? OR a.subject_user_id = ?)';
+    const visibilityFilter = req.session.role === 'admin' ? '' : ' WHERE a.actor_id = ? OR a.subject_user_id = ?';
     const visibilityParams = req.session.role === 'admin' ? [] : [req.session.userId, req.session.userId];
     const rows = await db.prepare(`SELECT a.*, u.name AS actor_name
       FROM activity_log a LEFT JOIN users u ON u.id = a.actor_id
-      WHERE a.created_at >= datetime('now', '-24 hours')${visibilityFilter}
-      ORDER BY a.created_at DESC, a.id DESC LIMIT 100`).all(...visibilityParams);
+      ${visibilityFilter}
+      ORDER BY a.id DESC LIMIT 100`).all(...visibilityParams);
     res.json(rows || []);
   } catch (err) {
     res.status(500).json({ error: err.message });

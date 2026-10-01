@@ -2798,7 +2798,19 @@ async function renderAdmin() {
 
     const activityList = $('#activity-log-list');
     activityList.innerHTML = '<p class="hint" role="status">Loading recent activity...</p>';
-    loadAdminData('/auth/activity').then(activity => {
+    const loadActivity = async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60000);
+      try {
+        return await api('/auth/activity', { signal: controller.signal });
+      } catch (error) {
+        if (error.name === 'AbortError') throw new Error('/auth/activity timed out after 60 seconds.');
+        throw new Error(`/auth/activity: ${error.message}`);
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+    loadActivity().then(activity => {
       if (!activityList.isConnected) return;
       if (!activity.length) {
         activityList.innerHTML = '<p class="hint">No activity recorded yet.</p>';
@@ -2813,7 +2825,20 @@ async function renderAdmin() {
     }).catch(error => {
       if (!activityList.isConnected) return;
       activityList.innerHTML = `<p class="form-error">Recent activity unavailable: ${escapeHtml(error.message)}</p><button class="btn btn-secondary" id="activity-retry" type="button">Retry</button>`;
-      $('#activity-retry').onclick = () => renderAdmin();
+      $('#activity-retry').onclick = () => {
+        activityList.innerHTML = '<p class="hint" role="status">Loading recent activity...</p>';
+        loadActivity().then(entries => {
+          if (!activityList.isConnected) return;
+          activityList.innerHTML = entries.length ? entries.map(entry => `
+            <div class="member-option" style="display:block; padding:10px 0; border-bottom:1px solid #eee;">
+              <b>${escapeHtml(entry.action)}</b>
+              <span class="hint"> by ${escapeHtml(entry.actor_name || 'Unknown user')} on ${escapeHtml(new Date(entry.created_at).toLocaleString())}</span>
+              ${entry.details ? `<div>${escapeHtml(entry.details)}</div>` : ''}
+            </div>`).join('') : '<p class="hint">No activity recorded yet.</p>';
+        }).catch(retryError => {
+          if (activityList.isConnected) activityList.innerHTML = `<p class="form-error">Recent activity unavailable: ${escapeHtml(retryError.message)}</p>`;
+        });
+      };
     });
     $$('.save-reimbursement-access').forEach((button) => {
       button.onclick = async () => {
