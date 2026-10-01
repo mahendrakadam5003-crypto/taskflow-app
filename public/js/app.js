@@ -971,7 +971,7 @@ async function renderReimbursements() {
     $('#employee-reimbursement-form').classList.add('hidden');
     $('#employee-reimbursement-overview').classList.remove('hidden');
   };
-  $('#reimbursement-description').addEventListener('input', event => {
+  $('#reimbursement-description')?.addEventListener('input', event => {
     event.currentTarget.style.height = 'auto';
     event.currentTarget.style.height = `${event.currentTarget.scrollHeight}px`;
   });
