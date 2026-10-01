@@ -560,6 +560,7 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
   for (const file of files) {
     let projectId = null;
     let projectGid = null;
+    let createdProject = false;
     unmatchedNames = new Set();
     try {
       const source = JSON.parse(file.buffer.toString('utf8').replace(/^\uFEFF/, ''));
@@ -570,13 +571,19 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
       }
       const duplicate = await db.prepare('SELECT id, name FROM projects WHERE asana_gid = ?').get(projectGid);
       if (duplicate) {
-        results.push({ file: file.originalname, status: 'already imported', project_id: Number(duplicate.id), project_name: duplicate.name, tasks: 0 });
-        continue;
+        const existingTaskCount = await db.prepare('SELECT COUNT(*) AS count FROM tasks WHERE project_id = ?').get(duplicate.id);
+        if (Number(existingTaskCount?.count || 0) > 0) {
+          results.push({ file: file.originalname, status: 'already imported', project_id: Number(duplicate.id), project_name: duplicate.name, tasks: Number(existingTaskCount.count) });
+          continue;
+        }
+        projectId = Number(duplicate.id);
+      } else {
+        const projectInfo = await db.prepare('INSERT INTO projects (name, created_by, asana_gid, created_at) VALUES (?, ?, ?, ?)')
+          .run(String(sourceProject.name).trim(), req.session.userId, projectGid, sourceProject.created_at || new Date().toISOString());
+        projectId = Number(projectInfo.lastInsertRowid);
+        createdProject = true;
       }
 
-      const projectInfo = await db.prepare('INSERT INTO projects (name, created_by, asana_gid, created_at) VALUES (?, ?, ?, ?)')
-        .run(String(sourceProject.name).trim(), req.session.userId, projectGid, sourceProject.created_at || new Date().toISOString());
-      projectId = Number(projectInfo.lastInsertRowid);
       await db.prepare('INSERT OR IGNORE INTO project_members (project_id, user_id) VALUES (?, ?)').run(projectId, req.session.userId);
       const memberInsert = db.prepare('INSERT OR IGNORE INTO project_members (project_id, user_id) VALUES (?, ?)');
       for (const member of sourceProject.members || []) {
@@ -664,9 +671,9 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
           await db.prepare(`DELETE FROM task_history WHERE task_id IN (${marks})`).run(...ids).catch(() => {});
           await db.prepare(`DELETE FROM task_checkins WHERE task_id IN (${marks})`).run(...ids).catch(() => {});
         }
-        await db.prepare('DELETE FROM project_members WHERE project_id = ?').run(projectId).catch(() => {});
+        if (createdProject) await db.prepare('DELETE FROM project_members WHERE project_id = ?').run(projectId).catch(() => {});
         await db.prepare('DELETE FROM tasks WHERE project_id = ?').run(projectId).catch(() => {});
-        await db.prepare('DELETE FROM projects WHERE id = ?').run(projectId).catch(() => {});
+        if (createdProject) await db.prepare('DELETE FROM projects WHERE id = ?').run(projectId).catch(() => {});
       }
       results.push({ file: file.originalname, status: 'failed', project_gid: projectGid, error: error.message });
     }
