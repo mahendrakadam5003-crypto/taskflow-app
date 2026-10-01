@@ -1123,7 +1123,7 @@ router.post('/tasks/:id/check-out', async (req, res) => {
 router.get('/tasks/:id', async (req, res) => {
   try {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
-    const task = await db.prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id);
+    const task = await db.prepare('SELECT t.*, u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.id=?').get(req.params.id);
     if (!task) return res.status(404).json({ error: 'Not found' });
     task.can_change_work_mode = await canChangeTaskWorkMode(req) ? 1 : 0;
     const uniqueRows = (rows, fields) => {
