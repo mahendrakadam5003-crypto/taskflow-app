@@ -1630,13 +1630,13 @@ async function openTaskDrawer(taskId) {
   const drawer = $('#task-drawer');
   if (!drawer) return;
   showTaskDrawerLoading();
+  const controller = new AbortController();
+  const loadTimeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const task = await api(`/tasks/${taskId}`);
-    const [taskHistoryResult, members] = await Promise.all([
-      api(`/tasks/${taskId}/history`).catch(() => []),
-      api(`/projects/${task.project_id}/members`)
-    ]);
-    let taskHistory = taskHistoryResult;
+    const task = await api(`/tasks/${taskId}`, { signal: controller.signal });
+    const members = await api(`/projects/${task.project_id}/members`, { signal: controller.signal });
+    clearTimeout(loadTimeout);
+    let taskHistory = task.history || [];
     const currentCheckin = (task.checkin_users || []).find(user => Number(user.id) === Number(ME?.id));
     const taskCheckinRequired = ME?.role !== 'admin'
       && task.work_mode === 'on_field'
@@ -1650,6 +1650,13 @@ async function openTaskDrawer(taskId) {
     $('#drawer-title').value = task.title || '';
     $('#drawer-title').disabled = taskActionsLocked;
     $('#drawer-assignee').innerHTML = '<option value="">No assignee</option>' + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
+    const currentAssigneeId = String(task.assignee_id ?? '');
+    if (currentAssigneeId && !members.some(member => String(member.id) === currentAssigneeId)) {
+      const option = document.createElement('option');
+      option.value = currentAssigneeId;
+      option.textContent = task.assignee_name || `Unknown assignee (${currentAssigneeId})`;
+      $('#drawer-assignee').append(option);
+    }
     $('#drawer-assignee').disabled = !canEditTask;
     $('#drawer-assignee').value = task.assignee_id || '';
     const workModeInput = $('#drawer-work-mode');
@@ -1714,11 +1721,11 @@ async function openTaskDrawer(taskId) {
     ].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     $('#drawer-comments').innerHTML = activity.length ? activity.map((entry, index) => {
       if (entry.activityType === 'comment') return `<div class="comment" data-comment-id="${entry.id}">
-        <div class="comment-meta"><b>${escapeHtml(entry.user_name || 'User')}</b> · ${escapeHtml(fmtDateTime(entry.created_at))}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
+        <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b> · ${escapeHtml(fmtDateTime(entry.created_at))}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
         <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
         ${renderCommentAttachment(entry)}
       </div>`;
-      const actor = escapeHtml(entry.actor_name || 'User');
+      const actor = escapeHtml(entry.actor_name || entry.author_name || (entry.field_name.startsWith('Asana:') ? 'Unknown Asana user' : 'Unknown user'));
       const oldValue = escapeHtml(entry.old_value || '(empty)');
       const newValue = escapeHtml(entry.new_value || '(empty)');
       let message = entry.field_name === 'Task created' ? 'created this task' : `changed the ${entry.field_name.toLowerCase()}`;
@@ -2093,9 +2100,11 @@ async function openTaskDrawer(taskId) {
       }
     };
   } catch (err) {
+    clearTimeout(loadTimeout);
     drawer.classList.remove('loading');
     $('#drawer-title').value = 'Unable to load task';
-    $('#drawer-comments').innerHTML = `<div class="form-error">${escapeHtml(err.message)}</div>`;
+    const message = err.name === 'AbortError' ? 'Task loading timed out. Close and reopen the task to try again.' : err.message;
+    $('#drawer-comments').innerHTML = `<div class="form-error">${escapeHtml(message)}</div>`;
   }
 }
 

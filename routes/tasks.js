@@ -548,8 +548,9 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
   const users = await db.prepare('SELECT id, name FROM users WHERE active = 1').all();
   const usersByName = new Map((users || []).map(user => [String(user.name || '').trim().toLocaleLowerCase(), Number(user.id)]));
   let unmatchedNames = new Set();
+  const getPersonName = person => String((typeof person === 'string' ? person : person?.name) || '').trim();
   const mapPerson = person => {
-    const name = typeof person === 'string' ? person : person?.name;
+    const name = getPersonName(person);
     if (!name) return null;
     const userId = usersByName.get(String(name).trim().toLocaleLowerCase()) || null;
     if (!userId) unmatchedNames.add(String(name).trim());
@@ -593,12 +594,16 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
       const subtaskInsert = db.prepare(`INSERT INTO subtasks (task_id, title, done, position)
         SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM subtasks
           WHERE task_id=? AND title=? AND done=? AND position=?)`);
-      const commentInsert = db.prepare(`INSERT INTO comments (task_id, user_id, body, created_at)
-        SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM comments
-          WHERE task_id=? AND user_id IS ? AND body=? AND created_at=?)`);
-      const historyInsert = db.prepare(`INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value, created_at)
-        SELECT ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM task_history
-          WHERE task_id=? AND actor_id IS ? AND field_name=? AND old_value=? AND new_value=? AND created_at=?)`);
+      const commentInsert = db.prepare(`INSERT INTO comments (task_id, user_id, author_name, body, created_at)
+        SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM comments
+          WHERE task_id=? AND body=? AND created_at=? AND (user_id IS ? OR user_id IS NULL))`);
+      const commentBackfill = db.prepare(`UPDATE comments SET user_id=COALESCE(user_id, ?), author_name=COALESCE(author_name, ?)
+        WHERE id=(SELECT id FROM comments WHERE task_id=? AND body=? AND created_at=? AND (user_id IS ? OR user_id IS NULL) ORDER BY id LIMIT 1)`);
+      const historyInsert = db.prepare(`INSERT INTO task_history (task_id, actor_id, author_name, field_name, old_value, new_value, created_at)
+        SELECT ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM task_history
+          WHERE task_id=? AND field_name=? AND old_value=? AND new_value=? AND created_at=? AND (actor_id IS ? OR actor_id IS NULL))`);
+      const historyBackfill = db.prepare(`UPDATE task_history SET actor_id=COALESCE(actor_id, ?), author_name=COALESCE(author_name, ?)
+        WHERE id=(SELECT id FROM task_history WHERE task_id=? AND field_name=? AND old_value=? AND new_value=? AND created_at=? AND (actor_id IS ? OR actor_id IS NULL) ORDER BY id LIMIT 1)`);
       let importedTaskCount = 0;
       let importedSubtaskCount = 0;
       let importedCommentCount = 0;
@@ -611,16 +616,19 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
         const stories = Array.isArray(bundle?.stories) ? bundle.stories : [];
         for (const story of stories) {
           const actorId = mapPerson(story.created_by);
+          const actorName = getPersonName(story.created_by) || null;
           const text = String(story.text || stripHtml(story.html_text));
           if (story.resource_subtype === 'comment_added' && text.trim()) {
             const commentBody = pathNames.length ? `[Asana subtask: ${currentPath.slice(1).join(' / ')}] ${text}` : text;
             const createdAt = story.created_at || new Date().toISOString();
-            await commentInsert.run(rootTaskId, actorId, commentBody, createdAt, rootTaskId, actorId, commentBody, createdAt);
+            await commentBackfill.run(actorId, actorName, rootTaskId, commentBody, createdAt, actorId);
+            await commentInsert.run(rootTaskId, actorId, actorName, commentBody, createdAt, rootTaskId, commentBody, createdAt, actorId);
             importedCommentCount++;
           } else if (story.resource_subtype && story.resource_subtype !== 'added_to_project' && text.trim()) {
             const fieldName = `Asana: ${story.resource_subtype}`;
             const createdAt = story.created_at || new Date().toISOString();
-            await historyInsert.run(rootTaskId, actorId, fieldName, '', text, createdAt, rootTaskId, actorId, fieldName, '', text, createdAt);
+            await historyBackfill.run(actorId, actorName, rootTaskId, fieldName, '', text, createdAt, actorId);
+            await historyInsert.run(rootTaskId, actorId, actorName, fieldName, '', text, createdAt, rootTaskId, fieldName, '', text, createdAt, actorId);
             importedStoryCount++;
           }
         }
@@ -1123,7 +1131,7 @@ router.post('/tasks/:id/check-out', async (req, res) => {
 router.get('/tasks/:id', async (req, res) => {
   try {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
-    const task = await db.prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id);
+    const task = await db.prepare('SELECT t.*, u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.id=?').get(req.params.id);
     if (!task) return res.status(404).json({ error: 'Not found' });
     task.can_change_work_mode = await canChangeTaskWorkMode(req) ? 1 : 0;
     const uniqueRows = (rows, fields) => {
@@ -1136,14 +1144,14 @@ router.get('/tasks/:id', async (req, res) => {
       });
     };
     task.subtasks = uniqueRows(await db.prepare('SELECT * FROM subtasks WHERE task_id=? ORDER BY position,id').all(task.id), ['title', 'done', 'position']);
-    task.comments = uniqueRows(await db.prepare('SELECT c.*,u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE task_id=? ORDER BY c.created_at,c.id').all(task.id), ['user_id', 'body', 'image_path', 'attachment_name', 'attachment_type', 'created_at']);
+    task.comments = uniqueRows(await db.prepare('SELECT c.*,u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE task_id=? ORDER BY c.created_at,c.id').all(task.id), ['user_id', 'author_name', 'body', 'image_path', 'attachment_name', 'attachment_type', 'created_at']);
     task.comments = task.comments.map(comment => ({
       ...comment,
       attachment_available: !!(comment.image_path && (comment.image_path.startsWith('/api/download/') || fs.existsSync(path.join(__dirname, '..', comment.image_path.replace(/^\/uploads\//, 'uploads/')))))
     }));
     task.history = uniqueRows(await db.prepare(`SELECT h.*, u.name AS actor_name
       FROM task_history h LEFT JOIN users u ON u.id = h.actor_id
-      WHERE h.task_id = ? ORDER BY h.created_at ASC, h.id ASC`).all(task.id), ['actor_id', 'field_name', 'old_value', 'new_value', 'created_at']);
+      WHERE h.task_id = ? ORDER BY h.created_at ASC, h.id ASC`).all(task.id), ['actor_id', 'author_name', 'field_name', 'old_value', 'new_value', 'created_at']);
     task.checkin_users = await db.prepare(`SELECT u.id, u.name, c.check_in_at, c.check_in_lat, c.check_in_lng, c.check_out_at, c.check_out_lat, c.check_out_lng
       FROM users u JOIN task_checkin_access r ON r.user_id=u.id
       LEFT JOIN task_checkins c ON c.id=(SELECT latest.id FROM task_checkins latest
