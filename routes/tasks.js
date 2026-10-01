@@ -833,7 +833,7 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     const assignee = String(req.query.assignee_id || '').trim();
     const search = String(req.query.q || '').trim();
     const status = String(req.query.status || 'open').trim();
-    let sql = `SELECT t.id,t.project_id,t.title,t.description,t.no_billing_required,t.created_by,t.assignee_id,t.due_date,t.status,t.position,t.created_at,t.updated_at,t.completed_at,t.invoice_type,t.invoice_number,t.invoice_date,t.customer_name,t.total_amount,t.payment_status,t.payment_received_date,t.work_mode,t.asana_gid,u.name AS assignee_name,creator.name AS creator_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id LEFT JOIN users creator ON creator.id=t.created_by WHERE t.project_id=?`;
+    let sql = `SELECT t.id,t.project_id,t.title,t.description,t.no_billing_required,t.created_by,t.assignee_id,t.due_date,t.status,t.position,t.created_at,t.updated_at,t.completed_at,t.invoice_type,t.invoice_number,t.invoice_date,t.customer_name,t.total_amount,t.payment_status,t.payment_received_date,t.work_mode,t.asana_gid FROM tasks t WHERE t.project_id=?`;
     const params = [req.params.id];
     if (status !== 'all') {
       sql += status === 'done' ? " AND t.status='done'" : " AND COALESCE(t.status, 'open') <> 'done'";
@@ -843,8 +843,8 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
       const words = search.split(/\s+/).filter(Boolean);
       words.forEach(word => {
         const like = `%${word}%`;
-        sql += ' AND (t.title LIKE ? OR t.description LIKE ? OR u.name LIKE ? OR creator.name LIKE ?)';
-        params.push(like, like, like, like);
+        sql += ' AND (t.title LIKE ? OR t.description LIKE ?)';
+        params.push(like, like);
       });
     }
     if (req.query.due_date) { sql += ' AND t.due_date=?'; params.push(req.query.due_date); }
