@@ -361,10 +361,11 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .comment-image-preview img { max-height: 70px; border-radius: 6px; }
 .comment-image-preview button { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; font-size: 12px; padding: 3px 8px; cursor: pointer; }
 .punch-error { color: var(--red); font-size: 13px; margin-top: 8px; width: 100%; }
-.subtask-row { display: flex; align-items: center; gap: 8px; font-size: 13.5px; padding: 3px 0; }
-.subtask-row input[type=checkbox] { accent-color: var(--green); }
-.subtask-row .subtask-title { flex: 1; }
-.subtask-row.done .subtask-title { text-decoration: line-through; color: var(--muted); }
+.subtask-row { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 7px 8px; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.subtask-row input[type=checkbox] { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--green); cursor: pointer; }
+.subtask-row .subtask-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.subtask-row.done .subtask-title { color: var(--muted); text-decoration: line-through; }
+.subtask-row.done input[type=checkbox] { opacity: .72; }
 .subtask-del { background: none; border: none; color: var(--muted); font-size: 12px; }
 .subtask-del:hover { color: var(--red); }
 .comment { font-size: 13.5px; padding: 8px 0; border-bottom: 1px solid var(--line); }

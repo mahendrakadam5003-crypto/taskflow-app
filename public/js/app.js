@@ -1684,7 +1684,7 @@ async function openTaskDrawer(taskId) {
     $('#drawer-desc').disabled = taskActionsLocked;
     $('#drawer-desc').oninput = autoGrowDescription;
     autoGrowDescription();
-    $('#drawer-subtasks').innerHTML = (task.subtasks || []).map(item => `<label class="subtask-row"><input type="checkbox" class="subtask-check" data-subtask-id="${item.id}" ${item.done ? 'checked' : ''} ${taskActionsLocked ? 'disabled' : ''}><span class="subtask-title ${item.done ? 'done' : ''}">${escapeHtml(item.title)}</span><button class="subtask-del" data-subtask-id="${item.id}" title="Delete subtask" ${taskActionsLocked || !PROJECT_ACTION_ACCESS.delete_task ? 'disabled' : ''}>✕</button></label>`).join('') || '<div class="hint">No subtasks yet.</div>';
+    $('#drawer-subtasks').innerHTML = (task.subtasks || []).map(item => `<label class="subtask-row ${item.done ? 'done' : ''}"><input type="checkbox" class="subtask-check" data-subtask-id="${item.id}" ${item.done ? 'checked' : ''} ${taskActionsLocked ? 'disabled' : ''}><span class="subtask-title">${escapeHtml(item.title)}</span><button class="subtask-del" data-subtask-id="${item.id}" title="Delete subtask" ${taskActionsLocked || !PROJECT_ACTION_ACCESS.delete_task ? 'disabled' : ''}>✕</button></label>`).join('') || '<div class="hint">No subtasks yet.</div>';
     $$('.subtask-check').forEach(input => {
       input.onchange = async () => {
         await api(`/subtasks/${input.dataset.subtaskId}`, { method: 'PUT', body: { done: input.checked } });
