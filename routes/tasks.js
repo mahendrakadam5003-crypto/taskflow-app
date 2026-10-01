@@ -208,6 +208,7 @@ async function canAccessTask(taskId, userId, admin = false) {
 }
 async function requireProjectAccess(req, res, next) {
   try {
+    await db.ready;
     const id = Number(req.params.id);
     if (!(await canAccessProject(id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You are not a member of this project' });
     next();
