@@ -2507,9 +2507,10 @@ async function renderAdmin() {
     wrap.innerHTML = `
       <div class="admin-block">
         <h3>Project data import / export</h3>
-        <p class="hint">Import Asana project JSON files or download a backup of TaskFlow projects, tasks, comments, task history, and check-ins. User accounts, reimbursements, attendance records, and attachment file contents are not included. Asana section names and custom fields are preserved in task descriptions. Project text may contain secrets; store backups securely.</p>
+        <p class="hint">Import Asana project JSON files; optionally choose the exported Run folder or attachments folder to copy downloaded files onto their tasks. TaskFlow backup includes projects, tasks, comments, task history, and check-ins, but not accounts, reimbursements, or attendance. Project text may contain secrets; store backups securely.</p>
         <div class="admin-form-row">
           <input id="asana-project-import-files" type="file" accept=".json,application/json" multiple aria-label="Choose Asana project JSON files">
+          <input id="asana-project-import-folder" type="file" webkitdirectory directory multiple aria-label="Choose Asana export or attachments folder">
           <button class="btn btn-primary" id="asana-project-import" type="button">Import Asana projects</button>
           <button class="btn btn-secondary" id="taskflow-project-export" type="button">Export TaskFlow backup</button>
         </div>
@@ -2617,38 +2618,114 @@ async function renderAdmin() {
     const dataToolsStatus = $('#project-data-tools-status');
     const importProjectsButton = $('#asana-project-import');
     if (importProjectsButton) importProjectsButton.onclick = async () => {
-      const files = Array.from($('#asana-project-import-files')?.files || []);
-      if (!files.length) {
-        dataToolsStatus.textContent = 'Choose one or more Asana project JSON files first.';
+      const selectedJsonFiles = Array.from($('#asana-project-import-files')?.files || []);
+      const directoryFiles = Array.from($('#asana-project-import-folder')?.files || []);
+      const candidateJsonFiles = [...selectedJsonFiles, ...directoryFiles.filter(file => file.name.toLowerCase() === 'project.json')];
+      const projectsToImport = [];
+      const seenProjectGids = new Set();
+      const selectionErrors = [];
+      for (const file of candidateJsonFiles) {
+        try {
+          const source = JSON.parse((await file.text()).replace(/^\uFEFF/, ''));
+          const projectGid = String(source.project?.gid || '');
+          if (!projectGid || !Array.isArray(source.tasks)) throw new Error('Missing Asana project or tasks data.');
+          if (!seenProjectGids.has(projectGid)) {
+            projectsToImport.push({ file, source, projectGid });
+            seenProjectGids.add(projectGid);
+          }
+        } catch (error) {
+          selectionErrors.push(`${file.name}: ${error.message}`);
+        }
+      }
+      if (!projectsToImport.length) {
+        dataToolsStatus.textContent = selectionErrors.join(' ') || 'Choose Asana project JSON files or the exported Run folder.';
         return;
       }
       const confirmed = await confirmModal(
         'Import Asana projects?',
-        `${files.length} project JSON file${files.length === 1 ? '' : 's'} will create new TaskFlow projects. Existing imports are skipped. Users map by exact name; attachment files are not copied by this import.`,
+        `${projectsToImport.length} project file${projectsToImport.length === 1 ? '' : 's'} will be imported. Existing projects are reused. Users map by exact name; matching files from the selected export folder will be attached to their tasks.`,
         'Import projects',
         false
       );
       if (!confirmed) return;
       importProjectsButton.disabled = true;
-      dataToolsStatus.textContent = `Importing ${files.length} project file${files.length === 1 ? '' : 's'}...`;
+      let importedCount = 0;
+      let attachmentCount = 0;
+      let missingFileCount = 0;
+      let unavailableFileCount = 0;
+      let unsupportedProjectAttachmentCount = 0;
+      const failures = [...selectionErrors];
+      dataToolsStatus.textContent = `Importing ${projectsToImport.length} project file${projectsToImport.length === 1 ? '' : 's'}...`;
       try {
-        const formData = new FormData();
-        files.forEach(file => formData.append('projects', file, file.name));
-        const response = await fetch('/api/admin/asana-import', { method: 'POST', body: formData, credentials: 'same-origin' });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.error || `Import failed (${response.status}).`);
-        const imported = (payload.results || []).filter(result => result.status === 'imported');
-        const failed = (payload.results || []).filter(result => result.status !== 'imported');
-        const details = [
-          `${imported.length} project${imported.length === 1 ? '' : 's'} imported.`,
-          ...failed.map(result => `${result.file}: ${result.error}`),
-          ...imported.filter(result => result.unmatched_users?.length).map(result => `${result.project_name}: no active TaskFlow user matched ${result.unmatched_users.join(', ')}.`)
-        ];
-        dataToolsStatus.textContent = details.join(' ');
-        if (imported.length) {
-          await loadProjects();
-          showAppNotification(`${imported.length} Asana project${imported.length === 1 ? '' : 's'} imported.`);
+        const directoryFilesByName = new Map(directoryFiles.map(file => [file.name.toLocaleLowerCase(), file]));
+        for (let index = 0; index < projectsToImport.length; index++) {
+          const entry = projectsToImport[index];
+          dataToolsStatus.textContent = `Importing project ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name}...`;
+          const projectForm = new FormData();
+          projectForm.append('projects', entry.file, entry.file.name);
+          const projectResponse = await fetch('/api/admin/asana-import', { method: 'POST', body: projectForm, credentials: 'same-origin' });
+          const projectPayload = await projectResponse.json().catch(() => ({}));
+          if (!projectResponse.ok) throw new Error(projectPayload.error || `Import failed (${projectResponse.status}).`);
+          const projectResult = projectPayload.results?.[0];
+          if (!projectResult || projectResult.status === 'failed') {
+            failures.push(`${entry.file.name}: ${projectResult?.error || 'Import failed.'}`);
+            continue;
+          }
+          if (projectResult.status === 'imported') importedCount++;
+          if (projectResult.unmatched_users?.length) failures.push(`${entry.source.project.name}: no active TaskFlow user matched ${projectResult.unmatched_users.join(', ')}.`);
+
+          const taskAttachments = [];
+          const collectTaskAttachments = (bundle, rootTaskGid = '', taskPath = []) => {
+            const task = bundle?.task || {};
+            const taskGid = String(task.gid || '');
+            const targetTaskGid = rootTaskGid || taskGid;
+            const currentPath = [...taskPath, String(task.name || 'Untitled task')];
+            for (const attachment of bundle?.attachments || []) {
+              const filename = String(attachment.local_file || '').split(/[\\/]/).pop();
+              if (!filename) unavailableFileCount++;
+              else if (targetTaskGid) taskAttachments.push({
+                attachment,
+                taskGid: targetTaskGid,
+                filename,
+                context: taskPath.length ? currentPath.slice(1).join(' / ') : ''
+              });
+            }
+            (bundle?.subtasks || []).forEach(child => collectTaskAttachments(child, targetTaskGid, currentPath));
+          };
+          (entry.source.tasks || []).forEach(collectTaskAttachments);
+          unsupportedProjectAttachmentCount += (entry.source.project_attachments || []).length;
+          const matchedAttachments = [];
+          for (const item of taskAttachments) {
+            const file = directoryFilesByName.get(item.filename.toLocaleLowerCase());
+            if (file) matchedAttachments.push({ ...item, file });
+            else missingFileCount++;
+          }
+          for (let start = 0; start < matchedAttachments.length; start += 5) {
+            const batch = matchedAttachments.slice(start, start + 5);
+            const attachmentForm = new FormData();
+            attachmentForm.append('mappings', JSON.stringify(batch.map(item => ({ task_gid: item.taskGid, attachment_gid: item.attachment.gid, name: item.attachment.name || item.filename, context: item.context, created_at: item.attachment.created_at }))));
+            batch.forEach(item => attachmentForm.append('attachments', item.file, item.file.name));
+            const attachmentResponse = await fetch(`/api/admin/asana-import/${projectResult.project_id}/attachments`, { method: 'POST', body: attachmentForm, credentials: 'same-origin' });
+            const attachmentPayload = await attachmentResponse.json().catch(() => ({}));
+            if (!attachmentResponse.ok) {
+              failures.push(`${entry.source.project.name}: ${attachmentPayload.error || `Attachment upload failed (${attachmentResponse.status}).`}`);
+              continue;
+            }
+            for (const result of attachmentPayload.results || []) {
+              if (result.status === 'imported') attachmentCount++;
+              else if (result.status === 'failed') failures.push(`${entry.source.project.name}/${result.filename}: ${result.error}`);
+            }
+            dataToolsStatus.textContent = `Project ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name}; ${attachmentCount} attachments uploaded...`;
+          }
         }
+        const summary = [`${importedCount} new project${importedCount === 1 ? '' : 's'} imported.`, `${attachmentCount} attachments copied.`];
+        if (missingFileCount) summary.push(`${missingFileCount} attachment file(s) were not found in the selected folder.`);
+        if (unavailableFileCount) summary.push(`${unavailableFileCount} Asana task attachment(s) had no downloaded file in the JSON export.`);
+        if (unsupportedProjectAttachmentCount) summary.push(`${unsupportedProjectAttachmentCount} project-level attachment(s) are not supported yet.`);
+        if (failures.length) summary.push(`Issues: ${failures.join(' ')}`);
+        dataToolsStatus.textContent = summary.join(' ');
+        if (importedCount || attachmentCount) await loadProjects();
+        if (importedCount) showAppNotification(`${importedCount} Asana project${importedCount === 1 ? '' : 's'} imported.`);
       } catch (error) {
         dataToolsStatus.textContent = error.message;
       } finally {

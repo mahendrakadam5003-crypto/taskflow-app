@@ -152,6 +152,10 @@ const asanaImportUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024, files: 10 }
 });
+const asanaAttachmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 5 }
+});
 
 async function canAccessProject(projectId, userId, admin = false) {
   if (admin) return true;
@@ -565,7 +569,10 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
         throw new Error('Expected an Asana project JSON with project metadata and a tasks array.');
       }
       const duplicate = await db.prepare('SELECT id, name FROM projects WHERE asana_gid = ?').get(projectGid);
-      if (duplicate) throw new Error(`This Asana project was already imported as "${duplicate.name}" (TaskFlow project ${duplicate.id}).`);
+      if (duplicate) {
+        results.push({ file: file.originalname, status: 'already imported', project_id: Number(duplicate.id), project_name: duplicate.name, tasks: 0 });
+        continue;
+      }
 
       const projectInfo = await db.prepare('INSERT INTO projects (name, created_by, asana_gid, created_at) VALUES (?, ?, ?, ?)')
         .run(String(sourceProject.name).trim(), req.session.userId, projectGid, sourceProject.created_at || new Date().toISOString());
@@ -665,6 +672,50 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
     }
   }
   res.json({ ok: results.every(result => result.status === 'imported'), results });
+});
+
+router.post('/admin/asana-import/:projectId/attachments', requireAdmin, asanaAttachmentUpload.array('attachments', 5), async (req, res) => {
+  const projectId = Number(req.params.projectId);
+  const project = await db.prepare('SELECT id, asana_gid FROM projects WHERE id = ? AND asana_gid IS NOT NULL').get(projectId);
+  if (!project) return res.status(404).json({ error: 'Imported Asana project not found.' });
+
+  let mappings;
+  try { mappings = JSON.parse(String(req.body.mappings || '[]')); }
+  catch (error) { return res.status(400).json({ error: 'Attachment mappings are invalid JSON.' }); }
+  const files = req.files || [];
+  if (!Array.isArray(mappings) || mappings.length !== files.length) {
+    return res.status(400).json({ error: 'Each uploaded file must have one task and attachment mapping.' });
+  }
+
+  const results = [];
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index];
+    const mapping = mappings[index] || {};
+    try {
+      const task = await db.prepare('SELECT id, title FROM tasks WHERE project_id = ? AND asana_gid = ?')
+        .get(projectId, String(mapping.task_gid || ''));
+      if (!task) throw new Error(`Task ${mapping.task_gid || '(unknown)'} was not found in the imported project.`);
+      const attachmentGid = String(mapping.attachment_gid || '');
+      const filename = String(mapping.name || file.originalname || 'Asana attachment');
+      const context = mapping.context ? ` [Asana subtask: ${String(mapping.context)}]` : '';
+      const body = `[Asana attachment ${attachmentGid}]${context} ${filename}`;
+      const existing = await db.prepare('SELECT id FROM comments WHERE task_id = ? AND body = ? AND image_path IS NOT NULL')
+        .get(task.id, body);
+      if (existing) {
+        results.push({ filename, status: 'already imported' });
+        continue;
+      }
+      const stored = await uploadToTelegram(file);
+      await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type) VALUES (?, ?, ?, ?)')
+        .run(stored.fileId, stored.messageId, filename, file.mimetype || 'application/octet-stream');
+      await db.prepare('INSERT INTO comments (task_id, user_id, body, image_path, attachment_name, attachment_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(task.id, req.session.userId, body, `/api/download/${encodeURIComponent(stored.fileId)}`, filename, file.mimetype || 'application/octet-stream', mapping.created_at || new Date().toISOString());
+      results.push({ filename, status: 'imported', task: task.title });
+    } catch (error) {
+      results.push({ filename: file.originalname, status: 'failed', error: error.message });
+    }
+  }
+  res.json({ ok: results.every(result => result.status !== 'failed'), results });
 });
 
 router.get('/task-checkin-access', requireAdmin, async (req, res) => {
