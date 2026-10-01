@@ -298,7 +298,7 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
       WHERE ? = 'admin' OR p.created_by = ? OR pm.user_id = ? ORDER BY p.name`).all(req.session.role, req.session.userId, req.session.userId);
     const taskRows = await db.prepare(`SELECT t.project_id, t.due_date
       FROM tasks t JOIN projects p ON p.id = t.project_id
-      WHERE t.status = 'open' AND (? = 'admin' OR p.created_by = ? OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = ?))`)
+      WHERE COALESCE(t.status, 'open') <> 'done' AND (? = 'admin' OR p.created_by = ? OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = ?))`)
       .all(req.session.role, req.session.userId, req.session.userId);
     const today = new Date().toISOString().slice(0, 10);
     const projects = projectRows.map(project => {
@@ -813,7 +813,9 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     const status = String(req.query.status || 'open').trim();
     let sql = `SELECT t.*,u.name AS assignee_name,creator.name AS creator_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id LEFT JOIN users creator ON creator.id=t.created_by WHERE t.project_id=?`;
     const params = [req.params.id];
-    if (status !== 'all') { sql += ' AND t.status=?'; params.push(status === 'done' ? 'done' : 'open'); }
+    if (status !== 'all') {
+      sql += status === 'done' ? " AND t.status='done'" : " AND COALESCE(t.status, 'open') <> 'done'";
+    }
     if (assignee && assignee !== 'all') { sql += ' AND t.assignee_id=?'; params.push(Number(assignee)); }
     if (search) {
       const words = search.split(/\s+/).filter(Boolean);
@@ -846,7 +848,7 @@ router.get('/my-tasks', async (req, res) => {
         p.name AS project_name,u.name AS assignee_name
       FROM tasks t JOIN projects p ON p.id=t.project_id
       LEFT JOIN users u ON u.id=t.assignee_id
-      WHERE t.assignee_id=? AND t.status='open'
+      WHERE t.assignee_id=? AND COALESCE(t.status, 'open') <> 'done'
       ORDER BY CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END, t.due_date, t.created_at`;
     res.json(await db.prepare(sql).all(userId));
   } catch (err) { res.status(500).json({ error: err.message }); }

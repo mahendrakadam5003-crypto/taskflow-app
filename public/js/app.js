@@ -301,6 +301,7 @@ let notificationsPollBusy = false;
 let taskListPollTimer = null;
 let taskListPollBusy = false;
 let taskListVisibilityHandler = null;
+let hideTaskSearchSuggestions = () => {};
 let latestNotificationId = null;
 let pendingSearchTaskId = null;
 let liveTrackingTimer = null;
@@ -1308,6 +1309,7 @@ async function enterProjectView(project) {
     searchInput.value = '';
     searchInput.dataset.fullSearch = 'false';
   }
+  hideTaskSearchSuggestions();
   if (suggestions) suggestions.classList.add('hidden');
   await renderProjectMembersHint();
   await renderTaskAssigneeFilter();
@@ -1364,27 +1366,35 @@ function setupTaskFilters() {
   let searchTimer = null;
   const searchInput = $('#task-search');
   const suggestions = $('#task-search-suggestions');
+  const hideSuggestions = () => {
+    clearTimeout(searchTimer);
+    suggestions.classList.add('hidden');
+    suggestions.innerHTML = '';
+  };
+  hideTaskSearchSuggestions = hideSuggestions;
   const showSuggestions = async () => {
     const value = searchInput.value.trim();
     searchInput.dataset.fullSearch = 'false';
-    if (!value) { suggestions.classList.add('hidden'); return; }
+    if (!value) { hideSuggestions(); return; }
     clearTimeout(searchTimer);
+    suggestions.classList.add('hidden');
     searchTimer = setTimeout(async () => {
       try {
         const results = await api(`/tasks/search?q=${encodeURIComponent(value)}`);
+        if (searchInput.value.trim() !== value) return;
         const visible = results.slice(0, 6);
         suggestions.innerHTML = `${visible.map(task => `<button type="button" class="task-suggestion" data-task-id="${task.id}" data-project-id="${task.project_id}"><b>${escapeHtml(task.title)}</b><span>${escapeHtml(task.project_name || '')}</span></button>`).join('')}${results.length ? `<button type="button" class="task-suggestion task-suggestion-all" data-show-all="true">Show all ${results.length} results</button>` : '<div class="task-suggestion-empty">No matching tasks</div>'}`;
         suggestions.classList.remove('hidden');
         $$('.task-suggestion[data-task-id]').forEach(button => {
           button.onclick = async () => {
             pendingSearchTaskId = Number(button.dataset.taskId);
-            suggestions.classList.add('hidden');
+            hideSuggestions();
             await openProject(Number(button.dataset.projectId));
           };
         });
         const showAll = $('.task-suggestion-all');
-        if (showAll) showAll.onclick = () => { searchInput.dataset.fullSearch = 'true'; suggestions.classList.add('hidden'); renderTasks(); };
-      } catch (error) { suggestions.classList.add('hidden'); }
+        if (showAll) showAll.onclick = () => { searchInput.dataset.fullSearch = 'true'; hideSuggestions(); renderTasks(); };
+      } catch (error) { hideSuggestions(); }
     }, 180);
   };
   searchInput.oninput = showSuggestions;
@@ -1392,10 +1402,10 @@ function setupTaskFilters() {
     if (event.key === 'Enter' && searchInput.value.trim()) {
       event.preventDefault();
       searchInput.dataset.fullSearch = 'true';
-      suggestions.classList.add('hidden');
+      hideSuggestions();
       renderTasks();
     }
-    if (event.key === 'Escape') suggestions.classList.add('hidden');
+    if (event.key === 'Escape') hideSuggestions();
   };
   $('#btn-task-clear-filters').onclick = () => {
     $('#task-filter-status').value = 'open';
@@ -1405,6 +1415,10 @@ function setupTaskFilters() {
     renderTasks();
   };
 }
+
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('.task-search-wrap')) hideTaskSearchSuggestions();
+});
 
 async function renderTasks() {
   if (!CURRENT_PROJECT) return;
