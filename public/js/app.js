@@ -1443,7 +1443,7 @@ async function renderTasks() {
     } else {
       tasks = [];
       let afterId = 0;
-      const pageSize = 200;
+      const pageSize = 10;
       while (true) {
         const pageQuery = new URLSearchParams(query);
         pageQuery.set('after_id', String(afterId));
