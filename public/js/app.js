@@ -1446,6 +1446,7 @@ async function renderTasks() {
       resultsHeading.innerHTML = search ? `Search results for “${escapeHtml(search)}” <span>${tasks.length} task${tasks.length === 1 ? '' : 's'} found</span>` : '';
     }
     const sort = $('#task-sort')?.value || 'manual';
+    if (sort === 'manual' && !search) tasks.sort((a, b) => (Number(a.position) || 0) - (Number(b.position) || 0) || (a.created_at || '').localeCompare(b.created_at || ''));
     if (sort === 'assignee') tasks.sort((a, b) => (a.assignee_name || 'Unassigned').localeCompare(b.assignee_name || 'Unassigned'));
     if (sort === 'due') tasks.sort((a, b) => (a.due_date || '9999-12-31').localeCompare(b.due_date || '9999-12-31'));
     if (sort === 'created') tasks.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));

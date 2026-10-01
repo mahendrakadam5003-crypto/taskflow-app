@@ -858,7 +858,7 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
       sql += ' ORDER BY CASE WHEN t.title LIKE ? THEN 0 WHEN t.description LIKE ? THEN 1 ELSE 2 END, t.position, t.created_at LIMIT 10000';
       params.push(exact, exact);
     } else {
-      sql += ' ORDER BY t.position,t.created_at LIMIT 10000';
+      sql += ' ORDER BY t.id LIMIT 10000';
     }
     res.json(await db.prepare(sql).all(...params));
   } catch (err) { res.status(500).json({ error: err.message }); }
