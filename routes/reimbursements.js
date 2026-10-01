@@ -161,6 +161,58 @@ router.post('/', upload.array('receipt', 10), async (req, res) => {
   }
 });
 
+router.put('/:id', upload.array('receipt', 10), async (req, res) => {
+  try {
+    const claim = await db.prepare('SELECT * FROM reimbursements WHERE id = ?').get(req.params.id);
+    if (!claim) return res.status(404).json({ error: 'Expense not found.' });
+    if (Number(claim.user_id) !== Number(req.session.userId)) return res.status(403).json({ error: 'You can only edit your own expenses.' });
+    if (claim.status !== 'submitted') return res.status(409).json({ error: 'Expenses can only be edited before the first approval.' });
+
+    const amount = Number(req.body.amount);
+    const currency = String(req.body.currency || claim.currency || 'INR').trim().toUpperCase();
+    const category = String(req.body.category || '').trim();
+    const expenseDate = String(req.body.expense_date || '').trim();
+    const description = String(req.body.description || '').trim();
+    if (!Number.isFinite(amount) || amount <= 0 || !currency || !category || !expenseDate || !description) {
+      return res.status(400).json({ error: 'Amount, currency, category, date, and description are required.' });
+    }
+
+    let receiptPaths = [];
+    let receiptMeta = [];
+    try { receiptPaths = claim.receipt_paths ? JSON.parse(claim.receipt_paths) : []; } catch (error) { receiptPaths = []; }
+    try { receiptMeta = claim.receipt_meta ? JSON.parse(claim.receipt_meta) : []; } catch (error) { receiptMeta = []; }
+    if (!Array.isArray(receiptPaths)) receiptPaths = [];
+    if (!Array.isArray(receiptMeta)) receiptMeta = [];
+    if (claim.receipt_path && !receiptPaths.includes(claim.receipt_path)) receiptPaths.unshift(claim.receipt_path);
+    if (receiptPaths.length + (req.files || []).length > 10) {
+      return res.status(400).json({ error: 'An expense can have up to 10 receipts.' });
+    }
+    while (receiptMeta.length < receiptPaths.length) receiptMeta.push({});
+    for (const [index, file] of (req.files || []).entries()) {
+      if (index > 0) await new Promise(resolve => setTimeout(resolve, 350));
+      const attachment = await uploadToTelegram(file);
+      await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type) VALUES (?, ?, ?, ?)')
+        .run(attachment.fileId, attachment.messageId, file.originalname, file.mimetype);
+      receiptPaths.push(`telegram:${attachment.fileId}`);
+      receiptMeta.push({ original_name: file.originalname, mime_type: file.mimetype });
+    }
+
+    const updated = await db.prepare(`UPDATE reimbursements
+      SET amount = ?, currency = ?, category = ?, description = ?, expense_date = ?,
+          receipt_path = ?, receipt_paths = ?, receipt_meta = ?, updated_at = datetime('now')
+      WHERE id = ? AND user_id = ? AND status = 'submitted'`)
+      .run(amount, currency, category, description, expenseDate, receiptPaths[0] || null,
+        receiptPaths.length ? JSON.stringify(receiptPaths) : null,
+        receiptMeta.length ? JSON.stringify(receiptMeta) : null,
+        req.params.id, req.session.userId);
+    if (!updated.changes) return res.status(409).json({ error: 'This expense is no longer editable.' });
+    await logActivity(req, 'Reimbursement updated', 'reimbursement', req.params.id, `${amount} ${currency} - ${category}`, req.session.userId);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.delete('/:id', requireAdmin, async (req, res) => {
   try {
     const claim = await db.prepare('SELECT user_id, amount, currency, category FROM reimbursements WHERE id = ?').get(req.params.id);

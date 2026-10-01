@@ -899,15 +899,15 @@ async function renderReimbursements() {
         <div class="reimbursement-section-heading"><h3>Recent expenses</h3><button class="btn btn-primary" id="reimbursement-new-expense" type="button">+ New expense</button></div>
       </div>
       <div id="employee-reimbursement-form" class="hidden">
-        <div class="reimbursement-section-heading"><h3>Submit expense</h3><button class="btn btn-secondary" id="reimbursement-cancel-new" type="button">Back to expenses</button></div>
+        <div class="reimbursement-section-heading"><h3 id="reimbursement-form-title">Submit expense</h3><button class="btn btn-secondary" id="reimbursement-cancel-new" type="button">Back to expenses</button></div>
         <form id="reimbursement-form" class="admin-form-row">
           <input id="reimbursement-amount" type="number" min="0.01" step="0.01" placeholder="Amount" required>
           <select id="reimbursement-currency"><option>INR</option><option>USD</option><option>EUR</option></select>
           <select id="reimbursement-category">${categoryOptions}</select>
           <input id="reimbursement-date" type="date" value="${todayISO()}" required>
-          <input id="reimbursement-description" placeholder="Description" required>
+          <textarea id="reimbursement-description" class="reimbursement-description" rows="2" placeholder="Description" required></textarea>
           <input id="reimbursement-receipt" type="file" accept="image/*,.pdf" multiple aria-label="Choose receipt photos or files">
-          <button class="btn btn-primary" type="submit">Submit claim</button>
+          <button class="btn btn-primary" id="reimbursement-submit" type="submit">Submit claim</button>
         </form>
         <div id="reimbursement-form-error" class="form-error"></div>
         <div id="reimbursement-form-success" style="color:#25602a; font-size:13px; min-height:16px;"></div>
@@ -932,12 +932,49 @@ async function renderReimbursements() {
         <table class="attn-table" style="min-width:850px;"><thead><tr>
           ${canReview ? '<th><input type="checkbox" id="reimbursement-select-all" title="Select approvable expenses"></th>' : ''}
           ${canReview ? '<th>Employee</th><th>Department</th>' : ''}
-          <th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Receipt</th><th>Status</th>${canReview ? '<th>Action</th>' : ''}
+          <th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Receipt</th><th>Status</th><th>Action</th>
         </tr></thead><tbody id="reimbursements-table"></tbody></table>
       </div>
     </div>`;
 
   const table = $('#reimbursements-table');
+  let editingReimbursementId = null;
+  const showExpenseForm = (row = null) => {
+    editingReimbursementId = row ? Number(row.id) : null;
+    $('#reimbursement-form').reset();
+    $('#reimbursement-amount').value = row ? Number(row.amount).toFixed(2) : '';
+    $('#reimbursement-currency').value = row?.currency || 'INR';
+    const category = $('#reimbursement-category');
+    if (row && !Array.from(category.options).some(option => option.value === row.category)) {
+      category.add(new Option(row.category, row.category));
+    }
+    category.value = row?.category || 'Travel';
+    $('#reimbursement-date').value = row?.expense_date || todayISO();
+    const description = $('#reimbursement-description');
+    description.value = row?.description || '';
+    description.style.height = 'auto';
+    description.style.height = `${description.scrollHeight}px`;
+    $('#reimbursement-receipt').value = '';
+    $('#reimbursement-form-title').textContent = row ? 'Edit expense' : 'Submit expense';
+    $('#reimbursement-submit').textContent = row ? 'Save changes' : 'Submit claim';
+    $('#reimbursement-form-error').textContent = '';
+    $('#reimbursement-form-success').textContent = row
+      ? 'Existing receipts will be kept. Any new receipts will be added.'
+      : '';
+    $('#employee-reimbursement-overview').classList.add('hidden');
+    $('#employee-reimbursement-form').classList.remove('hidden');
+    description.focus();
+  };
+  const hideExpenseForm = () => {
+    editingReimbursementId = null;
+    $('#reimbursement-form').reset();
+    $('#employee-reimbursement-form').classList.add('hidden');
+    $('#employee-reimbursement-overview').classList.remove('hidden');
+  };
+  $('#reimbursement-description').addEventListener('input', event => {
+    event.currentTarget.style.height = 'auto';
+    event.currentTarget.style.height = `${event.currentTarget.scrollHeight}px`;
+  });
   const refreshReimbursementSummary = async () => {
     try {
       const summary = await api('/reimbursements/summary');
@@ -963,6 +1000,7 @@ async function renderReimbursements() {
       const rows = await api(`/reimbursements?${params.toString()}`);
       table.innerHTML = rows.length ? rows.map(row => {
         const canApprove = canReview && ((row.status === 'submitted' && (isAdmin || Number(access.approval_level) === 1)) || (row.status === 'approved_level_1' && (isAdmin || Number(access.approval_level) >= 2)));
+        const canEdit = !isAdmin && Number(row.user_id) === Number(ME?.id) && row.status === 'submitted';
         const receiptItems = Array.isArray(row.receipt_items) ? row.receipt_items : (row.receipt_url ? [{ url: row.receipt_url, original_name: 'View receipt' }] : []);
         const receiptCell = receiptItems.length
           ? `<div class="reimbursement-receipt-links">${receiptItems.map((item, index) => item.url
@@ -975,12 +1013,19 @@ async function renderReimbursements() {
         <td>${escapeHtml(row.currency)} ${Number(row.amount).toFixed(2)}</td>
         <td>${receiptCell}</td>
         <td><span class="tag">${escapeHtml(row.status)}</span>${row.admin_note ? `<small class="hint">${escapeHtml(row.admin_note)}</small>` : ''}</td>
-        ${canReview ? `<td>${canApprove ? `<button class="btn btn-primary btn-sm reimbursement-action" data-id="${row.id}" data-status="approved">Approve</button> <button class="btn btn-danger btn-sm reimbursement-action" data-id="${row.id}" data-status="rejected">Reject</button>` : row.status === 'approved' && canPay ? `<button class="btn btn-secondary btn-sm reimbursement-action" data-id="${row.id}" data-status="paid">Mark paid</button>` : '—'}${isAdmin ? ` <button class="btn btn-danger btn-sm reimbursement-delete" data-id="${row.id}">Delete</button>` : ''}</td>` : ''}
+        <td>${canReview ? (canApprove ? `<button class="btn btn-primary btn-sm reimbursement-action" data-id="${row.id}" data-status="approved">Approve</button> <button class="btn btn-danger btn-sm reimbursement-action" data-id="${row.id}" data-status="rejected">Reject</button>` : row.status === 'approved' && canPay ? `<button class="btn btn-secondary btn-sm reimbursement-action" data-id="${row.id}" data-status="paid">Mark paid</button>` : '—') : ''}${canEdit ? ` <button class="btn btn-secondary btn-sm reimbursement-edit" data-id="${row.id}" type="button">Edit</button>` : ''}${isAdmin ? ` <button class="btn btn-danger btn-sm reimbursement-delete" data-id="${row.id}">Delete</button>` : ''}</td>
       </tr>`;
-      }).join('') : `<tr><td colspan="${isAdmin ? 10 : 7}" class="hint" style="text-align:center; padding:15px;">No reimbursement claims found.</td></tr>`;
+      }).join('') : `<tr><td colspan="${canReview ? 10 : 7}" class="hint" style="text-align:center; padding:15px;">No reimbursement claims found.</td></tr>`;
       if (canReview) {
         table.insertAdjacentHTML('beforeend', `<tr class="reimbursement-selection-summary"><td colspan="10" style="text-align:right; font-weight:600;"><span id="reimbursement-selected-count">Selected expenses: 0</span> &nbsp; <span id="reimbursement-selected-total">Total: INR 0.00</span></td></tr>`);
       }
+      $$('.reimbursement-edit').forEach(button => {
+        button.onclick = event => {
+          event.stopPropagation();
+          const row = rows.find(item => String(item.id) === button.dataset.id);
+          if (row && row.status === 'submitted' && Number(row.user_id) === Number(ME?.id)) showExpenseForm(row);
+        };
+      });
       $$('.reimbursement-action').forEach(button => {
         button.onclick = async (event) => {
           event.stopPropagation();
@@ -1058,19 +1103,11 @@ async function renderReimbursements() {
   };
 
   if (!isAdmin) {
-    $('#reimbursement-new-expense').onclick = () => {
-      $('#employee-reimbursement-overview').classList.add('hidden');
-      $('#employee-reimbursement-form').classList.remove('hidden');
-      $('#reimbursement-form-error').textContent = '';
-      $('#reimbursement-form-success').textContent = '';
-      $('#reimbursement-amount').focus();
-    };
-    $('#reimbursement-cancel-new').onclick = () => {
-      $('#employee-reimbursement-form').classList.add('hidden');
-      $('#employee-reimbursement-overview').classList.remove('hidden');
-    };
+    $('#reimbursement-new-expense').onclick = () => showExpenseForm();
+    $('#reimbursement-cancel-new').onclick = hideExpenseForm;
     $('#reimbursement-form').onsubmit = async (event) => {
       event.preventDefault();
+      const editing = editingReimbursementId !== null;
       const formData = new FormData();
       formData.append('amount', $('#reimbursement-amount').value);
       formData.append('currency', $('#reimbursement-currency').value);
@@ -1078,19 +1115,25 @@ async function renderReimbursements() {
       formData.append('expense_date', $('#reimbursement-date').value);
       formData.append('description', $('#reimbursement-description').value.trim());
       Array.from($('#reimbursement-receipt').files || []).forEach(receipt => formData.append('receipt', receipt));
-      const response = await fetch('/api/reimbursements', { method: 'POST', body: formData, credentials: 'same-origin' });
-      const result = await response.json();
-      if (!response.ok) { $('#reimbursement-form-error').textContent = result.error || 'Unable to submit claim.'; return; }
+      const response = await fetch(editing ? `/api/reimbursements/${editingReimbursementId}` : '/api/reimbursements', {
+        method: editing ? 'PUT' : 'POST', body: formData, credentials: 'same-origin'
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) { $('#reimbursement-form-error').textContent = result.error || 'Unable to save expense.'; return; }
+      editingReimbursementId = null;
       $('#reimbursement-form').reset();
       $('#reimbursement-date').value = todayISO();
+      $('#reimbursement-form-title').textContent = 'Submit expense';
+      $('#reimbursement-submit').textContent = 'Submit claim';
       $('#reimbursement-receipt').value = '';
+      $('#reimbursement-description').style.height = 'auto';
       $('#reimbursement-form-error').textContent = '';
-      $('#reimbursement-form-success').textContent = 'Expense submitted successfully.';
+      $('#reimbursement-form-success').textContent = editing ? 'Expense updated successfully.' : 'Expense submitted successfully.';
       $('#employee-reimbursement-form').classList.add('hidden');
       $('#employee-reimbursement-overview').classList.remove('hidden');
       await refreshReimbursementSummary();
       await renderRows();
-      showAppNotification('Expense submitted successfully.');
+      showAppNotification(editing ? 'Expense updated successfully.' : 'Expense submitted successfully.');
     };
   }
   ['reimbursement-user', 'reimbursement-status', 'reimbursement-from', 'reimbursement-to'].forEach(id => {
