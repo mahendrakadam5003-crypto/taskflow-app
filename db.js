@@ -241,6 +241,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
       user_id INTEGER REFERENCES users(id),
+      author_name TEXT,
       body TEXT NOT NULL DEFAULT '',
       image_path TEXT,
       attachment_name TEXT,
@@ -251,6 +252,9 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     const commentColumns = await dbDriverInterface.prepare('PRAGMA table_info(comments)').all();
     if (!(commentColumns || []).some(row => (row.name || row.NAME) === 'edited_at')) {
       await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN edited_at TEXT');
+    }
+    if (!(commentColumns || []).some(row => (row.name || row.NAME) === 'author_name')) {
+      await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN author_name TEXT');
     }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS attendance (
@@ -396,11 +400,16 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
       actor_id INTEGER REFERENCES users(id),
+      author_name TEXT,
       field_name TEXT NOT NULL,
       old_value TEXT NOT NULL DEFAULT '',
       new_value TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
+    const taskHistoryColumns = await dbDriverInterface.prepare('PRAGMA table_info(task_history)').all();
+    if (!(taskHistoryColumns || []).some(row => (row.name || row.NAME) === 'author_name')) {
+      await dbDriverInterface.exec('ALTER TABLE task_history ADD COLUMN author_name TEXT');
+    }
 
     console.log("✅ Cloud tables initialized. Running migrations and seeds...");
 

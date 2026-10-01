@@ -1634,12 +1634,9 @@ async function openTaskDrawer(taskId) {
   const loadTimeout = setTimeout(() => controller.abort(), 15000);
   try {
     const task = await api(`/tasks/${taskId}`, { signal: controller.signal });
-    const [taskHistoryResult, members] = await Promise.all([
-      api(`/tasks/${taskId}/history`, { signal: controller.signal }).catch(() => []),
-      api(`/projects/${task.project_id}/members`, { signal: controller.signal })
-    ]);
+    const members = await api(`/projects/${task.project_id}/members`, { signal: controller.signal });
     clearTimeout(loadTimeout);
-    let taskHistory = taskHistoryResult;
+    let taskHistory = task.history || [];
     const currentCheckin = (task.checkin_users || []).find(user => Number(user.id) === Number(ME?.id));
     const taskCheckinRequired = ME?.role !== 'admin'
       && task.work_mode === 'on_field'
@@ -1724,11 +1721,11 @@ async function openTaskDrawer(taskId) {
     ].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     $('#drawer-comments').innerHTML = activity.length ? activity.map((entry, index) => {
       if (entry.activityType === 'comment') return `<div class="comment" data-comment-id="${entry.id}">
-        <div class="comment-meta"><b>${escapeHtml(entry.user_name || 'User')}</b> · ${escapeHtml(fmtDateTime(entry.created_at))}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
+        <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b> · ${escapeHtml(fmtDateTime(entry.created_at))}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
         <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
         ${renderCommentAttachment(entry)}
       </div>`;
-      const actor = escapeHtml(entry.actor_name || 'User');
+      const actor = escapeHtml(entry.actor_name || entry.author_name || (entry.field_name.startsWith('Asana:') ? 'Unknown Asana user' : 'Unknown user'));
       const oldValue = escapeHtml(entry.old_value || '(empty)');
       const newValue = escapeHtml(entry.new_value || '(empty)');
       let message = entry.field_name === 'Task created' ? 'created this task' : `changed the ${entry.field_name.toLowerCase()}`;
