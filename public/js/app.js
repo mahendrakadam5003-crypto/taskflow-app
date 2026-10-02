@@ -1808,23 +1808,32 @@ async function openTaskDrawer(taskId) {
       });
     };
     const renderActivity = () => {
-      const orderedActivity = [...activityItems].reverse();
-      const html = orderedActivity.map((entry, index) => {
-        if (entry.activity_type === 'comment') return `<div class="comment" data-comment-id="${entry.id}">
-          <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b> · ${escapeHtml(fmtDateTime(entry.created_at))}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
-          <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
-          ${renderCommentAttachment(entry)}
-        </div>`;
-        const actor = escapeHtml(entry.actor_name || entry.author_name || (String(entry.field_name || '').startsWith('Asana:') ? 'Unknown Asana user' : 'Unknown user'));
-        const oldValue = escapeHtml(entry.old_value || '(empty)');
-        const newValue = escapeHtml(entry.new_value || '(empty)');
-        let message = entry.field_name === 'Task created' ? 'created this task' : `changed the ${String(entry.field_name || 'activity').toLowerCase()}`;
-        if (entry.field_name === 'Assignee') message = `reassigned this task from ${oldValue} to ${newValue}`;
-        if (entry.field_name === 'Due date') message = `changed the due date from ${oldValue} to ${newValue}`;
-        if (entry.field_name === 'Task check-in') message = 'checked in to this task';
-        if (entry.field_name === 'Task check-out') message = 'checked out of this task';
-        const difference = entry.field_name === 'Description' ? `<button type="button" class="link-btn task-difference-toggle" data-history-index="${index}">Show difference</button><div class="task-difference hidden" data-history-panel="${index}"><div class="task-history-old"><b>Old:</b> ${oldValue}</div><div class="task-history-new"><b>New:</b> ${newValue}</div></div>` : '';
-        return `<div class="task-activity-change" data-activity-index="${index}"><b>${actor}</b> ${message} <span>· ${escapeHtml(fmtDateTime(entry.created_at))}</span>${difference}</div>`;
+      const groupedActivity = new Map();
+      activityItems.forEach(entry => {
+        const timestamp = String(entry.created_at || '');
+        if (!groupedActivity.has(timestamp)) groupedActivity.set(timestamp, []);
+        groupedActivity.get(timestamp).push(entry);
+      });
+      const html = Array.from(groupedActivity.entries()).reverse().map(([timestamp, entries], groupIndex) => {
+        const contents = entries.map((entry, entryIndex) => {
+          const activityIndex = `${groupIndex}-${entryIndex}`;
+          if (entry.activity_type === 'comment') return `<div class="activity-group-entry comment" data-comment-id="${entry.id}">
+            <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b>${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
+            <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
+            ${renderCommentAttachment(entry)}
+          </div>`;
+          const actor = escapeHtml(entry.actor_name || entry.author_name || (String(entry.field_name || '').startsWith('Asana:') ? 'Unknown Asana user' : 'Unknown user'));
+          const oldValue = escapeHtml(entry.old_value || '(empty)');
+          const newValue = escapeHtml(entry.new_value || '(empty)');
+          let message = entry.field_name === 'Task created' ? 'created this task' : `changed the ${String(entry.field_name || 'activity').toLowerCase()}`;
+          if (entry.field_name === 'Assignee') message = `reassigned this task from ${oldValue} to ${newValue}`;
+          if (entry.field_name === 'Due date') message = `changed the due date from ${oldValue} to ${newValue}`;
+          if (entry.field_name === 'Task check-in') message = 'checked in to this task';
+          if (entry.field_name === 'Task check-out') message = 'checked out of this task';
+          const difference = entry.field_name === 'Description' ? `<button type="button" class="link-btn task-difference-toggle" data-history-index="${activityIndex}">Show difference</button><div class="task-difference hidden" data-history-panel="${activityIndex}"><div class="task-history-old"><b>Old:</b> ${oldValue}</div><div class="task-history-new"><b>New:</b> ${newValue}</div></div>` : '';
+          return `<div class="activity-group-entry task-activity-change"><b>${actor}</b> ${message}${difference}</div>`;
+        }).join('');
+        return `<div class="task-activity-group"><div class="task-activity-group-time">${escapeHtml(fmtDateTime(timestamp))}</div>${contents}</div>`;
       }).join('');
       activityContainer.innerHTML = `${activityHasMore ? '<button type="button" id="task-activity-load-more" class="link-btn">Load older activity</button>' : ''}${html || '<div class="hint">No activity yet.</div>'}<div id="task-activity-error" class="form-error"></div>`;
       bindActivityActions();

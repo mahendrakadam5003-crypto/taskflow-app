@@ -348,6 +348,11 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .task-history-new { background: var(--green-bg); color: #25602a; }
 .task-activity-change { padding: 9px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .task-activity-change b { color: var(--ink); }
+.task-activity-group { padding: 7px 0; border-bottom: 1px solid var(--line); }
+.task-activity-group-time { margin-bottom: 3px; color: var(--muted); font-size: 11px; }
+.activity-group-entry.task-activity-change { padding: 3px 0; border: 0; }
+.activity-group-entry.comment { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.activity-group-entry.comment:last-child { border-bottom: 0; }
 .task-difference { margin: 7px 0 0 18px; padding-left: 10px; border-left: 2px solid var(--line); }
 .comment-image { max-width: 100%; max-height: 260px; border-radius: 8px; margin-top: 6px; display: block; }
 .comment-attachment { display: block; color: var(--green); font-size: 12px; text-decoration: none; }
