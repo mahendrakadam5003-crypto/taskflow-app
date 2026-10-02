@@ -2,6 +2,7 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 let activeTaskDrawerController = null;
+let taskListRequestId = 0;
 
 async function api(path, opts = {}) {
   const res = await fetch('/api' + path, {
@@ -1320,10 +1321,20 @@ async function enterProjectView(project) {
   }
   hideTaskSearchSuggestions();
   if (suggestions) suggestions.classList.add('hidden');
-  await renderProjectMembersHint();
-  await renderTaskAssigneeFilter();
   setupTaskFilters();
+  const projectMembersPromise = api(`/projects/${project.id}/members`).then(members => {
+    if (Number(CURRENT_PROJECT?.id) !== Number(project.id)) return;
+    const hint = $('#project-members-hint');
+    if (hint) hint.textContent = `${members.length} member${members.length === 1 ? '' : 's'}`;
+    const assignee = $('#task-filter-assignee');
+    const creator = $('#task-filter-created-by');
+    if (assignee) assignee.innerHTML = '<option value="all">All assignees</option>' + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
+    if (creator) creator.innerHTML = '<option value="all">Anyone</option>' + PEOPLE.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('');
+  }).catch(error => {
+    console.warn('Project member filters unavailable:', error.message);
+  });
   await renderTasks();
+  projectMembersPromise.catch(() => {});
    const newTaskButton = $('#btn-new-task');
    if (newTaskButton) {
   newTaskButton.style.display = PROJECT_ACTION_ACCESS.create_task ? '' : 'none';
@@ -1433,6 +1444,9 @@ async function renderTasks() {
   if (!CURRENT_PROJECT) return;
   const list = $('#task-list');
   if (!list) return;
+  const requestId = ++taskListRequestId;
+  const projectId = Number(CURRENT_PROJECT.id);
+  list.innerHTML = '<tr><td colspan="8" class="hint" style="padding:15px;">Loading tasks...</td></tr>';
   try {
     const searchInput = $('#task-search');
     const search = searchInput?.dataset.fullSearch === 'true' ? searchInput.value.trim() : '';
@@ -1449,15 +1463,26 @@ async function renderTasks() {
     let tasks;
     if (search) {
       tasks = await api(`/tasks/search?q=${encodeURIComponent(search)}`);
+      if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
     } else {
       tasks = [];
       let afterId = 0;
-      const pageSize = 10;
+      const pageSize = 200;
       while (true) {
         const pageQuery = new URLSearchParams(query);
         pageQuery.set('after_id', String(afterId));
         pageQuery.set('limit', String(pageSize));
-        const page = await api(`/projects/${CURRENT_PROJECT.id}/tasks?${pageQuery.toString()}`);
+        let page;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            page = await api(`/projects/${projectId}/tasks?${pageQuery.toString()}`);
+            break;
+          } catch (error) {
+            if (error.name === 'AbortError' || (error.status && error.status < 500) || attempt === 2) throw error;
+            await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
+          }
+        }
+        if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
         tasks.push(...page);
         if (page.length < pageSize) break;
         const nextAfterId = Number(page[page.length - 1].id);
@@ -1465,6 +1490,7 @@ async function renderTasks() {
         afterId = nextAfterId;
       }
     }
+    if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
     const resultsHeading = $('#task-search-results-heading');
     if (resultsHeading) {
       resultsHeading.classList.toggle('hidden', !search);
@@ -1505,6 +1531,7 @@ async function renderTasks() {
       await openTaskDrawer(taskId);
     }
   } catch (err) {
+    if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
     list.innerHTML = `<tr><td colspan="8" class="form-error">${escapeHtml(err.message)}</td></tr>`;
   }
 }
@@ -1646,9 +1673,28 @@ async function openTaskDrawer(taskId) {
   try {
     const task = await api(`/tasks/${taskId}`, { signal: controller.signal });
     if (activeTaskDrawerController !== controller) { clearTimeout(loadTimeout); return; }
-    const members = await api(`/projects/${task.project_id}/members`, { signal: controller.signal });
-    if (activeTaskDrawerController !== controller) { clearTimeout(loadTimeout); return; }
     clearTimeout(loadTimeout);
+    let members = [];
+    const membersPromise = api(`/projects/${task.project_id}/members`, { signal: controller.signal })
+      .then(projectMembers => {
+        if (activeTaskDrawerController !== controller) return;
+        members = projectMembers;
+        const assigneeSelect = $('#drawer-assignee');
+        const selectedAssignee = assigneeSelect.value;
+        members.forEach(member => {
+          if (assigneeSelect.querySelector(`option[value="${CSS.escape(String(member.id))}"]`)) return;
+          const option = document.createElement('option');
+          option.value = member.id;
+          option.textContent = member.name;
+          assigneeSelect.append(option);
+        });
+        assigneeSelect.value = selectedAssignee;
+      })
+      .catch(error => {
+        if (error.name !== 'AbortError' && activeTaskDrawerController === controller) {
+          console.warn('Project member options unavailable:', error.message);
+        }
+      });
     let taskHistory = task.history || [];
     const currentCheckin = (task.checkin_users || []).find(user => Number(user.id) === Number(ME?.id));
     const taskCheckinRequired = ME?.role !== 'admin'
@@ -1785,6 +1831,7 @@ async function openTaskDrawer(taskId) {
         };
       };
     });
+    membersPromise.catch(() => {});
     $('#comment-image-preview').innerHTML = '';
     $('#comment-image-preview').classList.add('hidden');
     $('#comment-file-input').value = '';

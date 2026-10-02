@@ -927,7 +927,7 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
       sql += ' ORDER BY t.id LIMIT ?';
       params.push(limit);
     }
-    res.json(await db.prepare(sql).all(...params));
+    res.json(await db.prepare(sql).allStrict(...params));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
