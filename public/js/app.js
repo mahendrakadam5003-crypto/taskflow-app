@@ -3,6 +3,7 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 let activeTaskDrawerController = null;
 let taskListRequestId = 0;
+let activeTaskListController = null;
 let dashboardSummaryRequestId = 0;
 let forcedPasswordModalOpen = false;
 
@@ -1471,6 +1472,10 @@ async function renderTasks() {
   if (!list) return;
   const requestId = ++taskListRequestId;
   const projectId = Number(CURRENT_PROJECT.id);
+  activeTaskListController?.abort();
+  const controller = new AbortController();
+  activeTaskListController = controller;
+  const loadTimeout = setTimeout(() => controller.abort(), 30_000);
   list.innerHTML = '<tr><td colspan="8" class="hint" style="padding:15px;">Loading tasks...</td></tr>';
   try {
     const searchInput = $('#task-search');
@@ -1487,7 +1492,7 @@ async function renderTasks() {
     });
     let tasks;
     if (search) {
-      tasks = await api(`/tasks/search?q=${encodeURIComponent(search)}`);
+      tasks = await api(`/tasks/search?q=${encodeURIComponent(search)}`, { signal: controller.signal });
       if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
     } else {
       tasks = [];
@@ -1500,7 +1505,7 @@ async function renderTasks() {
         let page;
         for (let attempt = 0; attempt < 3; attempt++) {
           try {
-            page = await api(`/projects/${projectId}/tasks?${pageQuery.toString()}`);
+            page = await api(`/projects/${projectId}/tasks?${pageQuery.toString()}`, { signal: controller.signal });
             break;
           } catch (error) {
             if (error.name === 'AbortError' || (error.status && error.status < 500) || attempt === 2) throw error;
@@ -1557,7 +1562,14 @@ async function renderTasks() {
     }
   } catch (err) {
     if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
-    list.innerHTML = `<tr><td colspan="8" class="form-error">${escapeHtml(err.message)}</td></tr>`;
+    const message = err.name === 'AbortError'
+      ? 'Loading tasks timed out. Check your connection and retry.'
+      : err.message;
+    list.innerHTML = `<tr><td colspan="8" class="form-error">${escapeHtml(message)} <button type="button" class="link-btn" id="task-list-retry">Retry</button></td></tr>`;
+    $('#task-list-retry').onclick = () => renderTasks();
+  } finally {
+    clearTimeout(loadTimeout);
+    if (activeTaskListController === controller) activeTaskListController = null;
   }
 }
 
