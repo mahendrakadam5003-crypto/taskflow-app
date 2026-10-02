@@ -16,8 +16,10 @@ const FormData = require('form-data');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const isRender = process.env.RENDER === 'true';
+const isTailscaleServe = process.env.TAILSCALE_SERVE === 'true';
+const bindAddress = isRender ? '0.0.0.0' : '127.0.0.1';
 const sessionMaxAgeMs = 14 * 24 * 60 * 60 * 1000;
-if (isRender) app.set('trust proxy', 1);
+if (isRender || isTailscaleServe) app.set('trust proxy', 1);
 
 const nativeAppOrigins = new Set(['capacitor://localhost', 'http://localhost', 'https://localhost', 'ionic://localhost']);
 function verifyUnsafeRequestOrigin(req, res, next) {
@@ -149,7 +151,7 @@ const sessionOptions = {
   cookie: {
     maxAge: sessionMaxAgeMs,
     httpOnly: true,
-    secure: isRender,
+    secure: isRender || isTailscaleServe,
     sameSite: 'lax'
   }
 };
@@ -171,8 +173,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ========================================================
 // INSTANT PORT BINDING
 // ========================================================
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`TaskFlow operational server running on port: ${PORT}`);
+app.listen(PORT, bindAddress, () => {
+  console.log(`TaskFlow operational server running on ${bindAddress}:${PORT}`);
   setTimeout(() => cleanupExpiredUploads().catch(err => console.error('Upload cleanup failed:', err.message)), 10000);
   setInterval(() => cleanupExpiredUploads().catch(err => console.error('Upload cleanup failed:', err.message)), 24 * 60 * 60 * 1000);
 });

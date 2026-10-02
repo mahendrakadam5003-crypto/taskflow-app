@@ -19,30 +19,28 @@ npm install
 npm start
 ```
 
-You'll see:
-```
-TaskFlow running:
-  On this PC:      http://localhost:3000
-  On your network: http://<this-PC's-LAN-IP>:3000
-```
+The local server listens on `127.0.0.1:3000`. Open `http://127.0.0.1:3000` on the PC itself. Local installs do not accept connections from other LAN devices.
 
-Open `http://localhost:3000` on the PC itself. On an empty database, the app creates the first admin account with username `admin` and a random one-time password printed to the server console. Set `INITIAL_ADMIN_PASSWORD` before first startup to provide your own initial password instead. The admin must change that password at first login. Existing databases are not reseeded.
+On an empty database, the app creates the first admin account with username `admin` and a random one-time password printed to the server console. Set `INITIAL_ADMIN_PASSWORD` before first startup to provide your own initial password instead. The admin must change that password at first login. Existing databases are not reseeded.
 
 Existing admin accounts still using the old `admin123` password are required to change it at next login. Admin password resets also require the recipient to change the password before continuing.
 
 If you deployed using credentials previously present in this repository's `.env.example`, rotate those credentials at their providers before relying on the deployment.
 
-## 3. Access from phones (same WiFi)
-1. Find this PC's local IP address: on Windows, open Command Prompt and run `ipconfig`, look for "IPv4 Address" (something like `192.168.1.23`).
-2. On each phone, connect to the **same WiFi** and open `http://192.168.1.23:3000` in the browser.
-3. Tap the browser's menu → **Add to Home Screen** so it behaves like an app icon.
+## 3. Access from phones or remotely
+Do not open TaskFlow over LAN HTTP or forward port 3000 on your router. Passwords and other private data would cross the network without transport encryption.
 
-Since the PC needs to stay on 24/7 for this to work (which you said it already is), this just works — no extra setup.
+Use Tailscale to provide private HTTPS access:
+1. Install Tailscale on the TaskFlow PC and each staff device, and connect them to the same tailnet.
+2. Start TaskFlow with Tailscale mode enabled:
+  ```powershell
+  $env:TAILSCALE_SERVE = 'true'
+  npm start
+  ```
+3. Configure Tailscale Serve to proxy HTTPS traffic to `http://127.0.0.1:3000`, following the current Tailscale documentation.
+4. Open the machine's Tailscale HTTPS address on each phone or PC. You can then add it to the phone's Home Screen.
 
-## 4. Access from outside the office (optional)
-Phones on mobile data or a different WiFi won't be able to reach `192.168.1.23`. If you need that:
-- **Easiest, free: Tailscale** (https://tailscale.com) — install it on the PC and on each phone, sign in with the same account, and each device gets a private address that works from anywhere, fully encrypted, no port forwarding, free for small teams.
-- Alternative: forward port 3000 on your router to this PC and use a free dynamic-DNS name — more exposed to the internet, only recommended if you're comfortable with basic router security (and even then, put a stronger `SESSION_SECRET` in place first — see below).
+Tailscale mode keeps TaskFlow bound to loopback, trusts the local HTTPS proxy, and enables Secure session cookies. Do not expose the Node server directly to the LAN or public internet.
 
 ## 5. Set your office location (for on-site detection)
 Log in as admin → **Admin** tab → "Office location". Get your coordinates by opening Google Maps, right-clicking your office, and clicking the lat/lng that pops up at the top of the menu. Set a radius in meters (150m is a reasonable default for a single building). Leave it blank if you don't want automatic on-site detection — punches will just show "location not confirmed."
@@ -76,4 +74,4 @@ Ask me any time if you get stuck on a step, want more fields (e.g. custom column
 ## Recommended remote attendance setup (Tailscale)
 For remote employees, keep GPS-based attendance and expose TaskFlow through an HTTPS Tailscale address. Employees should open that HTTPS address on their phone/laptop while connected to Tailscale, allow browser location permission, and use the normal Punch in / Punch out buttons. The server compares the submitted GPS coordinates with the configured office radius: office punches are marked **On-site**, remote coordinates are marked **Remote**. Do not create a plain-HTTP public port for attendance because browser GPS requires a secure context.
 
-A typical deployment is: TaskFlow listens on `127.0.0.1:3000`/`0.0.0.0:3000`, Tailscale provides the HTTPS endpoint, and the Tailscale ACL restricts access to your staff devices/users. Exact Tailscale `serve`/HTTPS commands depend on your current Tailscale version; use the current Tailscale admin documentation when enabling the certificate.
+A typical deployment is: TaskFlow listens only on `127.0.0.1:3000`, Tailscale Serve provides the HTTPS endpoint, and the Tailscale ACL restricts access to staff devices/users. Exact Tailscale Serve commands depend on your current version; use the current Tailscale admin documentation when enabling HTTPS.
