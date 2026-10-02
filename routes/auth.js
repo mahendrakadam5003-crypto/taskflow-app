@@ -420,6 +420,17 @@ router.get('/settings', requireAdmin, async (req, res) => {
 
 router.put('/settings', requireAdmin, async (req, res) => {
   try {
+    const retentionLimits = {
+      attachment_retention_days: { min: 0, max: 36500 },
+      attendance_location_retention_days: { min: 1, max: 36500 }
+    };
+    for (const [key, { min, max }] of Object.entries(retentionLimits)) {
+      if (req.body[key] === undefined) continue;
+      const value = String(req.body[key]).trim();
+      if (!/^\d+$/.test(value) || Number(value) < min || Number(value) > max) {
+        return res.status(400).json({ error: `${key} must be a whole number from ${min} to ${max}.` });
+      }
+    }
     const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
     for (const [k, v] of Object.entries(req.body)) {
       await upsert.run(k, String(v));

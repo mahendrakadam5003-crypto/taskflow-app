@@ -93,39 +93,210 @@ const attendanceRouter = require('./routes/attendance');
 const reimbursementsRouter = require('./routes/reimbursements');
 const uploadsRouter = require('./routes/uploads');
 
-const imageRetentionMs = 1000 * 60 * 60 * 24 * 92;
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN || null;
 const telegramChannelId = process.env.TELEGRAM_CHANNEL_ID || null;
+
+function retentionDays(value, fallback) {
+  const normalized = String(value ?? '').trim();
+  if (!/^\d+$/.test(normalized)) return fallback;
+  const days = Number(normalized);
+  return Number.isSafeInteger(days) && days <= 36500 ? days : fallback;
+}
+
+function retentionExpired(value, days) {
+  const timestamp = new Date(value).getTime();
+  return days > 0 && Number.isFinite(timestamp) && timestamp < Date.now() - days * 24 * 60 * 60 * 1000;
+}
+
+function resolveUploadPath(root, relativePath) {
+  const resolvedPath = path.resolve(root, relativePath);
+  const relative = path.relative(root, resolvedPath);
+  return !relative || relative.startsWith('..') || path.isAbsolute(relative) ? null : resolvedPath;
+}
+
+function parseJsonArray(value) {
+  try {
+    const result = value ? JSON.parse(value) : [];
+    return Array.isArray(result) ? result : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+async function deleteTelegramMessage(messageId, label) {
+  if (!messageId || !telegramToken || !telegramChannelId) return false;
+  try {
+    const response = await axios.post(`https://api.telegram.org/bot${telegramToken}/deleteMessage`, {
+      chat_id: telegramChannelId,
+      message_id: messageId
+    });
+    if (response.data?.ok) return true;
+    console.error(`Telegram did not confirm deletion of ${label}:`, response.data?.description || 'unknown response');
+  } catch (error) {
+    const description = error.response?.data?.description || error.message;
+    if (/message to delete not found|message not found/i.test(description)) return true;
+    console.error(`Could not delete ${label} from Telegram:`, description);
+  }
+  return false;
+}
+
+async function removeReceiptReference(claimId, receiptPath) {
+  const claim = await db.prepare('SELECT receipt_path, receipt_paths, receipt_meta FROM reimbursements WHERE id = ?').get(claimId);
+  if (!claim) return;
+  const receiptPaths = parseJsonArray(claim.receipt_paths);
+  const receiptMeta = parseJsonArray(claim.receipt_meta);
+  if (claim.receipt_path && !receiptPaths.includes(claim.receipt_path)) receiptPaths.unshift(claim.receipt_path);
+  const index = receiptPaths.indexOf(receiptPath);
+  if (index < 0) return;
+  receiptPaths.splice(index, 1);
+  if (index < receiptMeta.length) receiptMeta.splice(index, 1);
+  await db.prepare(`UPDATE reimbursements SET receipt_path = ?, receipt_paths = ?, receipt_meta = ? WHERE id = ?`)
+    .run(receiptPaths[0] || null, receiptPaths.length ? JSON.stringify(receiptPaths) : null,
+      receiptMeta.length ? JSON.stringify(receiptMeta) : null, claimId);
+}
+
+async function clearTelegramReferences(fileId) {
+  const imagePath = `/api/download/${encodeURIComponent(fileId)}`;
+  await db.prepare(`UPDATE comments SET image_path = NULL, attachment_name = NULL, attachment_type = NULL WHERE image_path = ?`).run(imagePath);
+  const claims = await db.prepare('SELECT id, receipt_path, receipt_paths FROM reimbursements WHERE receipt_path IS NOT NULL OR receipt_paths IS NOT NULL').all();
+  const receiptPath = `telegram:${fileId}`;
+  for (const claim of claims || []) {
+    if (claim.receipt_path === receiptPath || parseJsonArray(claim.receipt_paths).includes(receiptPath)) {
+      await removeReceiptReference(claim.id, receiptPath);
+    }
+  }
+}
+
 async function cleanupExpiredUploads() {
-  const cutoff = Date.now() - imageRetentionMs;
+  await db.ready;
+  const settings = await db.prepare(`SELECT key, value FROM settings WHERE key IN ('attachment_retention_days', 'attendance_location_retention_days')`).all();
+  const settingValues = Object.fromEntries((settings || []).map(row => [row.key || row.KEY, row.value ?? row.VALUE]));
+  const attachmentDays = retentionDays(settingValues.attachment_retention_days, 0);
+  const locationDays = retentionDays(settingValues.attendance_location_retention_days, 60);
   let removed = 0;
-  const expiredLocationPoints = await db.prepare("DELETE FROM attendance_locations WHERE recorded_at < datetime('now', '-60 days')").run();
-  if (expiredLocationPoints.changes) console.log(`Removed ${expiredLocationPoints.changes} attendance location point(s) older than 60 days from Turso.`);
-  const comments = await db.prepare('SELECT image_path, created_at FROM comments WHERE image_path IS NOT NULL').all();
-  for (const comment of comments) {
-    if (new Date(comment.created_at).getTime() >= cutoff) continue;
-    const filePath = path.join(__dirname, comment.image_path.replace(/^\/uploads\//, 'uploads/'));
-    if (fs.existsSync(filePath)) { fs.unlinkSync(filePath); removed++; }
+
+  if (locationDays > 0) {
+    const modifier = `-${locationDays} days`;
+    const oldLocations = await db.prepare(`SELECT id, telegram_message_id FROM attendance_locations
+      WHERE datetime(recorded_at) < datetime('now', ?)`).all(modifier);
+    for (const location of oldLocations || []) {
+      if (location.telegram_message_id && !(await deleteTelegramMessage(location.telegram_message_id, `attendance location ${location.id}`))) {
+        await db.prepare(`UPDATE attendance_locations SET latitude = NULL, longitude = NULL,
+          distance_meters = 0, place_changed = 0 WHERE id = ?`).run(location.id);
+        continue;
+      }
+      await db.prepare('DELETE FROM attendance_locations WHERE id = ?').run(location.id);
+      removed++;
+    }
+    await db.prepare(`UPDATE attendance SET in_lat = NULL, in_lng = NULL, out_lat = NULL, out_lng = NULL,
+      in_location_text = NULL, out_location_text = NULL, location_status = NULL,
+      in_device_type = NULL, in_device_info = NULL, out_device_type = NULL, out_device_info = NULL
+      WHERE date < date('now', ?)`).run(modifier);
+    await db.prepare(`UPDATE task_checkins SET check_in_lat = NULL, check_in_lng = NULL,
+      check_out_lat = NULL, check_out_lng = NULL WHERE datetime(check_in_at) < datetime('now', ?)`).run(modifier);
+    await db.prepare(`UPDATE attendance_registered_devices
+      SET device_name = 'Registered device', device_info = ''
+      WHERE registered_at < datetime('now', ?)
+        AND (device_name <> 'Registered device' OR device_info <> '')`).run(modifier);
+    await db.prepare(`UPDATE activity_log SET details = 'Location details expired'
+      WHERE entity_type = 'attendance' AND action IN ('Punched in', 'Punched out')
+        AND created_at < datetime('now', ?)`).run(modifier);
+    await db.prepare(`UPDATE activity_log SET details = 'Registered device details expired'
+      WHERE entity_type = 'user' AND action IN ('Attendance device registered', 'Attendance device renamed')
+        AND created_at < datetime('now', ?)`).run(modifier);
   }
-  const reimbursements = await db.prepare('SELECT receipt_path, expense_date FROM reimbursements WHERE receipt_path IS NOT NULL').all();
-  for (const claim of reimbursements) {
-    if (new Date(`${claim.expense_date}T00:00:00Z`).getTime() >= cutoff) continue;
-    const filePath = path.join(uploadsDir, 'receipts', claim.receipt_path);
-    if (fs.existsSync(filePath)) { fs.unlinkSync(filePath); removed++; }
-  }
-  if (telegramToken && telegramChannelId) {
-    const telegramFiles = await db.prepare("SELECT id, message_id FROM telegram_attachments WHERE deleted_at IS NULL AND created_at < datetime('now', '-92 days')").all();
-    for (const file of telegramFiles) {
+
+  if (attachmentDays > 0) {
+    const modifier = `-${attachmentDays} days`;
+    const oldComments = await db.prepare(`SELECT id, image_path FROM comments
+      WHERE image_path LIKE '/uploads/%' AND created_at < datetime('now', ?)`).all(modifier);
+    for (const comment of oldComments || []) {
+      const filePath = resolveUploadPath(uploadsDir, String(comment.image_path).replace(/^\/uploads\//, ''));
+      if (!filePath) continue;
       try {
-        await axios.post(`https://api.telegram.org/bot${telegramToken}/deleteMessage`, { chat_id: telegramChannelId, message_id: file.message_id });
-        await db.prepare("UPDATE telegram_attachments SET deleted_at = datetime('now') WHERE id = ?").run(file.id);
-        removed++;
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        await db.prepare('UPDATE comments SET image_path = NULL, attachment_name = NULL, attachment_type = NULL WHERE id = ?').run(comment.id);
       } catch (error) {
-        console.error(`Could not delete Telegram attachment ${file.id}:`, error.response?.data?.description || error.message);
+        console.error(`Could not expire local comment attachment ${comment.id}:`, error.message);
+        continue;
+      }
+      removed++;
+    }
+
+    const claims = await db.prepare(`SELECT id, expense_date, receipt_path, receipt_paths, receipt_meta
+      FROM reimbursements WHERE receipt_path IS NOT NULL OR receipt_paths IS NOT NULL`).all();
+    for (const claim of claims || []) {
+      if (!retentionExpired(`${claim.expense_date}T00:00:00Z`, attachmentDays)) continue;
+      const receiptPaths = parseJsonArray(claim.receipt_paths);
+      const receiptMeta = parseJsonArray(claim.receipt_meta);
+      if (claim.receipt_path && !receiptPaths.includes(claim.receipt_path)) receiptPaths.unshift(claim.receipt_path);
+      for (const receiptPath of [...receiptPaths]) {
+        if (typeof receiptPath !== 'string' || receiptPath.startsWith('telegram:')) continue;
+        const filePath = resolveUploadPath(path.join(uploadsDir, 'receipts'), receiptPath);
+        if (!filePath) continue;
+        try {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+          await removeReceiptReference(claim.id, receiptPath);
+          removed++;
+        } catch (error) {
+          console.error(`Could not expire local reimbursement receipt ${claim.id}:`, error.message);
+        }
+      }
+    }
+
+    const commentsWithTelegramFiles = await db.prepare(`SELECT image_path, created_at FROM comments
+      WHERE image_path LIKE '/api/download/%'`).all();
+    const claimRows = await db.prepare(`SELECT id, expense_date, receipt_path, receipt_paths
+      FROM reimbursements WHERE receipt_path IS NOT NULL OR receipt_paths IS NOT NULL`).all();
+    const references = new Map();
+    const addReference = (fileId, expired) => {
+      if (!references.has(fileId)) references.set(fileId, []);
+      references.get(fileId).push(expired);
+    };
+    for (const comment of commentsWithTelegramFiles || []) {
+      const match = String(comment.image_path || '').match(/^\/api\/download\/([^/?#]+)/);
+      if (!match) continue;
+      try { addReference(decodeURIComponent(match[1]), retentionExpired(comment.created_at, attachmentDays)); } catch (error) { }
+    }
+    for (const claim of claimRows || []) {
+      const paths = parseJsonArray(claim.receipt_paths);
+      if (claim.receipt_path && !paths.includes(claim.receipt_path)) paths.unshift(claim.receipt_path);
+      for (const receiptPath of paths) {
+        if (typeof receiptPath === 'string' && receiptPath.startsWith('telegram:')) {
+          addReference(receiptPath.slice('telegram:'.length), retentionExpired(`${claim.expense_date}T00:00:00Z`, attachmentDays));
+        }
+      }
+    }
+
+    const telegramFiles = await db.prepare('SELECT file_id, message_id, created_at FROM telegram_attachments WHERE deleted_at IS NULL').all();
+    const fileIds = Array.from(new Set((telegramFiles || []).map(file => file.file_id)));
+    for (const fileId of fileIds) {
+      const fileRows = telegramFiles.filter(file => file.file_id === fileId);
+      const refs = references.get(fileId) || [];
+      const isExpired = refs.length ? refs.every(Boolean) : fileRows.every(file => retentionExpired(file.created_at, attachmentDays));
+      if (!isExpired) continue;
+      let allDeleted = true;
+      const deletedMessageIds = [];
+      for (const messageId of new Set(fileRows.map(file => file.message_id))) {
+        if (!(await deleteTelegramMessage(messageId, `attachment ${fileId}`))) {
+          allDeleted = false;
+          continue;
+        }
+        deletedMessageIds.push(messageId);
+        removed++;
+      }
+      if (allDeleted) {
+        await clearTelegramReferences(fileId);
+        await db.prepare("UPDATE telegram_attachments SET deleted_at = datetime('now') WHERE file_id = ? AND deleted_at IS NULL").run(fileId);
+      } else {
+        for (const messageId of deletedMessageIds) {
+          await db.prepare("UPDATE telegram_attachments SET deleted_at = datetime('now') WHERE file_id = ? AND message_id = ? AND deleted_at IS NULL").run(fileId, messageId);
+        }
       }
     }
   }
-  if (removed) console.log(`Removed ${removed} attachment(s) older than three months; text records were kept.`);
+
+  if (removed) console.log(`Expired ${removed} attachment or location record(s) under configured retention settings.`);
 }
 
 app.use(helmet({

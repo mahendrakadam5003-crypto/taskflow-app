@@ -215,21 +215,25 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       check_in_at TEXT NOT NULL,
-      check_in_lat REAL NOT NULL,
-      check_in_lng REAL NOT NULL,
+      check_in_lat REAL,
+      check_in_lng REAL,
       check_out_at TEXT,
       check_out_lat REAL,
       check_out_lng REAL
     );`);
     const taskCheckinIndexes = await dbDriverInterface.prepare('PRAGMA index_list(task_checkins)').all();
-    if ((taskCheckinIndexes || []).some(index => Number(index.unique ?? index.UNIQUE) === 1)) {
+    const taskCheckinColumns = await dbDriverInterface.prepare('PRAGMA table_info(task_checkins)').all();
+    const requiredLocationColumns = (taskCheckinColumns || []).filter(column => ['check_in_lat', 'check_in_lng'].includes(column.name || column.NAME));
+    const needsCheckinRebuild = (taskCheckinIndexes || []).some(index => Number(index.unique ?? index.UNIQUE) === 1)
+      || requiredLocationColumns.some(column => Number(column.notnull ?? column.NOTNULL) === 1);
+    if (needsCheckinRebuild) {
       await dbDriverInterface.exec(`CREATE TABLE task_checkins_rebuilt (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         check_in_at TEXT NOT NULL,
-        check_in_lat REAL NOT NULL,
-        check_in_lng REAL NOT NULL,
+        check_in_lat REAL,
+        check_in_lng REAL,
         check_out_at TEXT,
         check_out_lat REAL,
         check_out_lng REAL
@@ -294,8 +298,8 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       attendance_id INTEGER NOT NULL REFERENCES attendance(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id),
       recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
-      latitude REAL NOT NULL,
-      longitude REAL NOT NULL,
+      latitude REAL,
+      longitude REAL,
       telegram_message_id INTEGER,
       distance_meters REAL NOT NULL DEFAULT 0,
       place_changed INTEGER NOT NULL DEFAULT 0
@@ -304,6 +308,26 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     const locationColumnNames = (locationColumns || []).map(row => row.name || row.NAME);
     if (!locationColumnNames.includes('distance_meters')) await dbDriverInterface.exec('ALTER TABLE attendance_locations ADD COLUMN distance_meters REAL NOT NULL DEFAULT 0');
     if (!locationColumnNames.includes('place_changed')) await dbDriverInterface.exec('ALTER TABLE attendance_locations ADD COLUMN place_changed INTEGER NOT NULL DEFAULT 0');
+    const attendanceLocationColumnsNeedingRebuild = (locationColumns || []).filter(column => ['latitude', 'longitude'].includes(column.name || column.NAME));
+    if (attendanceLocationColumnsNeedingRebuild.some(column => Number(column.notnull ?? column.NOTNULL) === 1)) {
+      await dbDriverInterface.exec(`CREATE TABLE attendance_locations_rebuilt (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        attendance_id INTEGER NOT NULL REFERENCES attendance(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+        latitude REAL,
+        longitude REAL,
+        telegram_message_id INTEGER,
+        distance_meters REAL NOT NULL DEFAULT 0,
+        place_changed INTEGER NOT NULL DEFAULT 0
+      );`);
+      await dbDriverInterface.exec(`INSERT INTO attendance_locations_rebuilt
+        (id, attendance_id, user_id, recorded_at, latitude, longitude, telegram_message_id, distance_meters, place_changed)
+        SELECT id, attendance_id, user_id, recorded_at, latitude, longitude, telegram_message_id, distance_meters, place_changed
+        FROM attendance_locations`);
+      await dbDriverInterface.exec('DROP TABLE attendance_locations');
+      await dbDriverInterface.exec('ALTER TABLE attendance_locations_rebuilt RENAME TO attendance_locations');
+    }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS tracking_access (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -600,7 +624,14 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     }
 
     // 4. Default Settings Parameter Sync Check
-    const defaults = { office_lat: '', office_lng: '', office_radius_m: '150', attendance_verification_enabled: 'false' };
+    const defaults = {
+      office_lat: '',
+      office_lng: '',
+      office_radius_m: '150',
+      attendance_verification_enabled: 'false',
+      attachment_retention_days: '0',
+      attendance_location_retention_days: '60'
+    };
     const getSetting = dbDriverInterface.prepare('SELECT value FROM settings WHERE key = ?');
     const setSetting = dbDriverInterface.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
     for (const [k, v] of Object.entries(defaults)) {

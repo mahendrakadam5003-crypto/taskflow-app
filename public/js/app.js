@@ -2714,6 +2714,16 @@ async function renderAdmin() {
       </div>
 
       <div class="admin-block">
+        <h3>Data retention</h3>
+        <p class="hint">Reimbursement receipts and comment attachments are never auto-deleted by default. Check retention requirements with your accountant before enabling deletion. GPS points and precise location/device details are cleared after the configured period; punch times remain.</p>
+        <div class="admin-form-row">
+          <label>Attachments (days; 0 = keep)<input id="attachment-retention-days" type="number" min="0" max="36500" step="1" value="${settings.attachment_retention_days ?? '0'}"></label>
+          <label>GPS/device details (days)<input id="attendance-retention-days" type="number" min="1" max="36500" step="1" value="${settings.attendance_location_retention_days ?? '60'}"></label>
+          <button class="btn btn-primary" id="admin-retention-save" type="button">Save retention</button>
+        </div>
+      </div>
+
+      <div class="admin-block">
         <h3>Departments</h3>
         <div class="admin-form-row">
           <input id="new-department-name" placeholder="Department name">
@@ -3416,6 +3426,22 @@ async function renderAdmin() {
       try {
         await api('/auth/settings', { method: 'PUT', body: { office_lat: lat, office_lng: lng, office_radius_m: radius } });
         alert('Tracking center settings saved successfully.');
+      } catch (err) { alert(err.message); }
+    };
+
+    $('#admin-retention-save').onclick = async () => {
+      const attachmentDays = Number($('#attachment-retention-days').value);
+      const locationDays = Number($('#attendance-retention-days').value);
+      if (!Number.isInteger(attachmentDays) || attachmentDays < 0 || attachmentDays > 36500
+        || !Number.isInteger(locationDays) || locationDays < 1 || locationDays > 36500) {
+        return alert('Retention periods must be whole days from 0 to 36500; GPS/device retention must be at least 1 day.');
+      }
+      try {
+        await api('/auth/settings', { method: 'PUT', body: {
+          attachment_retention_days: attachmentDays,
+          attendance_location_retention_days: locationDays
+        }});
+        showAppNotification('Data retention settings saved.');
       } catch (err) { alert(err.message); }
     };
 

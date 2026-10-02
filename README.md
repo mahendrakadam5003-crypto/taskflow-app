@@ -1,7 +1,6 @@
 # TaskFlow — self-hosted tasks + attendance
 
-Runs entirely on your always-on PC. No cloud, no item limits (only your disk), no monthly cost.
-Everything lives in one file: `taskflow.db` (SQLite), sitting right next to the app.
+TaskFlow runs on your PC. Depending on configuration, it can also use Turso for the database and Telegram for uploaded files and attendance location messages. Review [employee privacy and consent](EMPLOYEE_DATA_CONSENT.md) before enabling attendance or cloud storage.
 
 ## What's in it
 - **Projects & tasks** — same layout as before: sidebar of projects, task list, detail panel with assignee/due date/description/subtasks/comments. Optional PIN lock per project.
@@ -48,6 +47,13 @@ Log in as admin → **Admin** tab → "Office location" to save the office coord
 ## 6. Add your team
 Admin → Team members → fill in name, username, password, role → **Add person**. Give each person their own login and phone/PC to use it from.
 
+## Data retention and privacy
+In Admin → **Data retention**, attachment retention defaults to `0` (no automatic deletion). Ask your accountant before setting a finite period. If enabled, comment files are aged from comment creation and reimbursement receipts from the expense date; after successful file deletion, the matching database paths and metadata are cleared.
+
+GPS points and exact attendance/task coordinates, location names, and device detail fields are cleared after 60 days by default. Attendance punch/check-in timestamps remain. Old Telegram location messages are deleted on a best-effort basis; failed deletions are retried, with local coordinates erased and only a coordinate-free marker retained. Device names are anonymized and model/browser details cleared after 60 days; the device-binding hash remains while the device is registered. Activity logs, task history, and comment text have no automatic expiry.
+
+TaskFlow requests browser model/platform client hints. It stores a derived device type/model/browser label, not a raw full User-Agent string. Attendance coordinates are sent to Telegram as location messages and to OpenStreetMap Nominatim for reverse geocoding. Uploaded receipts and comment images may be stored in Telegram; configured database records are stored in Turso. Provider processing/storage regions depend on your account and configuration; confirm them before collecting consent. Review retention, transfers, notices, consent and other DPDP Act obligations with your Indian legal adviser and accountant. The included form is a template, not legal advice.
+
 ## Session secret
 The app exits at startup unless `SESSION_SECRET` is set to a random value at least 32 characters long. On Windows PowerShell, generate and persist a 48-byte value for your user account:
 ```powershell
@@ -62,7 +68,7 @@ Restart VS Code or open a new PowerShell window after setting it. Never commit t
 The Render blueprint generates `SESSION_SECRET` for new services. For an existing service, set or rotate it in the Render environment settings before deploying; rotating it signs out all users. Render proxy trust is configured for its single forwarded proxy so secure cookies work behind HTTPS termination.
 
 ## Backing up your data
-Everything is in `taskflow.db` in this folder. Copy that one file anywhere (another drive, OneDrive folder, USB stick) to back it up. To restore, just put it back and restart the app.
+Local SQLite fallback data is in `taskflow.db`. When configured, Turso holds the database and Telegram holds uploaded files/location messages; include those providers in your backup and recovery plan. A copy of `taskflow.db` alone does not back up remote data.
 
 ## Keeping it running after a PC restart
 By default you'd need to re-run `npm start` after a reboot. If you want it to start automatically:

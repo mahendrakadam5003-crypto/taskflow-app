@@ -106,7 +106,9 @@ function distanceBetweenPoints(firstLat, firstLng, secondLat, secondLng) {
 }
 
 async function recordLocationPoint(attendanceId, userId, lat, lng, recordedAt) {
-  const previous = await db.prepare('SELECT latitude, longitude FROM attendance_locations WHERE attendance_id = ? ORDER BY recorded_at DESC, id DESC LIMIT 1').get(attendanceId);
+  const previous = await db.prepare(`SELECT latitude, longitude FROM attendance_locations
+    WHERE attendance_id = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
+    ORDER BY recorded_at DESC, id DESC LIMIT 1`).get(attendanceId);
   const distanceMeters = previous ? distanceBetweenPoints(Number(previous.latitude), Number(previous.longitude), Number(lat), Number(lng)) : 0;
   const placeChanged = distanceMeters >= 50 ? 1 : 0;
   const info = await db.prepare('INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed) VALUES (?, ?, ?, ?, ?, ?, ?)').run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged);
@@ -466,7 +468,8 @@ router.get('/live/:userId/timeline', requireAdmin, async (req, res) => {
   const rows = await db.prepare(`SELECT al.recorded_at, al.latitude, al.longitude, u.name AS user_name
     FROM attendance_locations al JOIN users u ON u.id = al.user_id
     JOIN attendance a ON a.id = al.attendance_id
-    WHERE al.user_id = ? AND a.date = ? ORDER BY al.recorded_at ASC`).all(req.params.userId, req.query.date || todayStr());
+    WHERE al.user_id = ? AND a.date = ? AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL
+    ORDER BY al.recorded_at ASC`).all(req.params.userId, req.query.date || todayStr());
   const totalDistance = (rows || []).reduce((total, row) => total + Number(row.distance_meters || 0), 0);
   res.json({ points: rows || [], total_distance_meters: totalDistance, place_changes: (rows || []).filter(row => Number(row.place_changed) === 1).length });
 });
@@ -497,9 +500,9 @@ router.get('/tracking/people', async (req, res) => {
   const selectedDate = req.query.date || todayStr();
   const rows = await db.prepare(`SELECT u.id AS user_id, u.name AS user_name, u.department,
       a.punch_in, a.punch_out, a.in_lat, a.in_lng,
-      (SELECT al.latitude FROM attendance_locations al WHERE al.attendance_id = a.id ORDER BY al.recorded_at DESC LIMIT 1) AS latest_lat,
-      (SELECT al.longitude FROM attendance_locations al WHERE al.attendance_id = a.id ORDER BY al.recorded_at DESC LIMIT 1) AS latest_lng,
-      (SELECT al.recorded_at FROM attendance_locations al WHERE al.attendance_id = a.id ORDER BY al.recorded_at DESC LIMIT 1) AS latest_at
+      (SELECT al.latitude FROM attendance_locations al WHERE al.attendance_id = a.id AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL ORDER BY al.recorded_at DESC LIMIT 1) AS latest_lat,
+      (SELECT al.longitude FROM attendance_locations al WHERE al.attendance_id = a.id AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL ORDER BY al.recorded_at DESC LIMIT 1) AS latest_lng,
+      (SELECT al.recorded_at FROM attendance_locations al WHERE al.attendance_id = a.id AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL ORDER BY al.recorded_at DESC LIMIT 1) AS latest_at
     FROM users u LEFT JOIN attendance a ON a.user_id = u.id AND a.date = ?
     WHERE u.active = 1 ORDER BY u.name`).all(selectedDate);
   res.json(rows || []);
@@ -510,7 +513,8 @@ router.get('/tracking/:userId/timeline', async (req, res) => {
   const selectedDate = req.query.date || todayStr();
   const rows = await db.prepare(`SELECT al.recorded_at, al.latitude, al.longitude, al.distance_meters, al.place_changed, u.name AS user_name
     FROM attendance_locations al JOIN users u ON u.id = al.user_id JOIN attendance a ON a.id = al.attendance_id
-    WHERE al.user_id = ? AND a.date = ? ORDER BY al.recorded_at ASC`).all(req.params.userId, selectedDate);
+    WHERE al.user_id = ? AND a.date = ? AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL
+    ORDER BY al.recorded_at ASC`).all(req.params.userId, selectedDate);
   const attendance = await db.prepare(`SELECT a.punch_in, a.punch_out, a.in_lat, a.in_lng, a.out_lat, a.out_lng,
       a.in_location_text, a.out_location_text, u.name AS user_name
     FROM attendance a JOIN users u ON u.id = a.user_id
