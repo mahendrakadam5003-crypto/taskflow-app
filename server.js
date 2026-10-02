@@ -11,7 +11,6 @@ const helmet = require('helmet');
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
-const FormData = require('form-data');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -43,15 +42,14 @@ const db = require('./db');
 
 class TursoSessionStore extends session.Store {
   get(sid, callback) {
-    db.prepare('SELECT data, expires_at FROM web_sessions WHERE sid = ?').getStrict(sid)
+    db.prepare('SELECT data, expires_at FROM web_sessions WHERE sid = ?').get(sid)
       .then(row => {
         if (!row || Number(row.expires_at) <= Date.now()) {
           if (row) db.prepare('DELETE FROM web_sessions WHERE sid = ?').run(sid).catch(() => {});
           return callback(null, null);
         }
         callback(null, JSON.parse(row.data));
-      })
-      .catch(callback);
+      }, callback);
   }
 
   set(sid, sessionData, callback) {
@@ -124,20 +122,31 @@ function parseJsonArray(value) {
 }
 
 async function deleteTelegramMessage(messageId, label) {
-  if (!messageId || !telegramToken || !telegramChannelId) return false;
+  if (!messageId || !telegramToken || !telegramChannelId) {
+    return { success: false, permanent: false, error: 'Telegram deletion is not configured.' };
+  }
   try {
     const response = await axios.post(`https://api.telegram.org/bot${telegramToken}/deleteMessage`, {
       chat_id: telegramChannelId,
       message_id: messageId
-    });
-    if (response.data?.ok) return true;
-    console.error(`Telegram did not confirm deletion of ${label}:`, response.data?.description || 'unknown response');
+    }, { validateStatus: () => true });
+    if (response.data?.ok) return { success: true, permanent: false, error: null };
+    const description = response.data?.description || 'unknown Telegram API response';
+    if (/message to delete not found|message not found/i.test(description)) return { success: true, permanent: false, error: null };
+    const permanent = response.status >= 400 && response.status < 500 && response.status !== 429;
+    console.error(`Telegram did not confirm deletion of ${label}:`, description);
+    return { success: false, permanent, error: description };
   } catch (error) {
     const description = error.response?.data?.description || error.message;
-    if (/message to delete not found|message not found/i.test(description)) return true;
+    if (/message to delete not found|message not found/i.test(description)) return { success: true, permanent: false, error: null };
     console.error(`Could not delete ${label} from Telegram:`, description);
+    const status = Number(error.response?.status);
+    return {
+      success: false,
+      permanent: status >= 400 && status < 500 && status !== 429,
+      error: description
+    };
   }
-  return false;
 }
 
 async function removeReceiptReference(claimId, receiptPath) {
@@ -180,9 +189,14 @@ async function cleanupExpiredUploads() {
     const oldLocations = await db.prepare(`SELECT id, telegram_message_id FROM attendance_locations
       WHERE datetime(recorded_at) < datetime('now', ?)`).all(modifier);
     for (const location of oldLocations || []) {
-      if (location.telegram_message_id && !(await deleteTelegramMessage(location.telegram_message_id, `attendance location ${location.id}`))) {
+      const deletion = location.telegram_message_id
+        ? await deleteTelegramMessage(location.telegram_message_id, `attendance location ${location.id}`)
+        : { success: true };
+      if (!deletion.success) {
         await db.prepare(`UPDATE attendance_locations SET latitude = NULL, longitude = NULL,
-          distance_meters = 0, place_changed = 0 WHERE id = ?`).run(location.id);
+          distance_meters = 0, place_changed = 0,
+          telegram_message_id = CASE WHEN ? THEN NULL ELSE telegram_message_id END WHERE id = ?`)
+          .run(deletion.permanent ? 1 : 0, location.id);
         continue;
       }
       await db.prepare('DELETE FROM attendance_locations WHERE id = ?').run(location.id);
@@ -268,30 +282,41 @@ async function cleanupExpiredUploads() {
       }
     }
 
-    const telegramFiles = await db.prepare('SELECT file_id, message_id, created_at FROM telegram_attachments WHERE deleted_at IS NULL').all();
+    const telegramFiles = await db.prepare(`SELECT file_id, message_id, created_at, delete_attempts
+      FROM telegram_attachments WHERE deleted_at IS NULL AND failed_at IS NULL`).all();
     const fileIds = Array.from(new Set((telegramFiles || []).map(file => file.file_id)));
+    const maxDeleteAttempts = 5;
     for (const fileId of fileIds) {
       const fileRows = telegramFiles.filter(file => file.file_id === fileId);
       const refs = references.get(fileId) || [];
       const isExpired = refs.length ? refs.every(Boolean) : fileRows.every(file => retentionExpired(file.created_at, attachmentDays));
       if (!isExpired) continue;
-      let allDeleted = true;
+      let retryableFailure = false;
       const deletedMessageIds = [];
       for (const messageId of new Set(fileRows.map(file => file.message_id))) {
-        if (!(await deleteTelegramMessage(messageId, `attachment ${fileId}`))) {
-          allDeleted = false;
+        const messageRows = fileRows.filter(file => Number(file.message_id) === Number(messageId));
+        const oldestMessage = Math.min(...messageRows.map(file => new Date(file.created_at).getTime()).filter(Number.isFinite));
+        const deletion = oldestMessage <= Date.now() - 48 * 60 * 60 * 1000
+          ? { success: false, permanent: true, error: 'Telegram messages can only be deleted within 48 hours.' }
+          : await deleteTelegramMessage(messageId, `attachment ${fileId}`);
+        if (!deletion.success) {
+          const attempts = Math.max(...messageRows.map(file => Number(file.delete_attempts) || 0)) + 1;
+          const terminal = deletion.permanent || attempts >= maxDeleteAttempts;
+          await db.prepare(`UPDATE telegram_attachments
+            SET delete_attempts = ?, last_error = ?, failed_at = CASE WHEN ? THEN datetime('now') ELSE NULL END
+            WHERE file_id = ? AND message_id = ? AND deleted_at IS NULL AND failed_at IS NULL`)
+            .run(attempts, String(deletion.error || 'Telegram deletion failed').slice(0, 1000), terminal ? 1 : 0, fileId, messageId);
+          if (!terminal) retryableFailure = true;
           continue;
         }
         deletedMessageIds.push(messageId);
         removed++;
       }
-      if (allDeleted) {
+      if (!retryableFailure) {
         await clearTelegramReferences(fileId);
-        await db.prepare("UPDATE telegram_attachments SET deleted_at = datetime('now') WHERE file_id = ? AND deleted_at IS NULL").run(fileId);
-      } else {
-        for (const messageId of deletedMessageIds) {
-          await db.prepare("UPDATE telegram_attachments SET deleted_at = datetime('now') WHERE file_id = ? AND message_id = ? AND deleted_at IS NULL").run(fileId, messageId);
-        }
+      }
+      for (const messageId of deletedMessageIds) {
+        await db.prepare("UPDATE telegram_attachments SET deleted_at = datetime('now') WHERE file_id = ? AND message_id = ? AND deleted_at IS NULL").run(fileId, messageId);
       }
     }
   }
@@ -340,12 +365,27 @@ app.use('/api/reimbursements', reimbursementsRouter);
 
 app.use('/uploads', uploadsRouter);
 app.use(express.static(path.join(__dirname, 'public')));
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+  const status = Number(error.statusCode || error.status);
+  const clientError = status >= 400 && status < 500;
+  console.error(`Unhandled request error: ${req.method} ${req.originalUrl}`, error);
+  res.status(clientError ? status : 500).json({
+    error: clientError ? 'Invalid request.' : 'Internal server error.'
+  });
+});
 
 // ========================================================
 // INSTANT PORT BINDING
 // ========================================================
-app.listen(PORT, bindAddress, () => {
+const server = app.listen(PORT, bindAddress, () => {
   console.log(`TaskFlow operational server running on ${bindAddress}:${PORT}`);
-  setTimeout(() => cleanupExpiredUploads().catch(err => console.error('Upload cleanup failed:', err.message)), 10000);
+  setTimeout(() => cleanupExpiredUploads().catch(err => console.error('Startup cleanup failed:', err)), 10000);
   setInterval(() => cleanupExpiredUploads().catch(err => console.error('Upload cleanup failed:', err.message)), 24 * 60 * 60 * 1000);
+});
+
+process.on('unhandledRejection', reason => {
+  console.error('Unhandled promise rejection; shutting down:', reason);
+  server.close(() => process.exit(1));
+  setTimeout(() => process.exit(1), 10000).unref();
 });

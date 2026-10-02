@@ -5,9 +5,11 @@ const fs = require('fs');
 const db = require('../db');
 const { logActivity } = require('../audit');
 const { requireAuth, requireAdmin } = require('./auth');
+const { sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { uploadToTelegram, streamFromTelegram } = require('../telegram-storage');
 
 const router = express.Router();
+wrapAsyncRoutes(router);
 router.use(requireAuth);
 
 const receiptsDir = path.join(__dirname, '..', 'uploads', 'receipts');
@@ -96,7 +98,7 @@ router.get('/summary', async (req, res) => {
     }
     res.json(await db.prepare(sql).get(...params));
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'Reimbursement summary failed');
   }
 });
 
@@ -105,7 +107,7 @@ router.get('/', async (req, res) => {
     const rows = await getReimbursementRows(req);
     res.json(await Promise.all(rows.map(mapRow)));
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'Reimbursement list failed');
   }
 });
 
@@ -135,7 +137,7 @@ router.get('/receipts/:fileId', async (req, res) => {
     if (!attachment) return res.status(403).json({ error: 'You do not have access to this receipt.' });
     await streamFromTelegram(req.params.fileId, res, { originalName: attachment?.original_name });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'Receipt download failed');
   }
 });
 
@@ -152,7 +154,7 @@ router.get('/export.csv', async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="reimbursements.csv"');
     res.send(`\ufeff${lines.join('\n')}`);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'Reimbursement export failed');
   }
 });
 
@@ -184,7 +186,7 @@ router.post('/', upload.array('receipt', 10), async (req, res) => {
     await logActivity(req, 'Reimbursement added', 'reimbursement', info.lastInsertRowid, `${amount} ${String(req.body.currency || 'INR').trim().toUpperCase()} - ${category}`, req.session.userId);
     res.json({ ok: true, id: info.lastInsertRowid });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'Reimbursement creation failed');
   }
 });
 
@@ -236,7 +238,7 @@ router.put('/:id(\\d+)', upload.array('receipt', 10), async (req, res) => {
     await logActivity(req, 'Reimbursement updated', 'reimbursement', req.params.id, `${amount} ${currency} - ${category}`, req.session.userId);
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'Reimbursement update failed');
   }
 });
 
@@ -248,7 +250,7 @@ router.delete('/:id', requireAdmin, async (req, res) => {
     await db.prepare('DELETE FROM reimbursements WHERE id = ?').run(req.params.id);
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'Reimbursement deletion failed');
   }
 });
 
@@ -273,7 +275,7 @@ router.put('/bulk-status', async (req, res) => {
     }
     res.json({ ok: true, updated: updated.length });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'Bulk reimbursement update failed');
   }
 });
 
@@ -300,7 +302,7 @@ router.put('/:id/status', async (req, res) => {
     await logActivity(req, `Reimbursement ${activityStatus}`, 'reimbursement', req.params.id, `${claim.amount} ${claim.currency} - ${claim.category}`, claim.user_id);
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'Reimbursement status update failed');
   }
 });
 

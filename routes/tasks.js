@@ -10,9 +10,11 @@ const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const db = require('../db');
 const { requireAuth, requireAdmin } = require('./auth');
 const { logActivity } = require('../audit');
+const { sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { uploadToTelegram } = require('../telegram-storage');
 
 const router = express.Router();
+wrapAsyncRoutes(router);
 router.use(requireAuth);
 const asanaImportProgress = new Map();
 
@@ -171,11 +173,12 @@ const handleAsanaUploadError = (uploadMiddleware, label) => (req, res, next) => 
     if (!error) return next();
     const tooLarge = error.code === 'LIMIT_FILE_SIZE';
     const status = tooLarge ? 413 : 400;
+    if (!tooLarge) console.error(`Unable to receive ${label.toLowerCase()}:`, error);
     const message = tooLarge
       ? (label === 'Asana project JSON'
         ? 'Asana project JSON exceeds the 20 MB upload limit after compression. Split the export into smaller projects or reduce its history.'
         : 'An Asana attachment exceeds the 20 MB per-file upload limit. Remove it from the selected folder or reduce its size.')
-      : `Unable to receive ${label.toLowerCase()}: ${error.message}`;
+      : `Unable to receive ${label.toLowerCase()}. Check the selected file and try again.`;
     res.status(status).json({ error: message });
   });
 };
@@ -245,7 +248,7 @@ async function requireProjectAccess(req, res, next) {
     if (!(await canAccessProject(id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You are not a member of this project' });
     next();
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err, 'Project access check failed');
   }
 }
 
@@ -285,7 +288,7 @@ router.get('/download/:fileId', async (req, res) => {
     response.data.pipe(res);
   } catch (error) {
     console.error("Storage streaming link extraction failed:", error.message);
-    res.status(500).json({ error: "File download stream pipeline failed" });
+    sendInternalError(res, error, 'File download failed');
   }
 });
 
@@ -297,7 +300,7 @@ router.get('/projects', async (req, res) => {
       ? await db.prepare('SELECT id,name,created_at,(pin_hash IS NOT NULL) AS locked FROM projects ORDER BY created_at').all()
       : await db.prepare(`SELECT DISTINCT p.id,p.name,p.created_at,(p.pin_hash IS NOT NULL) AS locked FROM projects p LEFT JOIN project_members pm ON pm.project_id=p.id WHERE p.created_by=? OR pm.user_id=? ORDER BY p.created_at`).all(req.session.userId, req.session.userId);
     res.json(rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Project list failed'); }
 });
 
 router.get('/dashboard/summary', requireAuth, async (req, res) => {
@@ -342,7 +345,7 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
       payment_alerts: paymentAlerts.map(row => ({ ...row, pending_amount: Math.max(0, Number(row.total_amount || 0) - Number(row.amount_received || 0)) })),
       storage: req.session.role === 'admin' ? await getStorageUsage() : null
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Dashboard summary failed'); }
 });
 
 router.get('/payment-history/access/me', async (req, res) => {
@@ -456,13 +459,13 @@ router.post('/projects', async (req, res) => {
     const add = db.prepare('INSERT OR IGNORE INTO project_members (project_id,user_id) VALUES (?,?)');
     for (const id of ids) if (Number(id) !== req.session.userId) await add.run(info.lastInsertRowid, Number(id));
     res.json({ id: info.lastInsertRowid });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Project creation failed'); }
 });
 
 router.get('/projects/:id/members', requireProjectAccess, async (req, res) => {
   try {
     res.json(await db.prepare(`SELECT u.id,u.name,u.username,u.role FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project_id=? ORDER BY u.name`).all(req.params.id));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Project member list failed'); }
 });
 
 router.put('/projects/:id/members', async (req, res) => {
@@ -475,7 +478,7 @@ router.put('/projects/:id/members', async (req, res) => {
     const add = db.prepare('INSERT OR IGNORE INTO project_members (project_id,user_id) VALUES (?,?)');
     for (const id of ids) await add.run(req.params.id, id);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Project member update failed'); }
 });
 
 router.get('/project-action-access', requireAdmin, async (req, res) => {
@@ -545,7 +548,7 @@ router.get('/admin/data-export', requireAdmin, async (req, res) => {
     res.json(backup);
   } catch (error) {
     console.error('TaskFlow data export failed:', error);
-    res.status(500).json({ error: `Unable to export TaskFlow data: ${error.message}` });
+    sendInternalError(res, error, 'TaskFlow data export failed');
   }
 });
 
@@ -775,8 +778,9 @@ router.post('/admin/asana-import', requireAdmin, handleAsanaUploadError(asanaImp
       updateProgress(totalImportUnits, totalImportUnits, `Imported ${sourceProject.name}.`, 'complete');
       results.push({ file: file.originalname, status: 'imported', project_id: projectId, project_name: sourceProject.name, tasks: importedTaskCount, subtasks: importedSubtaskCount, comments: importedCommentCount, activity_items: importedStoryCount, unmatched_users: Array.from(unmatchedNames) });
     } catch (error) {
+      console.error(`Asana import failed for ${file.originalname}:`, error);
       if (progressId) {
-        asanaImportProgress.set(progressId, { status: 'failed', percent: currentProgress ? Math.min(99, asanaImportProgress.get(progressId)?.percent || 0) : 0, message: error.message, eta_seconds: null, updated_at: Date.now() });
+        asanaImportProgress.set(progressId, { status: 'failed', percent: currentProgress ? Math.min(99, asanaImportProgress.get(progressId)?.percent || 0) : 0, message: 'Import failed. Please check the server logs.', eta_seconds: null, updated_at: Date.now() });
       }
       if (projectId && createdProject) {
         const taskIds = await db.prepare('SELECT id FROM tasks WHERE project_id = ?').all(projectId).catch(() => []);
@@ -792,7 +796,7 @@ router.post('/admin/asana-import', requireAdmin, handleAsanaUploadError(asanaImp
         await db.prepare('DELETE FROM tasks WHERE project_id = ?').run(projectId).catch(() => {});
         await db.prepare('DELETE FROM projects WHERE id = ?').run(projectId).catch(() => {});
       }
-      results.push({ file: file.originalname, status: 'failed', project_gid: projectGid, error: error.message });
+      results.push({ file: file.originalname, status: 'failed', project_gid: projectGid, error: 'Import failed.' });
     }
   }
   res.json({ ok: results.every(result => result.status === 'imported'), results });
@@ -844,7 +848,8 @@ router.post('/admin/asana-import/:projectId/attachments', requireAdmin, handleAs
         .run(task.id, req.session.userId, body, `/api/download/${encodeURIComponent(stored.fileId)}`, filename, file.mimetype || 'application/octet-stream', mapping.created_at || new Date().toISOString());
       results.push({ filename, status: 'imported', task: task.title });
     } catch (error) {
-      results.push({ filename: file.originalname, status: 'failed', error: error.message });
+      console.error(`Asana attachment import failed for ${file.originalname}:`, error);
+      results.push({ filename: file.originalname, status: 'failed', error: 'Attachment import failed.' });
     }
   }
   res.json({ ok: results.every(result => result.status !== 'failed'), results });
@@ -906,7 +911,7 @@ router.put('/project-action-access/:userId', requireAdmin, async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     console.error('Project and task permission save failed:', error);
-    res.status(500).json({ error: `Unable to save permissions: ${error.message}` });
+    sendInternalError(res, error, 'Project and task permission save failed');
   }
 });
 
@@ -926,7 +931,7 @@ router.post('/projects/:id/unlock', requireProjectAccess, projectPinLimiter, asy
     if (!project) return res.status(404).json({ error: 'Not found' });
     if (!project.pin_hash || bcrypt.compareSync(String(req.body.pin || ''), project.pin_hash)) return res.json({ ok: true });
     res.status(401).json({ error: 'Wrong PIN' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Project unlock failed'); }
 });
 
 router.delete('/projects/:id', async (req, res) => {
@@ -934,7 +939,7 @@ router.delete('/projects/:id', async (req, res) => {
     if (!(await canProjectAction(req, 'delete_project'))) return res.status(403).json({ error: 'You do not have permission to delete projects.' });
     await db.prepare('DELETE FROM projects WHERE id=?').run(req.params.id);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Project deletion failed'); }
 });
 
 // ---- Tasks ----
@@ -974,8 +979,8 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
       sql += ' ORDER BY t.id LIMIT ?';
       params.push(limit);
     }
-    res.json(await db.prepare(sql).allStrict(...params));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    res.json(await db.prepare(sql).all(...params));
+  } catch (err) { sendInternalError(res, err, 'Project task list failed'); }
 });
 
 router.get('/my-tasks', async (req, res) => {
@@ -988,7 +993,7 @@ router.get('/my-tasks', async (req, res) => {
       WHERE t.assignee_id=? AND COALESCE(t.status, 'open') <> 'done'
       ORDER BY CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END, t.due_date, t.created_at`;
     res.json(await db.prepare(sql).all(userId));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'My task list failed'); }
 });
 
 router.get('/tasks/search', async (req, res) => {
@@ -1008,7 +1013,7 @@ router.get('/tasks/search', async (req, res) => {
     words.forEach(word => { const like = `%${word}%`; params.push(like, like, like, like, like); });
     params.push(`%${q}%`, `%${q}%`);
     res.json(await db.prepare(sql).all(...params));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Task search failed'); }
 });
 
 router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
@@ -1040,7 +1045,7 @@ router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     if (due_date) await historyInsert.run(info.lastInsertRowid, req.session.userId, 'Due date', '', due_date);
     await logActivity(req, 'Task added', 'task', info.lastInsertRowid, title.trim(), assignee_id || req.session.userId);
     res.json({ id: info.lastInsertRowid });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Task creation failed'); }
 });
 
 router.put('/tasks/:id', async (req, res) => {
@@ -1142,7 +1147,7 @@ router.put('/tasks/:id', async (req, res) => {
       await logActivity(req, req.body.status === 'done' ? 'Task completed' : 'Task reopened', 'task', req.params.id, taskBefore.title, taskBefore.assignee_id || req.session.userId);
     }
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Task update failed'); }
 });
 
 router.get('/tasks/:id/history', async (req, res) => {
@@ -1154,7 +1159,7 @@ router.get('/tasks/:id/history', async (req, res) => {
       WHERE h.task_id = ? ORDER BY h.created_at DESC, h.id DESC LIMIT 100
     ) recent_history ORDER BY created_at ASC, id ASC`).all(req.params.id);
     res.json(rows || []);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Task history request failed'); }
 });
 
 router.get('/tasks/:id/activity', async (req, res) => {
@@ -1175,14 +1180,14 @@ router.get('/tasks/:id/activity', async (req, res) => {
       FROM task_history h LEFT JOIN users u ON u.id=h.actor_id WHERE h.task_id=?
     ) activity
     ORDER BY created_at DESC, id DESC, activity_type DESC LIMIT ? OFFSET ?`)
-      .allStrict(req.params.id, req.params.id, limit + 1, offset);
+      .all(req.params.id, req.params.id, limit + 1, offset);
     const hasMore = rows.length > limit;
     const items = rows.slice(0, limit).map(item => ({
       ...item,
       attachment_available: !!(item.image_path && (item.image_path.startsWith('/api/download/') || fs.existsSync(path.join(__dirname, '..', item.image_path.replace(/^\/uploads\//, 'uploads/')))))
     }));
     res.json({ items, has_more: hasMore, next_offset: offset + items.length });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Task activity request failed'); }
 });
 
 async function getTaskForCheckin(taskId, userId, admin) {
@@ -1226,7 +1231,7 @@ router.post('/tasks/:id/check-in', async (req, res) => {
         .run(req.params.id, req.session.userId, 'Assignee', task.assignee_id ? (await db.prepare('SELECT name FROM users WHERE id=?').get(task.assignee_id))?.name || String(task.assignee_id) : 'Unassigned', newAssignee?.name || String(req.session.userId));
     }
     res.json({ ok: true, check_in_at: now });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Task check-in failed'); }
 });
 
 router.post('/tasks/:id/check-out', async (req, res) => {
@@ -1246,7 +1251,7 @@ router.post('/tasks/:id/check-out', async (req, res) => {
     await db.prepare('INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value) VALUES (?, ?, ?, ?, ?)')
       .run(req.params.id, req.session.userId, 'Task check-out', existing.check_in_at, now);
     res.json({ ok: true, check_out_at: now });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Task check-out failed'); }
 });
 
 router.get('/tasks/:id', async (req, res) => {
@@ -1277,7 +1282,7 @@ router.get('/tasks/:id', async (req, res) => {
     task.checkin_users = checkinUsers;
     task.checkin_required = task.checkin_users.length ? 1 : 0;
     res.json(task);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Task details request failed'); }
 });
 
 router.delete('/tasks/:id', async (req, res) => {
@@ -1285,7 +1290,7 @@ router.delete('/tasks/:id', async (req, res) => {
     if (!(await canProjectAction(req, 'delete_task'))) return res.status(403).json({ error: 'You do not have permission to delete tasks.' });
     await db.prepare('DELETE FROM tasks WHERE id=?').run(req.params.id);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Task deletion failed'); }
 });
 
 router.post('/tasks/:id/subtasks', async (req, res) => {
@@ -1298,7 +1303,7 @@ router.post('/tasks/:id/subtasks', async (req, res) => {
     const info = await db.prepare('INSERT INTO subtasks (task_id, title, position) VALUES (?, ?, COALESCE((SELECT MAX(position) + 1 FROM subtasks WHERE task_id = ?), 0))')
       .run(req.params.id, title, req.params.id);
     res.json({ ok: true, id: info.lastInsertRowid });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Subtask creation failed'); }
 });
 
 router.put('/subtasks/:id', async (req, res) => {
@@ -1315,7 +1320,7 @@ router.put('/subtasks/:id', async (req, res) => {
     values.push(req.params.id);
     await db.prepare(`UPDATE subtasks SET ${updates.join(',')} WHERE id=?`).run(...values);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Subtask update failed'); }
 });
 
 router.delete('/subtasks/:id', async (req, res) => {
@@ -1327,7 +1332,7 @@ router.delete('/subtasks/:id', async (req, res) => {
     if (checkinStatus.required && !checkinStatus.checkedIn) return res.status(403).json({ error: 'Check in to this on-field task before managing subtasks.' });
     await db.prepare('DELETE FROM subtasks WHERE id=?').run(req.params.id);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err, 'Subtask deletion failed'); }
 });
 
 async function requireTaskCheckinToComment(req, res, next) {
@@ -1339,7 +1344,7 @@ async function requireTaskCheckinToComment(req, res, next) {
     if (checkinStatus.required && !checkinStatus.checkedIn) return res.status(403).json({ error: 'Check in to this on-field task before commenting.' });
     next();
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err, 'Comment permission check failed');
   }
 }
 
@@ -1357,7 +1362,7 @@ router.post('/tasks/:id/comments', requireTaskCheckinToComment, commentUpload.si
       .run(req.params.id, req.session.userId, body, imagePath, req.file?.originalname || null, req.file?.mimetype || null);
     res.json({ ok: true, id: info.lastInsertRowid });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err, 'Comment creation failed');
   }
 });
 
@@ -1375,7 +1380,7 @@ router.put('/comments/:id', async (req, res) => {
     await db.prepare("UPDATE comments SET body=?, edited_at=? WHERE id=?").run(body, editedAt, req.params.id);
     res.json({ ok: true, edited_at: editedAt });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err, 'Comment update failed');
   }
 });
 

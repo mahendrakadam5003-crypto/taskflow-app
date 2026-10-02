@@ -5,8 +5,10 @@ const axios = require('axios'); // Added axios to make the free API call
 const { requireAuth, requireAdmin } = require('./auth');
 const { logActivity } = require('../audit');
 const { sendLocationToTelegram } = require('../telegram-storage');
+const { wrapAsyncRoutes } = require('../http-errors');
 
 const router = express.Router();
+wrapAsyncRoutes(router);
 router.use(requireAuth);
 
 async function canViewTracking(req) {
@@ -311,8 +313,8 @@ router.post('/location-update', async (req, res) => {
     await db.prepare('UPDATE attendance_locations SET telegram_message_id = ? WHERE id = ?').run(telegramMessageId, locationInfo.id);
     res.json({ ok: true, recorded_at: recordedAt });
   } catch (error) {
-    console.error(error.message);
-    res.json({ ok: true, recorded_at: recordedAt, telegram_warning: error.message });
+    console.error('Could not send live tracking update to Telegram:', error);
+    res.json({ ok: true, recorded_at: recordedAt, telegram_warning: 'Location tracking notification is temporarily unavailable.' });
   }
 });
 

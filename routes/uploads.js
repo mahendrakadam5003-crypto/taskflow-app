@@ -5,8 +5,10 @@ const db = require('../db');
 const { requireAuth } = require('./auth');
 const tasksRouter = require('./tasks');
 const reimbursementsRouter = require('./reimbursements');
+const { wrapAsyncRoutes } = require('../http-errors');
 
 const router = express.Router();
+wrapAsyncRoutes(router);
 const uploadsRoot = path.resolve(__dirname, '..', 'uploads');
 const inlineImageExtensions = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
 

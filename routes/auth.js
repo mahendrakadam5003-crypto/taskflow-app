@@ -3,8 +3,10 @@ const bcrypt = require('bcryptjs');
 const { rateLimit } = require('express-rate-limit');
 const db = require('../db');
 const { logActivity } = require('../audit');
+const { asyncHandler, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 
 const router = express.Router();
+wrapAsyncRoutes(router);
 const loginLimitOptions = {
   windowMs: 15 * 60 * 1000,
   limit: 10,
@@ -42,7 +44,7 @@ async function requireAuth(req, res, next) {
     return res.status(401).json({ error: 'Not logged in' });
   }
   try {
-    const user = await db.prepare('SELECT role, name, active, must_change_password FROM users WHERE id = ?').getStrict(req.session.userId);
+    const user = await db.prepare('SELECT role, name, active, must_change_password FROM users WHERE id = ?').get(req.session.userId);
     if (!user || Number(user.active ?? user.ACTIVE ?? 1) !== 1) {
       req.session.destroy(() => {});
       return res.status(401).json({ error: 'Account is inactive. Contact an administrator.' });
@@ -61,7 +63,7 @@ async function requireAdmin(req, res, next) {
     return res.status(403).json({ error: 'Admin only' });
   }
   try {
-    const user = await db.prepare('SELECT role, active, must_change_password FROM users WHERE id = ?').getStrict(req.session.userId);
+    const user = await db.prepare('SELECT role, active, must_change_password FROM users WHERE id = ?').get(req.session.userId);
     if (!user || Number(user.active ?? user.ACTIVE ?? 1) !== 1) {
       req.session.destroy(() => {});
       return res.status(401).json({ error: 'Account is inactive. Contact an administrator.' });
@@ -85,7 +87,7 @@ router.post('/login', loginIpLimiter, loginUsernameLimiter, async (req, res) => 
 
     // Removed the active status requirement directly from the SQL string to guarantee matches clear
     const normalizedUsername = String(username).trim().toLowerCase();
-    const rawResult = await db.prepare('SELECT * FROM users WHERE username = ?').getStrict(normalizedUsername);
+    const rawResult = await db.prepare('SELECT * FROM users WHERE username = ?').get(normalizedUsername);
     
     let user = null;
     if (Array.isArray(rawResult)) {
@@ -164,14 +166,14 @@ router.post('/change-password', requireAuth, async (req, res) => {
       
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'Password change failed');
   }
 });
 
 router.get('/me', requireAuth, async (req, res) => {
   if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Not logged in' });
   try {
-    const rawResult = await db.prepare('SELECT id, name, username, role, must_change_password FROM users WHERE id = ?').getStrict(req.session.userId);
+    const rawResult = await db.prepare('SELECT id, name, username, role, must_change_password FROM users WHERE id = ?').get(req.session.userId);
     let user = Array.isArray(rawResult) ? rawResult[0] : rawResult;
     
     if (!user) return res.status(401).json({ error: 'User record not found' });
@@ -184,7 +186,7 @@ router.get('/me', requireAuth, async (req, res) => {
       must_change_password: mustChangePassword(user)
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err, 'Current user lookup failed');
   }
 });
 
@@ -205,7 +207,7 @@ router.get('/users', requireAdmin, async (req, res) => {
     }));
     res.json(mappedUsers);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err, 'User list request failed');
   }
 });
 
@@ -214,7 +216,7 @@ router.get('/users/directory', requireAuth, async (req, res) => {
     const rows = await db.prepare('SELECT id, name, username, department, role FROM users WHERE active = 1 ORDER BY name').all();
     res.json(rows || []);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err, 'User directory request failed');
   }
 });
 
@@ -251,7 +253,7 @@ router.get('/activity', requireAuth, async (req, res) => {
       .slice(0, 100);
     res.json(rows || []);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err, 'Activity request failed');
   }
 });
 
@@ -266,7 +268,10 @@ router.post('/users', requireAdmin, async (req, res) => {
     await logActivity(req, 'Employee added', 'user', info.lastInsertRowid, `${name.trim()} (${username.trim().toLowerCase()})`, info.lastInsertRowid);
     res.json({ id: info.lastInsertRowid });
   } catch (e) {
-    res.status(400).json({ error: 'Username already taken or database operation rejected' });
+    if (/unique constraint/i.test(String(e.message))) {
+      return res.status(409).json({ error: 'That username is already in use.' });
+    }
+    sendInternalError(res, e, 'User creation failed');
   }
 });
 
@@ -285,7 +290,7 @@ router.put('/users/:id/reset-password', requireAdmin, async (req, res) => {
     await logActivity(req, 'Employee password changed', 'user', id, target ? target.name : `User ${id}`, id);
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to update target account password.' });
+    sendInternalError(res, error, 'Password reset failed');
   }
 });
 
@@ -321,7 +326,7 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
     if (password) await db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?').run(bcrypt.hashSync(String(password), 10), id);
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'User update failed');
   }
 });
 
@@ -334,7 +339,7 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
     await logActivity(req, 'Employee access removed', 'user', req.params.id, target.name, Number(req.params.id));
     res.json({ ok: true, archived: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'User archive failed');
   }
 });
 
@@ -343,7 +348,7 @@ router.get('/departments', requireAdmin, async (req, res) => {
     const rows = await db.prepare('SELECT id, name FROM departments ORDER BY name').all();
     res.json(rows || []);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'Department list request failed');
   }
 });
 
@@ -355,7 +360,10 @@ router.post('/departments', requireAdmin, async (req, res) => {
     await logActivity(req, 'Department added', 'department', info.lastInsertRowid, name);
     res.json({ id: info.lastInsertRowid, name });
   } catch (error) {
-    res.status(400).json({ error: 'That department already exists.' });
+    if (/unique constraint/i.test(String(error.message))) {
+      return res.status(409).json({ error: 'That department already exists.' });
+    }
+    sendInternalError(res, error, 'Department creation failed');
   }
 });
 
@@ -366,11 +374,11 @@ router.delete('/departments/:id', requireAdmin, async (req, res) => {
     if (department) await logActivity(req, 'Department deleted', 'department', req.params.id, department.name);
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'Department deletion failed');
   }
 });
 
-router.get('/reimbursement-access', requireAdmin, async (req, res) => {
+router.get('/reimbursement-access', requireAdmin, asyncHandler(async (req, res) => {
   const rows = await db.prepare(`
     SELECT u.id AS user_id, u.name, u.username, u.department,
            COALESCE(ra.approval_level, 0) AS approval_level,
@@ -378,14 +386,14 @@ router.get('/reimbursement-access', requireAdmin, async (req, res) => {
     FROM users u LEFT JOIN reimbursement_access ra ON ra.user_id = u.id
     WHERE u.active = 1 ORDER BY u.name`).all();
   res.json(rows || []);
-});
+}));
 
-router.get('/reimbursement-access/me', requireAuth, async (req, res) => {
+router.get('/reimbursement-access/me', requireAuth, asyncHandler(async (req, res) => {
   const row = await db.prepare('SELECT approval_level, can_pay FROM reimbursement_access WHERE user_id = ?').get(req.session.userId);
   res.json({ approval_level: req.session.role === 'admin' ? 2 : (row ? row.approval_level : 0), can_pay: req.session.role === 'admin' ? 1 : (row ? row.can_pay : 0) });
-});
+}));
 
-router.put('/reimbursement-access/:userId', requireAdmin, async (req, res) => {
+router.put('/reimbursement-access/:userId', requireAdmin, asyncHandler(async (req, res) => {
   const approvalLevel = Math.max(0, Math.min(2, Number(req.body.approval_level) || 0));
   const canPay = approvalLevel === 2 && req.body.can_pay ? 1 : 0;
   const target = await db.prepare('SELECT name FROM users WHERE id = ?').get(req.params.userId);
@@ -398,7 +406,7 @@ router.put('/reimbursement-access/:userId', requireAdmin, async (req, res) => {
   }
   if (target) await logActivity(req, 'Reimbursement permission changed', 'user', req.params.userId, `${target.name}: approval level ${approvalLevel}, can pay ${canPay ? 'yes' : 'no'}`, req.params.userId);
   res.json({ ok: true });
-});
+}));
 
 router.get('/settings', requireAdmin, async (req, res) => {
   try {
@@ -414,7 +422,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
     });
     res.json(out);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err, 'Settings request failed');
   }
 });
 
@@ -437,7 +445,7 @@ router.put('/settings', requireAdmin, async (req, res) => {
     }
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendInternalError(res, error, 'Settings update failed');
   }
 });
 

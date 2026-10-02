@@ -30,36 +30,13 @@ const dbDriverInterface = {
   },
   prepare: (sql) => {
     return {
-      getStrict: async (...params) => {
-        try {
-          const res = await db.execute({ sql, args: params });
-          return res.rows && res.rows.length > 0 ? res.rows[0] : null;
-        } catch (err) {
-          console.error('Driver GET error:', err.message);
-          throw err;
-        }
-      },
       get: async (...params) => {
-        try {
-          const res = await db.execute({ sql, args: params });
-          // FIXED: Now safely pulls out the exact first object row item [0] so auth.js receives the user profile correctly!
-          return res.rows && res.rows.length > 0 ? res.rows[0] : null;
-        } catch(err) { console.error("Driver GET error:", err.message); return null; }
+        const res = await db.execute({ sql, args: params });
+        return res.rows && res.rows.length > 0 ? res.rows[0] : null;
       },
       all: async (...params) => {
-        try {
-          const res = await db.execute({ sql, args: params });
-          return res.rows || [];
-        } catch(err) { console.error("Driver ALL error:", err.message); return []; }
-      },
-      allStrict: async (...params) => {
-        try {
-          const res = await db.execute({ sql, args: params });
-          return res.rows || [];
-        } catch (err) {
-          console.error('Driver ALL error:', err.message);
-          throw err;
-        }
+        const res = await db.execute({ sql, args: params });
+        return res.rows || [];
       },
       run: async (...params) => {
         try {
@@ -411,13 +388,9 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS idx_activity_log_created_id ON activity_log(created_at DESC, id DESC)');
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS idx_activity_log_actor_id ON activity_log(actor_id, id DESC)');
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS idx_activity_log_subject_user_id ON activity_log(subject_user_id, id DESC)');
-    try {
-      const activityColumns = await dbDriverInterface.prepare('PRAGMA table_info(activity_log)').all();
-      if (!(activityColumns || []).some(row => (row.name || row.NAME) === 'subject_user_id')) {
-        await dbDriverInterface.exec('ALTER TABLE activity_log ADD COLUMN subject_user_id INTEGER REFERENCES users(id)');
-      }
-    } catch (migrationError) {
-      console.error('Activity log migration warning:', migrationError.message);
+    const activityColumns = await dbDriverInterface.prepare('PRAGMA table_info(activity_log)').all();
+    if (!(activityColumns || []).some(row => (row.name || row.NAME) === 'subject_user_id')) {
+      await dbDriverInterface.exec('ALTER TABLE activity_log ADD COLUMN subject_user_id INTEGER REFERENCES users(id)');
     }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS telegram_attachments (
@@ -430,7 +403,10 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       task_id INTEGER,
       reimbursement_id INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      deleted_at TEXT
+      deleted_at TEXT,
+      delete_attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      failed_at TEXT
     );`);
     const attachmentColumns = await dbDriverInterface.prepare('PRAGMA table_info(telegram_attachments)').all();
     const attachmentColumnNames = (attachmentColumns || []).map(row => row.name || row.NAME);
@@ -439,8 +415,12 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     if (!attachmentColumnNames.includes('uploaded_by')) await dbDriverInterface.exec('ALTER TABLE telegram_attachments ADD COLUMN uploaded_by INTEGER');
     if (!attachmentColumnNames.includes('task_id')) await dbDriverInterface.exec('ALTER TABLE telegram_attachments ADD COLUMN task_id INTEGER');
     if (!attachmentColumnNames.includes('reimbursement_id')) await dbDriverInterface.exec('ALTER TABLE telegram_attachments ADD COLUMN reimbursement_id INTEGER');
+    if (!attachmentColumnNames.includes('delete_attempts')) await dbDriverInterface.exec('ALTER TABLE telegram_attachments ADD COLUMN delete_attempts INTEGER NOT NULL DEFAULT 0');
+    if (!attachmentColumnNames.includes('last_error')) await dbDriverInterface.exec('ALTER TABLE telegram_attachments ADD COLUMN last_error TEXT');
+    if (!attachmentColumnNames.includes('failed_at')) await dbDriverInterface.exec('ALTER TABLE telegram_attachments ADD COLUMN failed_at TEXT');
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS telegram_attachments_task_id_idx ON telegram_attachments(task_id)');
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS telegram_attachments_reimbursement_id_idx ON telegram_attachments(reimbursement_id)');
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS telegram_attachments_deleted_created_idx ON telegram_attachments(deleted_at, created_at)');
 
     const legacyCommentAttachments = await dbDriverInterface.prepare("SELECT task_id, user_id, image_path FROM comments WHERE image_path LIKE '/api/download/%'").all();
     for (const comment of legacyCommentAttachments || []) {
@@ -571,28 +551,16 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     }
 
     if (!commentCols.includes('image_path')) {
-      try {
-        await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN image_path TEXT');
-        console.log('Migrated: added comments.image_path column');
-      } catch (colErr) {
-        // pass
-      }
+      await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN image_path TEXT');
+      console.log('Migrated: added comments.image_path column');
     }
     if (!commentCols.includes('attachment_name')) {
-      try {
-        await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN attachment_name TEXT');
-        console.log('Migrated: added comments.attachment_name column');
-      } catch (colErr) {
-        // pass
-      }
+      await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN attachment_name TEXT');
+      console.log('Migrated: added comments.attachment_name column');
     }
     if (!commentCols.includes('attachment_type')) {
-      try {
-        await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN attachment_type TEXT');
-        console.log('Migrated: added comments.attachment_type column');
-      } catch (colErr) {
-        // pass
-      }
+      await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN attachment_type TEXT');
+      console.log('Migrated: added comments.attachment_type column');
     }
 
     // 2. Project Creator Membership Seeding
@@ -642,7 +610,8 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     }
     console.log("🏁 Permanent Turso database architecture fully synchronized!");
   } catch (err) {
-    console.error("Database initialization fault loop warning:", err.message);
+    console.error('Database initialization failed:', err);
+    throw err;
   }
 })();
 
