@@ -14,6 +14,9 @@ const FormData = require('form-data');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const isRender = process.env.RENDER === 'true';
+const sessionMaxAgeMs = 14 * 24 * 60 * 60 * 1000;
+if (isRender) app.set('trust proxy', 1);
 
 // Import our central database client abstraction instance layer cleanly 
 const db = require('./db');
@@ -111,17 +114,20 @@ app.use((req, res, next) => {
   next();
 });
 const sessionOptions = {
+  name: 'taskflow.sid.v2',
   secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
-  rolling: true,
+  rolling: false,
   cookie: {
-    maxAge: 1000 * 60 * 60 * 24 * 365 * 10,
+    maxAge: sessionMaxAgeMs,
+    httpOnly: true,
+    secure: isRender,
     sameSite: 'lax'
   }
 };
-if (process.env.RENDER !== 'true') {
-  sessionOptions.store = new FileStore({ path: path.join(__dirname, 'sessions'), retries: 5, retryDelay: 100, ttl: 60 * 60 * 24 * 365 * 10 });
+if (!isRender) {
+  sessionOptions.store = new FileStore({ path: path.join(__dirname, 'sessions'), retries: 5, retryDelay: 100, ttl: sessionMaxAgeMs / 1000 });
 } else {
   sessionOptions.store = new TursoSessionStore();
 }
