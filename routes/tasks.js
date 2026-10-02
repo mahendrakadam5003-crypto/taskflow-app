@@ -468,6 +468,15 @@ router.get('/projects/:id/members', requireProjectAccess, async (req, res) => {
   } catch (err) { sendInternalError(res, err, 'Project member list failed'); }
 });
 
+router.get('/projects/:id/member-candidates', async (req, res) => {
+  const project = await db.prepare('SELECT created_by FROM projects WHERE id=?').get(req.params.id);
+  if (!project || (req.session.role !== 'admin' && Number(project.created_by) !== Number(req.session.userId))) {
+    return res.status(403).json({ error: 'Only the project creator or an administrator can view member candidates.' });
+  }
+  const candidates = await db.prepare('SELECT id, name FROM users WHERE active=1 ORDER BY name').all();
+  res.json(candidates);
+});
+
 router.put('/projects/:id/members', async (req, res) => {
   try {
     const projectAccess = await db.prepare('SELECT created_by FROM projects WHERE id=?').get(req.params.id);
@@ -916,6 +925,7 @@ router.put('/project-action-access/:userId', requireAdmin, async (req, res) => {
 });
 
 router.put('/projects/:id', async (req, res) => {
+  if (!(await canAccessProject(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You are not a member of this project.' });
   if (!(await canProjectAction(req, 'edit_project'))) return res.status(403).json({ error: 'You do not have permission to edit projects.' });
   const name = String(req.body.name || '').trim();
   if (!name) return res.status(400).json({ error: 'Project name is required.' });
@@ -936,6 +946,7 @@ router.post('/projects/:id/unlock', requireProjectAccess, projectPinLimiter, asy
 
 router.delete('/projects/:id', async (req, res) => {
   try {
+    if (!(await canAccessProject(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You are not a member of this project.' });
     if (!(await canProjectAction(req, 'delete_project'))) return res.status(403).json({ error: 'You do not have permission to delete projects.' });
     await db.prepare('DELETE FROM projects WHERE id=?').run(req.params.id);
     res.json({ ok: true });

@@ -37,22 +37,38 @@ async function api(path, opts = {}) {
   return data;
 }
 
+function parseTaskFlowTimestamp(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)) {
+    return new Date(`${value.replace(' ', 'T')}Z`);
+  }
+  return new Date(value);
+}
+
 function fmtDate(iso) {
   if (!iso) return '';
-  const d = new Date(iso);
+  const d = parseTaskFlowTimestamp(iso);
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 function fmtTime(iso) {
   if (!iso) return '';
-  const d = new Date(iso);
+  const d = parseTaskFlowTimestamp(iso);
   return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 function fmtDateTime(iso) {
   if (!iso) return '—';
-  const d = new Date(iso);
+  const d = parseTaskFlowTimestamp(iso);
   return `${d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
 }
-function todayISO() { return new Date().toISOString().slice(0, 10); }
+function todayISO() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
 
 function getDueState(dateValue) {
   if (!dateValue) return { className: '', label: '—' };
@@ -771,11 +787,13 @@ async function enterApp() {
   if (ME.role === 'admin' && navAdmin) navAdmin.style.display = '';
   
   try {
-    const [rawPeople, paymentAccess, projectActionAccess] = await Promise.all([
-      api('/auth/users/directory'),
+    const [paymentAccess, projectActionAccess, reimbursementAccess] = await Promise.all([
       api('/payment-history/access/me'),
-      api('/project-action-access/me')
+      api('/project-action-access/me'),
+      api('/auth/reimbursement-access/me')
     ]);
+    const canViewDirectory = ME.role === 'admin' || paymentAccess.allowed || Number(reimbursementAccess.approval_level) > 0;
+    const rawPeople = canViewDirectory ? await api('/auth/users/directory') : [];
     PEOPLE = Array.isArray(rawPeople) ? rawPeople.flat(5) : [];
     PROJECT_ACTION_ACCESS = projectActionAccess;
     const paymentAllowed = ME.role === 'admin' || paymentAccess.allowed;
@@ -1355,7 +1373,8 @@ async function enterProjectView(project) {
     const assignee = $('#task-filter-assignee');
     const creator = $('#task-filter-created-by');
     if (assignee) assignee.innerHTML = '<option value="all">All assignees</option>' + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
-    if (creator) creator.innerHTML = '<option value="all">Anyone</option>' + PEOPLE.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('');
+    const creatorPeople = ME?.role === 'admin' ? PEOPLE : members;
+    if (creator) creator.innerHTML = '<option value="all">Anyone</option>' + creatorPeople.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('');
   }).catch(error => {
     console.warn('Project member filters unavailable:', error.message);
   });
@@ -1398,7 +1417,8 @@ async function renderTaskAssigneeFilter(){
     const assignee = $('#task-filter-assignee');
     const creator = $('#task-filter-created-by');
     if (assignee) assignee.innerHTML = '<option value="all">All assignees</option>' + members.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-    if (creator) creator.innerHTML = '<option value="all">Anyone</option>' + PEOPLE.map(p => `<option value="${p.id}">${escapeHtml(p.name || p.NAME)}</option>`).join('');
+    const creatorPeople = ME?.role === 'admin' ? PEOPLE : members;
+    if (creator) creator.innerHTML = '<option value="all">Anyone</option>' + creatorPeople.map(p => `<option value="${p.id}">${escapeHtml(p.name || p.NAME)}</option>`).join('');
   } catch (err) { }
 }
 
@@ -2309,7 +2329,7 @@ async function showMembersModal() {
   if (!CURRENT_PROJECT) return;
   const [members, users] = await Promise.all([
     api(`/projects/${CURRENT_PROJECT.id}/members`),
-    ME.role === 'admin' ? api('/auth/users') : Promise.resolve(PEOPLE)
+    ME.role === 'admin' ? api('/auth/users') : api(`/projects/${CURRENT_PROJECT.id}/member-candidates`)
   ]);
   const memberIds = new Set(members.map(member => Number(member.id)));
   showModal(`
@@ -3391,7 +3411,7 @@ async function renderAdmin() {
         activityList.innerHTML = activity.map((entry) => `
         <div class="member-option" style="display:block; padding:10px 0; border-bottom:1px solid #eee;">
           <b>${escapeHtml(entry.action)}</b>
-          <span class="hint"> by ${escapeHtml(entry.actor_name || 'Unknown user')} on ${escapeHtml(new Date(entry.created_at).toLocaleString())}</span>
+          <span class="hint"> by ${escapeHtml(entry.actor_name || 'Unknown user')} on ${escapeHtml(parseTaskFlowTimestamp(entry.created_at).toLocaleString())}</span>
           ${entry.details ? `<div>${escapeHtml(entry.details)}</div>` : ''}
         </div>`).join('');
       }
@@ -3405,7 +3425,7 @@ async function renderAdmin() {
           activityList.innerHTML = entries.length ? entries.map(entry => `
             <div class="member-option" style="display:block; padding:10px 0; border-bottom:1px solid #eee;">
               <b>${escapeHtml(entry.action)}</b>
-              <span class="hint"> by ${escapeHtml(entry.actor_name || 'Unknown user')} on ${escapeHtml(new Date(entry.created_at).toLocaleString())}</span>
+              <span class="hint"> by ${escapeHtml(entry.actor_name || 'Unknown user')} on ${escapeHtml(parseTaskFlowTimestamp(entry.created_at).toLocaleString())}</span>
               ${entry.details ? `<div>${escapeHtml(entry.details)}</div>` : ''}
             </div>`).join('') : '<p class="hint">No activity recorded yet.</p>';
         }).catch(retryError => {

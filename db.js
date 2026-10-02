@@ -63,6 +63,12 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
+    const duplicateUsername = await dbDriverInterface.prepare(`SELECT username, COUNT(*) AS duplicate_count
+      FROM users GROUP BY username COLLATE NOCASE HAVING COUNT(*) > 1 LIMIT 1`).get();
+    if (duplicateUsername) {
+      throw new Error(`Cannot enforce unique usernames until duplicate account "${duplicateUsername.username}" is resolved.`);
+    }
+    await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users(username COLLATE NOCASE)');
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,

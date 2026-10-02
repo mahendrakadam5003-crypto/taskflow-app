@@ -17,9 +17,15 @@ async function canViewTracking(req) {
   return !!(await db.prepare('SELECT user_id FROM tracking_access WHERE user_id = ?').get(req.session.userId));
 }
 
-function todayStr() {
-  const d = new Date();
-  return d.toISOString().slice(0, 10);
+function todayStr(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
 function getPunchDevice(req, reportedModel) {
@@ -404,9 +410,9 @@ router.post('/admin-punch-out', requireAdmin, async (req, res) => {
 
 // employee: own attendance history (last 30 days)
 router.get('/mine', async (req, res) => {
-  const from = new Date();
-  from.setDate(from.getDate() - 30);
-  const fromQuery = req.query.from || from.toISOString().slice(0, 10);
+  const defaultFrom = new Date(`${todayStr()}T00:00:00.000Z`);
+  defaultFrom.setUTCDate(defaultFrom.getUTCDate() - 30);
+  const fromQuery = req.query.from || defaultFrom.toISOString().slice(0, 10);
   const toQuery = req.query.to || todayStr();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fromQuery) || !/^\d{4}-\d{2}-\d{2}$/.test(toQuery) || fromQuery > toQuery) {
     return res.status(400).json({ error: 'Choose a valid attendance date range.' });

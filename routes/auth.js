@@ -213,7 +213,16 @@ router.get('/users', requireAdmin, async (req, res) => {
 
 router.get('/users/directory', requireAuth, async (req, res) => {
   try {
-    const rows = await db.prepare('SELECT id, name, username, department, role FROM users WHERE active = 1 ORDER BY name').all();
+    if (req.session.role !== 'admin') {
+      const [paymentAccess, reimbursementAccess] = await Promise.all([
+        db.prepare('SELECT user_id FROM payment_history_access WHERE user_id = ?').get(req.session.userId),
+        db.prepare('SELECT approval_level FROM reimbursement_access WHERE user_id = ?').get(req.session.userId)
+      ]);
+      if (!paymentAccess && Number(reimbursementAccess?.approval_level || 0) === 0) {
+        return res.status(403).json({ error: 'User directory access is restricted.' });
+      }
+    }
+    const rows = await db.prepare('SELECT id, name, department FROM users WHERE active = 1 ORDER BY name').all();
     res.json(rows || []);
   } catch (err) {
     sendInternalError(res, err, 'User directory request failed');
@@ -428,6 +437,30 @@ router.get('/settings', requireAdmin, async (req, res) => {
 
 router.put('/settings', requireAdmin, async (req, res) => {
   try {
+    const officeSettingKeys = ['office_lat', 'office_lng', 'office_radius_m'];
+    if (officeSettingKeys.some(key => Object.hasOwn(req.body, key))) {
+      const storedOfficeRows = await db.prepare(`SELECT key, value FROM settings
+        WHERE key IN ('office_lat', 'office_lng', 'office_radius_m')`).all();
+      const storedOfficeSettings = Object.fromEntries(storedOfficeRows.map(row => [row.key, row.value]));
+      const settingValue = key => Object.hasOwn(req.body, key) ? req.body[key] : storedOfficeSettings[key];
+      const parseNumber = value => {
+        if (value === null || value === undefined || String(value).trim() === '') return null;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      };
+      const latitude = parseNumber(settingValue('office_lat'));
+      const longitude = parseNumber(settingValue('office_lng'));
+      const radius = parseNumber(settingValue('office_radius_m'));
+      if (latitude === null || latitude < -90 || latitude > 90) {
+        return res.status(400).json({ error: 'Office latitude must be between -90 and 90.' });
+      }
+      if (longitude === null || longitude < -180 || longitude > 180) {
+        return res.status(400).json({ error: 'Office longitude must be between -180 and 180.' });
+      }
+      if (radius === null || !Number.isInteger(radius) || radius < 1 || radius > 100000) {
+        return res.status(400).json({ error: 'Office radius must be a whole number from 1 to 100000 meters.' });
+      }
+    }
     const retentionLimits = {
       attachment_retention_days: { min: 0, max: 36500 },
       attendance_location_retention_days: { min: 1, max: 36500 }
