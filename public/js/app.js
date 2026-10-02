@@ -401,7 +401,6 @@ function startTaskListPolling() {
     const activeView = currentViewName();
     try {
       if (activeView === 'mytasks') await renderMyTasks();
-      else if (CURRENT_PROJECT && document.querySelector('#view-project:not(.hidden)')) await renderTasks();
     } catch (error) {
       console.warn('Task list refresh failed:', error.message);
     } finally {
@@ -1827,7 +1826,7 @@ async function openTaskDrawer(taskId) {
         const difference = entry.field_name === 'Description' ? `<button type="button" class="link-btn task-difference-toggle" data-history-index="${index}">Show difference</button><div class="task-difference hidden" data-history-panel="${index}"><div class="task-history-old"><b>Old:</b> ${oldValue}</div><div class="task-history-new"><b>New:</b> ${newValue}</div></div>` : '';
         return `<div class="task-activity-change" data-activity-index="${index}"><b>${actor}</b> ${message} <span>· ${escapeHtml(fmtDateTime(entry.created_at))}</span>${difference}</div>`;
       }).join('');
-      activityContainer.innerHTML = `${html || '<div class="hint">No activity yet.</div>'}${activityHasMore ? '<button type="button" id="task-activity-load-more" class="link-btn">Load older activity</button>' : ''}<div id="task-activity-error" class="form-error"></div>`;
+      activityContainer.innerHTML = `${activityHasMore ? '<button type="button" id="task-activity-load-more" class="link-btn">Load older activity</button>' : ''}${html || '<div class="hint">No activity yet.</div>'}<div id="task-activity-error" class="form-error"></div>`;
       bindActivityActions();
       const loadOlderButton = $('#task-activity-load-more');
       if (loadOlderButton) loadOlderButton.onclick = async () => {
@@ -2999,10 +2998,12 @@ async function renderAdmin() {
         dataToolsStatus.textContent = summary.join(' ');
         renderDataToolIssues(failures);
         finishDataToolsProgress();
-        if (importedCount || attachmentCount) {
+        if ((importedCount || attachmentCount) && failures.length === 0) {
           await loadProjects();
           const projectToOpen = synchronizedProjects.filter(project => project.id).sort((a, b) => b.tasks - a.tasks)[0];
           if (projectToOpen) await openProject(projectToOpen.id);
+        } else if (failures.length) {
+          dataToolsStatus.textContent = `${summary.join(' ')} Review the listed issues before leaving this page.`;
         }
         if (importedCount) showAppNotification(`${importedCount} Asana project${importedCount === 1 ? '' : 's'} imported.`);
       } catch (error) {
