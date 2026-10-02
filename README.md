@@ -50,12 +50,16 @@ Log in as admin → **Admin** tab → "Office location". Get your coordinates by
 ## 6. Add your team
 Admin → Team members → fill in name, username, password, role → **Add person**. Give each person their own login and phone/PC to use it from.
 
-## Before relying on this day-to-day
-Open `server.js` and change this line to a random string of your own:
-```js
-secret: process.env.SESSION_SECRET || 'change-this-secret-before-real-use',
+## Session secret
+The app exits at startup unless `SESSION_SECRET` is set to a random value at least 32 characters long. On Windows PowerShell, generate and persist a 48-byte value for your user account:
+```powershell
+$bytes = New-Object byte[] 48
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$rng.GetBytes($bytes)
+[Environment]::SetEnvironmentVariable('SESSION_SECRET', [Convert]::ToBase64String($bytes), 'User')
+$rng.Dispose()
 ```
-This is what keeps login sessions secure — don't skip it.
+Restart VS Code or open a new PowerShell window after setting it. Never commit the value. The Render blueprint generates `SESSION_SECRET` for new services; for an existing service, set or rotate it in the Render environment settings before deploying. Rotating the secret signs out all users.
 
 ## Backing up your data
 Everything is in `taskflow.db` in this folder. Copy that one file anywhere (another drive, OneDrive folder, USB stick) to back it up. To restore, just put it back and restart the app.

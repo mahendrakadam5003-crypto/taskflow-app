@@ -1,3 +1,9 @@
+const sessionSecret = String(process.env.SESSION_SECRET || '').trim();
+if (sessionSecret.length < 32) {
+  console.error('SESSION_SECRET must be set to a random value of at least 32 characters before startup.');
+  process.exit(1);
+}
+
 const express = require('express');
 const session = require('express-session');
 const FileStore = require('session-file-store')(session);
@@ -104,7 +110,7 @@ app.use((req, res, next) => {
   next();
 });
 const sessionOptions = {
-  secret: process.env.SESSION_SECRET || 'change-this-secret-before-real-use',
+  secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
   rolling: true,
