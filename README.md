@@ -5,7 +5,7 @@ Everything lives in one file: `taskflow.db` (SQLite), sitting right next to the 
 
 ## What's in it
 - **Projects & tasks** — same layout as before: sidebar of projects, task list, detail panel with assignee/due date/description/subtasks/comments. Optional PIN lock per project.
-- **Attendance** — employees punch in/punch out from their phone or PC. If you set your office's coordinates in Admin, the app automatically tags each punch **🟢 On-site** or **🟡 Remote** based on GPS distance. Admins get a live "who's on the clock right now" view, full history, and CSV export.
+- **Attendance** — employees punch in/punch out from their phone or PC. GPS coordinates are recorded as an indicative reference only; they can be spoofed and do not prove physical presence. Admins get a live "who's on the clock right now" view, full history, and CSV export.
 - **Real logins** — every person gets their own username + password (not just a name field). Roles: `admin` (sees attendance for everyone, manages people) and `employee` (sees their own).
 
 ## 1. Install Node.js (one-time)
@@ -42,8 +42,8 @@ Use Tailscale to provide private HTTPS access:
 
 Tailscale mode keeps TaskFlow bound to loopback, trusts the local HTTPS proxy, and enables Secure session cookies. Do not expose the Node server directly to the LAN or public internet.
 
-## 5. Set your office location (for on-site detection)
-Log in as admin → **Admin** tab → "Office location". Get your coordinates by opening Google Maps, right-clicking your office, and clicking the lat/lng that pops up at the top of the menu. Set a radius in meters (150m is a reasonable default for a single building). Leave it blank if you don't want automatic on-site detection — punches will just show "location not confirmed."
+## 5. Set your office location (GPS reference)
+Log in as admin → **Admin** tab → "Office location" to save the office coordinates and radius. The saved coordinates are only a reference; the client-reported GPS can be spoofed. Do not treat it as proof of presence or use it alone for disciplinary or payroll decisions.
 
 ## 6. Add your team
 Admin → Team members → fill in name, username, password, role → **Add person**. Give each person their own login and phone/PC to use it from.
@@ -72,6 +72,6 @@ Ask me any time if you get stuck on a step, want more fields (e.g. custom column
 
 
 ## Recommended remote attendance setup (Tailscale)
-For remote employees, keep GPS-based attendance and expose TaskFlow through an HTTPS Tailscale address. Employees should open that HTTPS address on their phone/laptop while connected to Tailscale, allow browser location permission, and use the normal Punch in / Punch out buttons. The server compares the submitted GPS coordinates with the configured office radius: office punches are marked **On-site**, remote coordinates are marked **Remote**. Do not create a plain-HTTP public port for attendance because browser GPS requires a secure context.
+For remote employees, keep GPS-based attendance and expose TaskFlow through an HTTPS Tailscale address. Employees should open that HTTPS address on their phone/laptop while connected to Tailscale, allow browser location permission, and use the normal Punch in / Punch out buttons. The app records client-reported coordinates as an indicative reference only; a mock-location tool can spoof them. Do not create a plain-HTTP public port for attendance because browser GPS requires a secure context.
 
 A typical deployment is: TaskFlow listens only on `127.0.0.1:3000`, Tailscale Serve provides the HTTPS endpoint, and the Tailscale ACL restricts access to staff devices/users. Exact Tailscale Serve commands depend on your current version; use the current Tailscale admin documentation when enabling HTTPS.

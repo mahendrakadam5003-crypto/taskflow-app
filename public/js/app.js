@@ -2458,6 +2458,7 @@ async function renderPunchCard() {
       ? `<div class="attendance-registered-device"><span>Registered device</span><b>${escapeHtml(registration.device_name)}</b></div>`
       : '<div class="attendance-registered-device"><span>Device reset by administrator.</span><b>This browser will be bound automatically when you punch.</b></div>';
     card.innerHTML = registeredDeviceSummary;
+    card.insertAdjacentHTML('beforeend', '<p class="hint">GPS location is indicative only and can be spoofed; it is not proof of physical presence.</p>');
     if (!status) {
       card.insertAdjacentHTML('beforeend', `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`);
       $('#btn-punch-in').onclick = async () => {
@@ -2702,8 +2703,8 @@ async function renderAdmin() {
       </div>
 
       <div class="admin-block">
-        <h3>Office location (for on-site detection)</h3>
-        <p class="hint">Set your office's coordinates once – punches within the radius are marked 🟢 On-site, others 🟡 Remote.</p>
+        <h3>Office location (GPS reference)</h3>
+        <p class="hint">GPS-based location is indicative only and can be spoofed. It is not proof of physical presence. Use it as a reference, not for disciplinary or payroll decisions without independent verification.</p>
         <div class="admin-form-row">
           <input id="admin-lat" placeholder="Latitude" value="${settings.office_lat || ''}">
           <input id="admin-lng" placeholder="Longitude" value="${settings.office_lng || ''}">
@@ -3474,7 +3475,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
     </div>
     <div class="task-table-wrap" style="margin-top:14px; overflow-x:auto;">
       <table class="attn-table" style="min-width:1380px;">
-        <thead><tr><th>Employee</th><th>Department</th><th>Registered device</th><th>Date</th><th>Punch in</th><th>In device</th><th>Punch-in location</th><th>Punch out</th><th>Out device</th><th>Punch-out location</th><th>Action</th></tr></thead>
+        <thead><tr><th>Employee</th><th>Department</th><th>Registered device</th><th>Date</th><th>Punch in</th><th>In device</th><th>Punch-in location (indicative)</th><th>Punch out</th><th>Out device</th><th>Punch-out location (indicative)</th><th>Action</th></tr></thead>
         <tbody id="admin-attendance-table"></tbody>
       </table>
     </div>`;
@@ -3705,7 +3706,7 @@ async function adminRemoveUser(userId, userName) {
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
     try {
-      const registration = await navigator.serviceWorker.register('/service-worker.js?v=20261002-3');
+      const registration = await navigator.serviceWorker.register('/service-worker.js?v=20261002-4');
       await registration.update();
     } catch (error) {
       console.warn('Service worker update failed:', error);
