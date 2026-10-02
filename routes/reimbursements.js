@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const db = require('../db');
 const { logActivity } = require('../audit');
+const { csvValue } = require('../csv');
 const { requireAuth, requireAdmin } = require('./auth');
 const { sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { uploadToTelegram, streamFromTelegram } = require('../telegram-storage');
@@ -62,10 +63,6 @@ async function canAccessClaim(req, claim) {
   if (req.session.role === 'admin' || Number(claim.user_id) === Number(req.session.userId)) return true;
   const access = await getAccess(req);
   return Number(access.approval_level) > 0;
-}
-
-function csvValue(value) {
-  return `"${String(value ?? '').replace(/"/g, '""')}"`;
 }
 
 async function getReimbursementRows(req) {

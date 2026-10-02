@@ -4,7 +4,7 @@
   "description": "Self-hosted internal task manager + employee attendance (punch in/out, on-site detection)",
   "main": "server.js",
   "engines": {
-    "node": "20.18.0"
+    "node": ">=20.18.0"
   },
   "scripts": {
     "start": "node server.js"

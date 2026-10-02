@@ -8,7 +8,7 @@ TaskFlow runs on your PC. Depending on configuration, it can also use Turso for 
 - **Real logins** — every person gets their own username + password (not just a name field). Roles: `admin` (sees attendance for everyone, manages people) and `employee` (sees their own).
 
 ## 1. Install Node.js (one-time)
-Download and install the **LTS** version from https://nodejs.org (Node 22.5 or newer — the app uses Node's built-in SQLite, so there's nothing else to compile or install). Just click through the installer.
+Download and install Node.js **20.18.0 or newer** from https://nodejs.org. The deployed service is pinned to Node 20.18.0; newer compatible releases are supported.
 
 ## 2. Install and run
 Unzip this folder anywhere on your PC (e.g. `C:\TaskFlow`), then open a terminal/command prompt in that folder and run:
@@ -68,11 +68,20 @@ Restart VS Code or open a new PowerShell window after setting it. Never commit t
 The Render blueprint generates `SESSION_SECRET` for new services. For an existing service, set or rotate it in the Render environment settings before deploying; rotating it signs out all users. Render proxy trust is configured for its single forwarded proxy so secure cookies work behind HTTPS termination.
 
 ## Backing up your data
-Local SQLite fallback data is in `taskflow.db`. When configured, Turso holds the database and Telegram holds uploaded files/location messages; include those providers in your backup and recovery plan. A copy of `taskflow.db` alone does not back up remote data.
+For a local SQLite fallback, stop TaskFlow and back up both `taskflow.db` and the `uploads/` folder. Keep the copies somewhere separate from the computer running TaskFlow.
+
+For a Turso database, install and authenticate the [Turso CLI](https://docs.turso.tech/cli/introduction), then export a SQLite snapshot. Get the database name with `turso db list` or from `TURSO_DATABASE_URL`:
+```powershell
+turso auth login
+New-Item -ItemType Directory -Force .\backups
+$backup = ".\backups\taskflow-$(Get-Date -Format yyyyMMdd-HHmmss).db"
+turso db export YOUR_DATABASE_NAME --output-file $backup
+```
+See the [Turso `db export` reference](https://docs.turso.tech/cli/db/export). Turso notes that an exported snapshot may not include the latest writes; follow its SDK sync guidance when a fully current export is required. Back up `uploads/` as well for any locally stored files. Telegram-hosted attachments and location messages are separate from both the Turso database and `uploads/`; include Telegram storage in your recovery plan. Protect backup files as sensitive data and periodically test restoring them.
 
 ## Keeping it running after a PC restart
 By default you'd need to re-run `npm start` after a reboot. If you want it to start automatically:
-- Windows: use **Task Scheduler** to run `npm start` in this folder "At log on", or install the free tool `pm2` (`npm install -g pm2`, then `pm2 start server.js`, `pm2 save`, `pm2 startup`).
+- Windows: use **Task Scheduler** with a trigger set to **At startup** (not **At log on**). Set the action to start `C:\Program Files\nodejs\npm.cmd` with arguments `start`, and set **Start in** to the TaskFlow folder. Run it under the same Windows account that has TaskFlow's environment variables configured. `pm2 startup` is not supported on Windows.
 
 Ask me any time if you get stuck on a step, want more fields (e.g. custom columns like your SRS sheet — Contact/Address/Vendor/Price), or want the attendance view to show weekly hour totals.
 

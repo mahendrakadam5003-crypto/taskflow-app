@@ -1,6 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
+const { csvValue } = require('../csv');
 const axios = require('axios'); // Added axios to make the free API call
 const { requireAuth, requireAdmin } = require('./auth');
 const { logActivity } = require('../audit');
@@ -661,9 +662,6 @@ router.get('/export.csv', requireAdmin, async (req, res) => {
     dates.push(cursor.toISOString().slice(0, 10));
   }
 
-  function csvEscape(value) {
-    return `"${String(value ?? '').replace(/"/g, '""')}"`;
-  }
   function displayDate(date) {
     const [year, month, day] = date.split('-');
     return `${day}-${month}-${year}`;
@@ -698,7 +696,7 @@ router.get('/export.csv', requireAdmin, async (req, res) => {
       lateMinutes = Math.max(0, Math.round((inDate - shiftDate) / 60000));
     }
     const lateText = lateMinutes > 0 ? `${lateMinutes >= 60 ? `${Math.floor(lateMinutes / 60)}hr ` : ''}${lateMinutes % 60 ? `${lateMinutes % 60} mins` : ''}`.trim() : '-';
-    lines.push([serial++, displayDate(date), user.name, punchedIn ? 'P' : 'A', inTime, outTime, duration(workingMinutes), lateText].map(csvEscape).join(','));
+    lines.push([serial++, displayDate(date), user.name, punchedIn ? 'P' : 'A', inTime, outTime, duration(workingMinutes), lateText].map(csvValue).join(','));
   }));
   
   res.setHeader('Content-Type', 'text/csv');
