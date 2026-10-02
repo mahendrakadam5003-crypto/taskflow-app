@@ -1101,9 +1101,11 @@ router.put('/tasks/:id', async (req, res) => {
 router.get('/tasks/:id/history', async (req, res) => {
   try {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
-    const rows = await db.prepare(`SELECT h.*, u.name AS actor_name
+    const rows = await db.prepare(`SELECT * FROM (
+      SELECT h.*, u.name AS actor_name
       FROM task_history h LEFT JOIN users u ON u.id = h.actor_id
-      WHERE h.task_id = ? ORDER BY h.created_at ASC, h.id ASC`).all(req.params.id);
+      WHERE h.task_id = ? ORDER BY h.created_at DESC, h.id DESC LIMIT 100
+    ) recent_history ORDER BY created_at ASC, id ASC`).all(req.params.id);
     res.json(rows || []);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1189,10 +1191,10 @@ router.get('/tasks/:id', async (req, res) => {
     const [canChangeWorkMode, subtasks, comments, history, checkinUsers] = await Promise.all([
       canChangeTaskWorkMode(req),
       db.prepare('SELECT * FROM subtasks WHERE task_id=? ORDER BY position,id').all(task.id),
-      db.prepare('SELECT c.*,u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE task_id=? ORDER BY c.created_at,c.id').all(task.id),
+      db.prepare('SELECT c.*,u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE task_id=? ORDER BY c.created_at DESC,c.id DESC LIMIT 100').all(task.id),
       db.prepare(`SELECT h.*, u.name AS actor_name
         FROM task_history h LEFT JOIN users u ON u.id = h.actor_id
-        WHERE h.task_id = ? ORDER BY h.created_at ASC, h.id ASC`).all(task.id),
+        WHERE h.task_id = ? ORDER BY h.created_at DESC, h.id DESC LIMIT 100`).all(task.id),
       db.prepare(`SELECT u.id, u.name, c.check_in_at, c.check_in_lat, c.check_in_lng, c.check_out_at, c.check_out_lat, c.check_out_lng
         FROM users u JOIN task_checkin_access r ON r.user_id=u.id
         LEFT JOIN task_checkins c ON c.id=(SELECT latest.id FROM task_checkins latest

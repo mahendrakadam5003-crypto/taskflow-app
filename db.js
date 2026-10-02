@@ -258,6 +258,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     if (!(commentColumns || []).some(row => (row.name || row.NAME) === 'author_name')) {
       await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN author_name TEXT');
     }
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS comments_task_activity_idx ON comments(task_id, created_at, id)');
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS attendance (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -412,6 +413,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     if (!(taskHistoryColumns || []).some(row => (row.name || row.NAME) === 'author_name')) {
       await dbDriverInterface.exec('ALTER TABLE task_history ADD COLUMN author_name TEXT');
     }
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS task_history_task_activity_idx ON task_history(task_id, created_at, id)');
 
     console.log("✅ Cloud tables initialized. Running migrations and seeds...");
 
