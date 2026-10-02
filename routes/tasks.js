@@ -4,6 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { gunzipSync } = require('zlib');
 const axios = require('axios');
 const FormData = require('form-data');
 const db = require('../db');
@@ -172,6 +173,19 @@ const asanaAttachmentUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024, files: 5 }
 });
+const handleAsanaUploadError = (uploadMiddleware, label) => (req, res, next) => {
+  uploadMiddleware(req, res, error => {
+    if (!error) return next();
+    const tooLarge = error.code === 'LIMIT_FILE_SIZE';
+    const status = tooLarge ? 413 : 400;
+    const message = tooLarge
+      ? (label === 'Asana project JSON'
+        ? 'Asana project JSON exceeds the 20 MB upload limit after compression. Split the export into smaller projects or reduce its history.'
+        : 'An Asana attachment exceeds the 20 MB per-file upload limit. Remove it from the selected folder or reduce its size.')
+      : `Unable to receive ${label.toLowerCase()}: ${error.message}`;
+    res.status(status).json({ error: message });
+  });
+};
 
 async function canAccessProject(projectId, userId, admin = false) {
   if (admin) return true;
@@ -567,7 +581,7 @@ router.get('/admin/asana-import/progress/:id', requireAdmin, (req, res) => {
   res.json(progress);
 });
 
-router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projects', 20), async (req, res) => {
+router.post('/admin/asana-import', requireAdmin, handleAsanaUploadError(asanaImportUpload.array('projects', 20), 'Asana project JSON'), async (req, res) => {
   const files = req.files || [];
   if (!files.length) return res.status(400).json({ error: 'Choose one or more Asana project JSON files.' });
   const progressId = String(req.body?.progress_id || '').slice(0, 100);
@@ -615,7 +629,11 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
     let createdProject = false;
     unmatchedNames = new Set();
     try {
-      const source = JSON.parse(file.buffer.toString('utf8').replace(/^\uFEFF/, ''));
+      const isCompressed = /\.gz$/i.test(file.originalname) || file.mimetype === 'application/gzip';
+      const sourceBuffer = isCompressed
+        ? gunzipSync(file.buffer, { maxOutputLength: 64 * 1024 * 1024 })
+        : file.buffer;
+      const source = JSON.parse(sourceBuffer.toString('utf8').replace(/^\uFEFF/, ''));
       const sourceProject = source.project;
       projectGid = String(sourceProject?.gid || '');
       if (!projectGid || !sourceProject?.name || !Array.isArray(source.tasks)) {
@@ -774,7 +792,7 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
       if (progressId) {
         asanaImportProgress.set(progressId, { status: 'failed', percent: currentProgress ? Math.min(99, asanaImportProgress.get(progressId)?.percent || 0) : 0, message: error.message, eta_seconds: null, updated_at: Date.now() });
       }
-      if (projectId) {
+      if (projectId && createdProject) {
         const taskIds = await db.prepare('SELECT id FROM tasks WHERE project_id = ?').all(projectId).catch(() => []);
         const ids = (taskIds || []).map(row => Number(row.id));
         if (ids.length) {
@@ -784,9 +802,9 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
           await db.prepare(`DELETE FROM task_history WHERE task_id IN (${marks})`).run(...ids).catch(() => {});
           await db.prepare(`DELETE FROM task_checkins WHERE task_id IN (${marks})`).run(...ids).catch(() => {});
         }
-        if (createdProject) await db.prepare('DELETE FROM project_members WHERE project_id = ?').run(projectId).catch(() => {});
+        await db.prepare('DELETE FROM project_members WHERE project_id = ?').run(projectId).catch(() => {});
         await db.prepare('DELETE FROM tasks WHERE project_id = ?').run(projectId).catch(() => {});
-        if (createdProject) await db.prepare('DELETE FROM projects WHERE id = ?').run(projectId).catch(() => {});
+        await db.prepare('DELETE FROM projects WHERE id = ?').run(projectId).catch(() => {});
       }
       results.push({ file: file.originalname, status: 'failed', project_gid: projectGid, error: error.message });
     }
@@ -794,7 +812,7 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
   res.json({ ok: results.every(result => result.status === 'imported'), results });
 });
 
-router.post('/admin/asana-import/:projectId/attachments', requireAdmin, asanaAttachmentUpload.array('attachments', 5), async (req, res) => {
+router.post('/admin/asana-import/:projectId/attachments', requireAdmin, handleAsanaUploadError(asanaAttachmentUpload.array('attachments', 5), 'Asana attachment'), async (req, res) => {
   const projectId = Number(req.params.projectId);
   const project = await db.prepare('SELECT id, asana_gid FROM projects WHERE id = ? AND asana_gid IS NOT NULL').get(projectId);
   if (!project) return res.status(404).json({ error: 'Imported Asana project not found.' });
@@ -1153,6 +1171,34 @@ router.get('/tasks/:id/history', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+router.get('/tasks/:id/activity', async (req, res) => {
+  try {
+    if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 50) : 15;
+    const offset = Math.max(0, Number.parseInt(req.query.offset, 10) || 0);
+    const rows = await db.prepare(`SELECT * FROM (
+      SELECT 'comment' AS activity_type, c.id, c.user_id, c.author_name, c.body, c.edited_at,
+        c.image_path, c.attachment_name, c.attachment_type, c.created_at,
+        u.name AS user_name, NULL AS actor_name, NULL AS field_name, NULL AS old_value, NULL AS new_value
+      FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE c.task_id=?
+      UNION ALL
+      SELECT 'history' AS activity_type, h.id, h.actor_id AS user_id, h.author_name, NULL AS body, NULL AS edited_at,
+        NULL AS image_path, NULL AS attachment_name, NULL AS attachment_type, h.created_at,
+        NULL AS user_name, u.name AS actor_name, h.field_name, h.old_value, h.new_value
+      FROM task_history h LEFT JOIN users u ON u.id=h.actor_id WHERE h.task_id=?
+    ) activity
+    ORDER BY created_at DESC, id DESC, activity_type DESC LIMIT ? OFFSET ?`)
+      .allStrict(req.params.id, req.params.id, limit + 1, offset);
+    const hasMore = rows.length > limit;
+    const items = rows.slice(0, limit).map(item => ({
+      ...item,
+      attachment_available: !!(item.image_path && (item.image_path.startsWith('/api/download/') || fs.existsSync(path.join(__dirname, '..', item.image_path.replace(/^\/uploads\//, 'uploads/')))))
+    }));
+    res.json({ items, has_more: hasMore, next_offset: offset + items.length });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 async function getTaskForCheckin(taskId, userId, admin) {
   const task = await db.prepare('SELECT id, project_id, title, assignee_id, work_mode FROM tasks WHERE id=?').get(taskId);
   if (!task || !(await canAccessTask(taskId, userId, admin))) return null;
@@ -1231,13 +1277,9 @@ router.get('/tasks/:id', async (req, res) => {
         return true;
       });
     };
-    const [canChangeWorkMode, subtasks, comments, history, checkinUsers] = await Promise.all([
+    const [canChangeWorkMode, subtasks, checkinUsers] = await Promise.all([
       canChangeTaskWorkMode(req),
       db.prepare('SELECT * FROM subtasks WHERE task_id=? ORDER BY position,id').all(task.id),
-      db.prepare('SELECT c.*,u.name AS user_name FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE task_id=? ORDER BY c.created_at DESC,c.id DESC LIMIT 100').all(task.id),
-      db.prepare(`SELECT h.*, u.name AS actor_name
-        FROM task_history h LEFT JOIN users u ON u.id = h.actor_id
-        WHERE h.task_id = ? ORDER BY h.created_at DESC, h.id DESC LIMIT 100`).all(task.id),
       db.prepare(`SELECT u.id, u.name, c.check_in_at, c.check_in_lat, c.check_in_lng, c.check_out_at, c.check_out_lat, c.check_out_lng
         FROM users u JOIN task_checkin_access r ON r.user_id=u.id
         LEFT JOIN task_checkins c ON c.id=(SELECT latest.id FROM task_checkins latest
@@ -1246,12 +1288,6 @@ router.get('/tasks/:id', async (req, res) => {
     ]);
     task.can_change_work_mode = canChangeWorkMode ? 1 : 0;
     task.subtasks = uniqueRows(subtasks, ['title', 'done', 'position']);
-    task.comments = uniqueRows(comments, ['user_id', 'author_name', 'body', 'image_path', 'attachment_name', 'attachment_type', 'created_at']);
-    task.comments = task.comments.map(comment => ({
-      ...comment,
-      attachment_available: !!(comment.image_path && (comment.image_path.startsWith('/api/download/') || fs.existsSync(path.join(__dirname, '..', comment.image_path.replace(/^\/uploads\//, 'uploads/')))))
-    }));
-    task.history = uniqueRows(history, ['actor_id', 'author_name', 'field_name', 'old_value', 'new_value', 'created_at']);
     task.checkin_users = checkinUsers;
     task.checkin_required = task.checkin_users.length ? 1 : 0;
     res.json(task);

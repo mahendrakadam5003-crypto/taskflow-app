@@ -1674,6 +1674,8 @@ async function openTaskDrawer(taskId) {
     const task = await api(`/tasks/${taskId}`, { signal: controller.signal });
     if (activeTaskDrawerController !== controller) { clearTimeout(loadTimeout); return; }
     clearTimeout(loadTimeout);
+    const activityPagePromise = api(`/tasks/${taskId}/activity?limit=15&offset=0`, { signal: controller.signal })
+      .catch(error => ({ items: [], has_more: false, error }));
     let members = [];
     const membersPromise = api(`/projects/${task.project_id}/members`, { signal: controller.signal })
       .then(projectMembers => {
@@ -1695,7 +1697,6 @@ async function openTaskDrawer(taskId) {
           console.warn('Project member options unavailable:', error.message);
         }
       });
-    let taskHistory = task.history || [];
     const currentCheckin = (task.checkin_users || []).find(user => Number(user.id) === Number(ME?.id));
     const taskCheckinRequired = ME?.role !== 'admin'
       && task.work_mode === 'on_field'
@@ -1763,73 +1764,115 @@ async function openTaskDrawer(taskId) {
         openTaskDrawer(taskId);
       };
     });
-    const compactHistory = [];
-    (task.history || taskHistory || []).forEach(change => {
-      const previous = compactHistory[compactHistory.length - 1];
-      if (previous?.field_name === 'Description' && change.field_name === 'Description') {
-        previous.new_value = change.new_value;
-        previous.created_at = change.created_at;
-        previous.actor_name = change.actor_name;
-      } else {
-        compactHistory.push({ ...change });
-      }
-    });
-    const activity = [
-      ...(task.comments || []).map(comment => ({ ...comment, activityType: 'comment' })),
-      ...compactHistory.map(change => ({ ...change, activityType: 'change' }))
-    ].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    $('#drawer-comments').innerHTML = activity.length ? activity.map((entry, index) => {
-      if (entry.activityType === 'comment') return `<div class="comment" data-comment-id="${entry.id}">
-        <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b> · ${escapeHtml(fmtDateTime(entry.created_at))}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
-        <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
-        ${renderCommentAttachment(entry)}
-      </div>`;
-      const actor = escapeHtml(entry.actor_name || entry.author_name || (entry.field_name.startsWith('Asana:') ? 'Unknown Asana user' : 'Unknown user'));
-      const oldValue = escapeHtml(entry.old_value || '(empty)');
-      const newValue = escapeHtml(entry.new_value || '(empty)');
-      let message = entry.field_name === 'Task created' ? 'created this task' : `changed the ${entry.field_name.toLowerCase()}`;
-      if (entry.field_name === 'Assignee') message = `reassigned this task from ${oldValue} to ${newValue}`;
-      if (entry.field_name === 'Due date') message = `changed the due date from ${oldValue} to ${newValue}`;
-      if (entry.field_name === 'Task check-in') message = 'checked in to this task';
-      if (entry.field_name === 'Task check-out') message = 'checked out of this task';
-      const difference = entry.field_name === 'Description' ? `<button type="button" class="link-btn task-difference-toggle" data-history-index="${index}">Show difference</button><div class="task-difference hidden" data-history-panel="${index}"><div class="task-history-old"><b>Old:</b> ${oldValue}</div><div class="task-history-new"><b>New:</b> ${newValue}</div></div>` : '';
-      return `<div class="task-activity-change" data-activity-index="${index}"><b>${actor}</b> ${message} <span>· ${escapeHtml(fmtDateTime(entry.created_at))}</span>${difference}</div>`;
-    }).join('') : '<div class="hint">No activity yet.</div>';
-    $$('.task-difference-toggle').forEach(button => {
-      button.onclick = () => {
-        const panel = document.querySelector(`[data-history-panel="${button.dataset.historyIndex}"]`);
-        const expanded = panel.classList.toggle('hidden');
-        button.textContent = expanded ? 'Show difference' : 'Hide difference';
-      };
-    });
-    $$('.comment-edit-button').forEach(button => {
-      button.onclick = () => {
-        const comment = (task.comments || []).find(item => Number(item.id) === Number(button.dataset.commentId));
-        const commentElement = button.closest('.comment');
-        const bodyElement = commentElement?.querySelector('.comment-body');
-        if (!comment || !bodyElement || commentElement.querySelector('.comment-edit-form')) return;
-        const originalBody = comment.body || '';
-        bodyElement.innerHTML = `<div class="comment-edit-form"><textarea rows="3"></textarea><div class="comment-edit-actions"><button type="button" class="btn btn-secondary btn-sm comment-edit-cancel">Cancel</button><button type="button" class="btn btn-primary btn-sm comment-edit-save">Save</button></div><div class="form-error comment-edit-error"></div></div>`;
-        const editor = bodyElement.querySelector('textarea');
-        const error = bodyElement.querySelector('.comment-edit-error');
-        editor.value = originalBody;
-        editor.focus();
-        bodyElement.querySelector('.comment-edit-cancel').onclick = () => { bodyElement.innerHTML = escapeHtml(originalBody).replace(/\n/g, '<br>'); };
-        bodyElement.querySelector('.comment-edit-save').onclick = async () => {
-          const nextBody = editor.value.trim();
-          if (!nextBody) { error.textContent = 'Comment cannot be empty.'; return; }
-          try {
-            const result = await api(`/comments/${comment.id}`, { method: 'PUT', body: { body: nextBody } });
-            comment.body = nextBody;
-            comment.edited_at = result.edited_at;
-            bodyElement.innerHTML = escapeHtml(nextBody).replace(/\n/g, '<br>');
-            const meta = commentElement.querySelector('.comment-meta');
-            const editButton = meta.querySelector('.comment-edit-button');
-            meta.innerHTML = `<b>${escapeHtml(comment.user_name || 'User')}</b> · ${escapeHtml(fmtDateTime(comment.created_at))} <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(result.edited_at))}</span>`;
-            meta.appendChild(editButton);
-          } catch (err) { error.textContent = err.message; }
+    const activityContainer = $('#drawer-comments');
+    const activityItems = [];
+    let activityOffset = 0;
+    let activityHasMore = false;
+    let activityLoading = false;
+    const bindActivityActions = () => {
+      $$('.task-difference-toggle').forEach(button => {
+        button.onclick = () => {
+          const panel = activityContainer.querySelector(`[data-history-panel="${button.dataset.historyIndex}"]`);
+          if (!panel) return;
+          const expanded = panel.classList.toggle('hidden');
+          button.textContent = expanded ? 'Show difference' : 'Hide difference';
         };
+      });
+      $$('.comment-edit-button').forEach(button => {
+        button.onclick = () => {
+          const comment = activityItems.find(item => item.activity_type === 'comment' && Number(item.id) === Number(button.dataset.commentId));
+          const commentElement = button.closest('.comment');
+          const bodyElement = commentElement?.querySelector('.comment-body');
+          if (!comment || !bodyElement || commentElement.querySelector('.comment-edit-form')) return;
+          const originalBody = comment.body || '';
+          bodyElement.innerHTML = `<div class="comment-edit-form"><textarea rows="3"></textarea><div class="comment-edit-actions"><button type="button" class="btn btn-secondary btn-sm comment-edit-cancel">Cancel</button><button type="button" class="btn btn-primary btn-sm comment-edit-save">Save</button></div><div class="form-error comment-edit-error"></div></div>`;
+          const editor = bodyElement.querySelector('textarea');
+          const error = bodyElement.querySelector('.comment-edit-error');
+          editor.value = originalBody;
+          editor.focus();
+          bodyElement.querySelector('.comment-edit-cancel').onclick = () => { bodyElement.innerHTML = escapeHtml(originalBody).replace(/\n/g, '<br>'); };
+          bodyElement.querySelector('.comment-edit-save').onclick = async () => {
+            const nextBody = editor.value.trim();
+            if (!nextBody) { error.textContent = 'Comment cannot be empty.'; return; }
+            try {
+              const result = await api(`/comments/${comment.id}`, { method: 'PUT', body: { body: nextBody } });
+              comment.body = nextBody;
+              comment.edited_at = result.edited_at;
+              bodyElement.innerHTML = escapeHtml(nextBody).replace(/\n/g, '<br>');
+              const meta = commentElement.querySelector('.comment-meta');
+              const editButton = meta.querySelector('.comment-edit-button');
+              meta.innerHTML = `<b>${escapeHtml(comment.user_name || comment.author_name || 'Unknown user')}</b> · ${escapeHtml(fmtDateTime(comment.created_at))} <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(result.edited_at))}</span>`;
+              if (editButton) meta.appendChild(editButton);
+            } catch (err) { error.textContent = err.message; }
+          };
+        };
+      });
+    };
+    const renderActivity = () => {
+      const orderedActivity = [...activityItems].reverse();
+      const html = orderedActivity.map((entry, index) => {
+        if (entry.activity_type === 'comment') return `<div class="comment" data-comment-id="${entry.id}">
+          <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b> · ${escapeHtml(fmtDateTime(entry.created_at))}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
+          <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
+          ${renderCommentAttachment(entry)}
+        </div>`;
+        const actor = escapeHtml(entry.actor_name || entry.author_name || (String(entry.field_name || '').startsWith('Asana:') ? 'Unknown Asana user' : 'Unknown user'));
+        const oldValue = escapeHtml(entry.old_value || '(empty)');
+        const newValue = escapeHtml(entry.new_value || '(empty)');
+        let message = entry.field_name === 'Task created' ? 'created this task' : `changed the ${String(entry.field_name || 'activity').toLowerCase()}`;
+        if (entry.field_name === 'Assignee') message = `reassigned this task from ${oldValue} to ${newValue}`;
+        if (entry.field_name === 'Due date') message = `changed the due date from ${oldValue} to ${newValue}`;
+        if (entry.field_name === 'Task check-in') message = 'checked in to this task';
+        if (entry.field_name === 'Task check-out') message = 'checked out of this task';
+        const difference = entry.field_name === 'Description' ? `<button type="button" class="link-btn task-difference-toggle" data-history-index="${index}">Show difference</button><div class="task-difference hidden" data-history-panel="${index}"><div class="task-history-old"><b>Old:</b> ${oldValue}</div><div class="task-history-new"><b>New:</b> ${newValue}</div></div>` : '';
+        return `<div class="task-activity-change" data-activity-index="${index}"><b>${actor}</b> ${message} <span>· ${escapeHtml(fmtDateTime(entry.created_at))}</span>${difference}</div>`;
+      }).join('');
+      activityContainer.innerHTML = `${html || '<div class="hint">No activity yet.</div>'}${activityHasMore ? '<button type="button" id="task-activity-load-more" class="link-btn">Load older activity</button>' : ''}<div id="task-activity-error" class="form-error"></div>`;
+      bindActivityActions();
+      const loadOlderButton = $('#task-activity-load-more');
+      if (loadOlderButton) loadOlderButton.onclick = async () => {
+        if (activityLoading) return;
+        activityLoading = true;
+        loadOlderButton.disabled = true;
+        loadOlderButton.textContent = 'Loading older activity...';
+        try {
+          const page = await api(`/tasks/${taskId}/activity?limit=15&offset=${activityOffset}`, { signal: controller.signal });
+          if (activeTaskDrawerController !== controller) return;
+          activityItems.push(...page.items);
+          activityOffset = page.next_offset;
+          activityHasMore = page.has_more;
+          renderActivity();
+        } catch (error) {
+          const errorNode = $('#task-activity-error');
+          if (errorNode) errorNode.textContent = error.message;
+          loadOlderButton.disabled = false;
+          loadOlderButton.textContent = 'Retry loading older activity';
+        } finally {
+          activityLoading = false;
+        }
       };
+    };
+    activityContainer.innerHTML = '<div class="hint">Loading recent activity...</div>';
+    activityPagePromise.then(page => {
+      if (activeTaskDrawerController !== controller) return;
+      if (page.error) {
+        activityContainer.innerHTML = `<div class="form-error">Unable to load activity: ${escapeHtml(page.error.message)}</div><button type="button" id="task-activity-retry" class="link-btn">Retry</button>`;
+        $('#task-activity-retry').onclick = () => {
+          activityContainer.innerHTML = '<div class="hint">Loading recent activity...</div>';
+          api(`/tasks/${taskId}/activity?limit=15&offset=0`, { signal: controller.signal }).then(nextPage => {
+            if (activeTaskDrawerController !== controller) return;
+            activityItems.push(...nextPage.items);
+            activityOffset = nextPage.next_offset;
+            activityHasMore = nextPage.has_more;
+            renderActivity();
+          }).catch(error => { activityContainer.innerHTML = `<div class="form-error">Unable to load activity: ${escapeHtml(error.message)}</div>`; });
+        };
+        return;
+      }
+      activityItems.push(...page.items);
+      activityOffset = page.next_offset;
+      activityHasMore = page.has_more;
+      renderActivity();
     });
     membersPromise.catch(() => {});
     $('#comment-image-preview').innerHTML = '';
@@ -1904,7 +1947,6 @@ async function openTaskDrawer(taskId) {
       if (saveState) { saveState.textContent = 'Saved'; saveState.className = 'drawer-save-state saved'; saveState.title = ''; }
       try {
         await renderTasks();
-        taskHistory = await api(`/tasks/${taskId}/history`);
         await openTaskDrawer(taskId);
       } catch (refreshError) {
         console.error('Task saved, but the task view could not refresh:', refreshError);
@@ -2753,6 +2795,19 @@ async function renderAdmin() {
       if (remaining < 60) return `about ${remaining}s left`;
       return `about ${Math.floor(remaining / 60)}m ${remaining % 60}s left`;
     };
+    const prepareProjectUpload = async file => {
+      const uploadLimit = 20 * 1024 * 1024;
+      if (file.size <= uploadLimit) return { blob: file, filename: file.name };
+      if (typeof CompressionStream === 'undefined') {
+        throw new Error(`${file.name} is ${(file.size / (1024 * 1024)).toFixed(1)} MB, above the 20 MB server limit, and this browser cannot gzip it. Try a current Chrome or Edge browser.`);
+      }
+      setDataToolsProgress(0, `Compressing ${file.name} for upload...`, true);
+      const compressed = await new Response(file.stream().pipeThrough(new CompressionStream('gzip'))).blob();
+      if (compressed.size >= file.size || compressed.size > uploadLimit) {
+        throw new Error(`${file.name} is too large to upload. Its compressed size is ${(compressed.size / (1024 * 1024)).toFixed(1)} MB; the server limit is 20 MB.`);
+      }
+      return { blob: compressed, filename: `${file.name}.gz` };
+    };
     const postFormWithProgress = (url, formData, onProgress, progressId = null) => new Promise((resolve, reject) => {
       const request = new XMLHttpRequest();
       let pollTimer = null;
@@ -2788,7 +2843,10 @@ async function renderAdmin() {
         let payload = {};
         try { payload = JSON.parse(request.responseText); } catch (error) { }
         if (request.status >= 200 && request.status < 300) resolve(payload);
-        else reject(new Error(payload.error || `Upload failed (${request.status}).`));
+        else {
+          const operation = url.includes('/attachments') ? 'Attachment upload' : 'Asana project import';
+          reject(new Error(payload.error || `${operation} failed with HTTP ${request.status}.`));
+        }
       };
       request.onerror = () => { stopPolling(); reject(new Error('Network error while uploading data.')); };
       request.onabort = () => { stopPolling(); reject(new Error('Upload was cancelled.')); };
@@ -2858,7 +2916,8 @@ async function renderAdmin() {
           };
           projectProgress(0);
           const projectForm = new FormData();
-          projectForm.append('projects', entry.file, entry.file.name);
+          const preparedProject = await prepareProjectUpload(entry.file);
+          projectForm.append('projects', preparedProject.blob, preparedProject.filename);
           const progressId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
           projectForm.append('progress_id', progressId);
           const projectPayload = await postFormWithProgress('/api/admin/asana-import', projectForm, (percent, phase, serverProgress) => projectProgress(percent, phase, serverProgress), progressId);
