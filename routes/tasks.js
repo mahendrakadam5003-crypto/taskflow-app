@@ -16,7 +16,7 @@ router.use(requireAuth);
 
 function formatStorageUsage(totalBytes, usedBytes, source = 'turso') {
   const total = Number(totalBytes) || 0;
-  const used = Math.min(total, Math.max(0, Number(usedBytes) || 0));
+  const used = Math.max(0, Number(usedBytes) || 0);
   const free = Math.max(0, total - used);
   const percentUsed = total ? (used / total) * 100 : 0;
   const toGB = (bytes) => Number((bytes / (1024 ** 3)).toFixed(2));

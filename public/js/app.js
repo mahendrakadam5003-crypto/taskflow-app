@@ -533,13 +533,18 @@ function formatStorageDisplay(gb, bytes) {
   return `${gb} GB`;
 }
 
+function isStorageQuotaAvailable(storage) {
+  return storage?.available !== false
+    && (Number(storage?.total_bytes || 0) > 0 || Number(storage?.total_gb || 0) > 0);
+}
+
 function showStorageDetails(storage) {
   if (!storage) return;
-  const storageAvailable = storage.available !== false;
+  const storageAvailable = isStorageQuotaAvailable(storage);
   showModal(`
     <h3>Storage usage</h3>
     <div class="storage-detail-grid">
-      <div><small>Used</small><b>${storageAvailable ? formatStorageDisplay(storage.used_gb, storage.used_bytes) : 'Unavailable'}</b></div>
+      <div><small>Used</small><b>${Number(storage.used_bytes || 0) > 0 ? formatStorageDisplay(storage.used_gb, storage.used_bytes) : storageAvailable ? formatStorageDisplay(storage.used_gb, storage.used_bytes) : 'Unavailable'}</b></div>
       <div><small>Remaining</small><b>${storageAvailable ? formatStorageDisplay(storage.free_gb, storage.free_bytes) : 'Unavailable'}</b></div>
       <div><small>Total</small><b>${storageAvailable ? `${storage.total_gb} GB` : 'Unavailable'}</b></div>
       <div><small>Usage</small><b>${storageAvailable ? `${storage.percent_used}%` : 'Unavailable'}</b></div>
@@ -565,13 +570,14 @@ async function renderDashboard() {
     const summary = await api('/dashboard/summary');
     const summaryPanel = $('#dashboard-summary');
     if (summaryPanel) {
+      const storageQuotaAvailable = isStorageQuotaAvailable(summary.storage);
       const storageMetric = ME?.role === 'admin' && summary?.storage ? `
         <div class="dashboard-metric storage">
           <small>Storage used</small>
-          <b>${summary.storage.available === false ? 'Unavailable' : `${summary.storage.percent_used}%`}</b>
-          <div class="dashboard-progress"><span style="width:${summary.storage.available === false ? 0 : Math.min(100, Math.max(0, summary.storage.percent_used))}%"></span></div>
-          <small>${summary.storage.available === false ? 'Turso did not provide a storage limit' : `${formatStorageDisplay(summary.storage.used_gb, summary.storage.used_bytes)} used · ${formatStorageDisplay(summary.storage.free_gb, summary.storage.free_bytes)} left`}</small>
-          <small>${summary.storage.available === false ? 'Check your Turso plan quota' : `${summary.storage.total_gb} GB total`}</small>
+          <b>${storageQuotaAvailable ? `${summary.storage.percent_used}%` : 'Quota unavailable'}</b>
+          <div class="dashboard-progress"><span style="width:${storageQuotaAvailable ? Math.min(100, Math.max(0, summary.storage.percent_used)) : 0}%"></span></div>
+          <small>${Number(summary.storage.used_bytes || 0) > 0 ? `${formatStorageDisplay(summary.storage.used_gb, summary.storage.used_bytes)} used` : storageQuotaAvailable ? `${formatStorageDisplay(summary.storage.used_gb, summary.storage.used_bytes)} used` : 'Database usage unavailable'}${storageQuotaAvailable ? ` · ${formatStorageDisplay(summary.storage.free_gb, summary.storage.free_bytes)} left` : ''}</small>
+          <small>${storageQuotaAvailable ? `${summary.storage.total_gb} GB total` : 'Turso did not provide a storage limit'}</small>
         </div>` : '';
 
       summaryPanel.innerHTML = `
