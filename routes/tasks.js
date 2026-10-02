@@ -70,9 +70,18 @@ async function getStorageUsage() {
     const headers = { Authorization: `Bearer ${platformToken}` };
     let organization = process.env.TURSO_ORG;
     let organizationRecord = null;
-    if (!organization || /^\d+$/.test(organization)) {
+    let organizations = [];
+    try {
       const organizationsResponse = await axios.get('https://api.turso.tech/v1/organizations', { headers });
-      const organizations = Array.isArray(organizationsResponse.data) ? organizationsResponse.data : [];
+      organizations = Array.isArray(organizationsResponse.data) ? organizationsResponse.data : [];
+    } catch (error) {
+      if (!organization || /^\d+$/.test(organization)) throw error;
+      console.error('Turso organization plan lookup unavailable:', error.response?.data?.error || error.message);
+    }
+    if (organization && !/^\d+$/.test(organization)) {
+      organizationRecord = organizations.find(item => item.slug === organization) || null;
+    }
+    if (!organization || /^\d+$/.test(organization)) {
       organizationRecord = organizations.find(item => item.type === 'team') || organizations[0];
       organization = organizationRecord?.slug;
     }
@@ -115,17 +124,23 @@ async function getStorageUsage() {
     const actualDatabaseBytes = await getDatabaseStorageBytes();
     const planFallback = documentedPlanLimits[planId]
       || (/free|starter/i.test(planId) ? documentedPlanLimits.starter : 0);
-    const quotaCandidates = [organizationLimit, databaseLimit, planLimit]
+    const quotaCandidates = [databaseLimit, planLimit]
       .map(value => typeof value === 'number' ? value : parseStorageLimit(value))
       .filter(value => value >= 1024 ** 2 && value >= actualDatabaseBytes);
-    const totalBytes = quotaCandidates[0] || planFallback;
+    const totalBytes = quotaCandidates[0] || planFallback
+      || (typeof organizationLimit === 'number' ? organizationLimit : parseStorageLimit(organizationLimit));
     if (Number.isFinite(Number(usedBytes)) && Number.isFinite(Number(totalBytes))) {
       return formatStorageUsage(totalBytes, Math.max(Number(usedBytes) || 0, actualDatabaseBytes));
     }
     throw new Error('Turso usage response did not include storage values');
   } catch (error) {
     console.error('Turso storage usage unavailable:', error.response?.data?.error || error.message);
-    return getLocalStorageUsage();
+    try {
+      return formatStorageUsage(0, await getDatabaseStorageBytes(), 'turso');
+    } catch (databaseError) {
+      console.error('Turso database size unavailable:', databaseError.message);
+      return getLocalStorageUsage();
+    }
   }
 }
 
