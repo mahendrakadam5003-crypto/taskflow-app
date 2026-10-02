@@ -13,7 +13,7 @@ async function api(path, opts = {}) {
   });
   let data = null;
   try { data = await res.json(); } catch (e) { /* no body */ }
-  if (res.status === 401 && path !== '/auth/login') {
+  if (res.status === 401 && path !== '/auth/login' && ME) {
     ME = null;
     $('#app')?.classList.add('hidden');
     $('#login-screen')?.classList.remove('hidden');
@@ -471,6 +471,7 @@ if (loginForm) {
 const btnLogout = $('#btn-logout');
 if (btnLogout) {
   btnLogout.addEventListener('click', async () => {
+    ME = null;
     stopAttendancePolling();
     stopLiveTracking();
     stopNotificationsPolling();
@@ -500,6 +501,7 @@ if (mobileBackButton) {
 }
 if (dashboardLogoutButton) {
   dashboardLogoutButton.addEventListener('click', async () => {
+    ME = null;
     stopAttendancePolling();
     stopLiveTracking();
     stopNotificationsPolling();

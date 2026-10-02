@@ -161,7 +161,7 @@ router.post('/', upload.array('receipt', 10), async (req, res) => {
   }
 });
 
-router.put('/:id', upload.array('receipt', 10), async (req, res) => {
+router.put('/:id(\\d+)', upload.array('receipt', 10), async (req, res) => {
   try {
     const claim = await db.prepare('SELECT * FROM reimbursements WHERE id = ?').get(req.params.id);
     if (!claim) return res.status(404).json({ error: 'Expense not found.' });
