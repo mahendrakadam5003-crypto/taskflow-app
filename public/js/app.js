@@ -2731,14 +2731,14 @@ async function renderAdmin() {
       }));
       dataToolsIssues.hidden = issues.length === 0;
     };
-    const setDataToolsProgress = (value, message, indeterminate = false) => {
+    const setDataToolsProgress = (value, message, indeterminate = false, percentLabel = null) => {
       if (dataToolsProgress) {
         dataToolsProgress.hidden = false;
         if (indeterminate) dataToolsProgress.removeAttribute('value');
         else dataToolsProgress.value = Math.max(0, Math.min(100, Number(value) || 0));
         dataToolsProgress.classList.toggle('indeterminate', indeterminate);
       }
-      if (dataToolsPercent) dataToolsPercent.textContent = indeterminate ? 'Working' : `${Math.round(Math.max(0, Math.min(100, Number(value) || 0)))}%`;
+      if (dataToolsPercent) dataToolsPercent.textContent = percentLabel || (indeterminate ? 'Working' : `${Math.round(Math.max(0, Math.min(100, Number(value) || 0)))}%`);
       if (dataToolsStatus && message) dataToolsStatus.textContent = message;
     };
     const finishDataToolsProgress = () => {
@@ -2752,8 +2752,9 @@ async function renderAdmin() {
       request.open('POST', url);
       request.withCredentials = true;
       request.upload.onprogress = event => {
-        if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100));
+        if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100), 'upload');
       };
+      request.upload.onload = () => onProgress(100, 'processing');
       request.onload = () => {
         let payload = {};
         try { payload = JSON.parse(request.responseText); } catch (error) { }
@@ -2811,12 +2812,18 @@ async function renderAdmin() {
         const directoryFilesByName = new Map(directoryFiles.map(file => [file.name.toLocaleLowerCase(), file]));
         for (let index = 0; index < projectsToImport.length; index++) {
           const entry = projectsToImport[index];
-          const projectProgress = percent => setDataToolsProgress(((index + (percent / 100) * 0.55) / projectsToImport.length) * 100, `Uploading project ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name} (${percent}%)...`);
+          const projectProgress = (percent, phase = 'upload') => {
+            if (phase === 'processing') {
+              setDataToolsProgress(100, `Uploaded project ${index + 1} of ${projectsToImport.length}; waiting for the server to import ${entry.source.project.name}...`, true, 'Upload 100%');
+              return;
+            }
+            setDataToolsProgress(percent, `Uploading project ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name} (${percent}%)...`, false, `File ${index + 1}/${projectsToImport.length}: ${percent}%`);
+          };
           projectProgress(0);
           const projectForm = new FormData();
           projectForm.append('projects', entry.file, entry.file.name);
           const projectPayload = await postFormWithProgress('/api/admin/asana-import', projectForm, projectProgress);
-          setDataToolsProgress(((index + 0.6) / projectsToImport.length) * 100, `Processing project ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name}...`);
+          setDataToolsProgress(((index + 1) / projectsToImport.length) * 100, `Project ${index + 1} of ${projectsToImport.length} imported: ${entry.source.project.name}.`);
           const projectResult = projectPayload.results?.[0];
           if (!projectResult || projectResult.status === 'failed') {
             failures.push(`${entry.file.name}: ${projectResult?.error || 'Import failed.'}`);
@@ -2869,9 +2876,12 @@ async function renderAdmin() {
             const attachmentForm = new FormData();
             attachmentForm.append('mappings', JSON.stringify(batch.map(item => ({ task_gid: item.taskGid, task_title: item.taskTitle, attachment_gid: item.attachment.gid, name: item.attachment.name || item.filename, context: item.context, created_at: item.attachment.created_at }))));
             batch.forEach(item => attachmentForm.append('attachments', item.file, item.file.name));
-            const attachmentPayload = await postFormWithProgress(`/api/admin/asana-import/${projectResult.project_id}/attachments`, attachmentForm, percent => {
-              const overall = ((index + 0.6 + ((batchNumber - 1 + percent / 100) / batchCount) * 0.4) / projectsToImport.length) * 100;
-              setDataToolsProgress(overall, `Uploading attachments for ${entry.source.project.name}, batch ${batchNumber} of ${batchCount} (${percent}%)...`);
+            const attachmentPayload = await postFormWithProgress(`/api/admin/asana-import/${projectResult.project_id}/attachments`, attachmentForm, (percent, phase = 'upload') => {
+              if (phase === 'processing') {
+                setDataToolsProgress(100, `Uploaded attachment batch ${batchNumber} of ${batchCount}; waiting for the server...`, true, 'Upload 100%');
+                return;
+              }
+              setDataToolsProgress(percent, `Uploading attachments for ${entry.source.project.name}, batch ${batchNumber} of ${batchCount} (${percent}%)...`, false, `Batch ${batchNumber}/${batchCount}: ${percent}%`);
             });
             for (const result of attachmentPayload.results || []) {
               if (result.status === 'imported') attachmentCount++;
