@@ -1810,7 +1810,7 @@ async function openTaskDrawer(taskId) {
     const renderActivity = () => {
       const groupedActivity = new Map();
       activityItems.forEach(entry => {
-        const timestamp = String(entry.created_at || '');
+        const timestamp = fmtDateTime(entry.created_at);
         if (!groupedActivity.has(timestamp)) groupedActivity.set(timestamp, []);
         groupedActivity.get(timestamp).push(entry);
       });
@@ -1818,7 +1818,7 @@ async function openTaskDrawer(taskId) {
         const contents = entries.map((entry, entryIndex) => {
           const activityIndex = `${groupIndex}-${entryIndex}`;
           if (entry.activity_type === 'comment') return `<div class="activity-group-entry comment" data-comment-id="${entry.id}">
-            <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b>${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
+            <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b>${entryIndex === 0 ? ` <span class="activity-inline-time">· ${escapeHtml(timestamp)}</span>` : ''}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
             <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
             ${renderCommentAttachment(entry)}
           </div>`;
@@ -1831,9 +1831,9 @@ async function openTaskDrawer(taskId) {
           if (entry.field_name === 'Task check-in') message = 'checked in to this task';
           if (entry.field_name === 'Task check-out') message = 'checked out of this task';
           const difference = entry.field_name === 'Description' ? `<button type="button" class="link-btn task-difference-toggle" data-history-index="${activityIndex}">Show difference</button><div class="task-difference hidden" data-history-panel="${activityIndex}"><div class="task-history-old"><b>Old:</b> ${oldValue}</div><div class="task-history-new"><b>New:</b> ${newValue}</div></div>` : '';
-          return `<div class="activity-group-entry task-activity-change"><b>${actor}</b> ${message}${difference}</div>`;
+          return `<div class="activity-group-entry task-activity-change"><b>${actor}</b> ${message}${entryIndex === 0 ? ` <span class="activity-inline-time">· ${escapeHtml(timestamp)}</span>` : ''}${difference}</div>`;
         }).join('');
-        return `<div class="task-activity-group"><div class="task-activity-group-time">${escapeHtml(fmtDateTime(timestamp))}</div>${contents}</div>`;
+        return `<div class="task-activity-group">${contents}</div>`;
       }).join('');
       activityContainer.innerHTML = `${activityHasMore ? '<button type="button" id="task-activity-load-more" class="link-btn">Load older activity</button>' : ''}${html || '<div class="hint">No activity yet.</div>'}<div id="task-activity-error" class="form-error"></div>`;
       bindActivityActions();
@@ -2668,6 +2668,7 @@ async function renderAdmin() {
         <progress id="project-data-tools-progress" class="project-data-tools-progress" max="100" value="0" hidden></progress>
         <div class="project-data-tools-feedback"><strong id="project-data-tools-percent">0%</strong><div id="project-data-tools-status" class="hint" role="status">Choose Asana project files to begin.</div></div>
         <ul id="project-data-tools-issues" class="project-data-tools-issues" aria-live="polite" hidden></ul>
+        <ul id="project-data-tools-warnings" class="project-data-tools-warnings" aria-live="polite" hidden></ul>
       </div>
 
       <div class="admin-block">
@@ -2772,6 +2773,7 @@ async function renderAdmin() {
     const dataToolsProgress = $('#project-data-tools-progress');
     const dataToolsPercent = $('#project-data-tools-percent');
     const dataToolsIssues = $('#project-data-tools-issues');
+    const dataToolsWarnings = $('#project-data-tools-warnings');
     const renderDataToolIssues = issues => {
       if (!dataToolsIssues) return;
       dataToolsIssues.replaceChildren(...issues.map(issue => {
@@ -2780,6 +2782,15 @@ async function renderAdmin() {
         return item;
       }));
       dataToolsIssues.hidden = issues.length === 0;
+    };
+    const renderDataToolWarnings = warnings => {
+      if (!dataToolsWarnings) return;
+      dataToolsWarnings.replaceChildren(...warnings.map(warning => {
+        const item = document.createElement('li');
+        item.textContent = warning;
+        return item;
+      }));
+      dataToolsWarnings.hidden = warnings.length === 0;
     };
     const setDataToolsProgress = (value, message, indeterminate = false, percentLabel = null) => {
       if (dataToolsProgress) {
@@ -2901,7 +2912,9 @@ async function renderAdmin() {
       let unavailableFileCount = 0;
       let unsupportedProjectAttachmentCount = 0;
       const failures = [...selectionErrors];
+      const warnings = [];
       renderDataToolIssues(failures);
+      renderDataToolWarnings(warnings);
       setDataToolsProgress(0, `Importing 0 of ${projectsToImport.length} project files...`);
       try {
         const directoryFilesByName = new Map(directoryFiles.map(file => [file.name.toLocaleLowerCase(), file]));
@@ -2943,8 +2956,8 @@ async function renderAdmin() {
             tasks: Number(projectResult.tasks || 0)
           });
           if (projectResult.unmatched_users?.length) {
-            failures.push(`${entry.source.project.name}: no active TaskFlow user matched ${projectResult.unmatched_users.join(', ')}.`);
-            renderDataToolIssues(failures);
+            warnings.push(`${entry.source.project.name}: no TaskFlow accounts matched ${projectResult.unmatched_users.join(', ')}. Asana names are retained and shown on imported activity/tasks; assigning them inside TaskFlow requires creating matching accounts.`);
+            renderDataToolWarnings(warnings);
           }
 
           const taskAttachments = [];
@@ -3006,6 +3019,7 @@ async function renderAdmin() {
         if (unsupportedProjectAttachmentCount) failures.push(`${unsupportedProjectAttachmentCount} project-level attachment(s) are not supported yet.`);
         dataToolsStatus.textContent = summary.join(' ');
         renderDataToolIssues(failures);
+        renderDataToolWarnings(warnings);
         finishDataToolsProgress();
         if ((importedCount || attachmentCount) && failures.length === 0) {
           await loadProjects();

@@ -837,8 +837,8 @@ router.post('/admin/asana-import/:projectId/attachments', requireAdmin, handleAs
       const positionalMatch = String(mapping.task_gid || '').match(/^Task\s+(\d+)$/i);
       if (!task && positionalMatch) {
         task = await db.prepare(`SELECT id, title FROM tasks
-          WHERE project_id = ? ORDER BY position, created_at LIMIT 1 OFFSET ?`)
-          .get(projectId, Number(positionalMatch[1]));
+          WHERE project_id = ? ORDER BY position, created_at, id LIMIT 1 OFFSET ?`)
+          .get(projectId, Math.max(0, Number(positionalMatch[1]) - 1));
       }
       if (!task) throw new Error(`Task ${mapping.task_gid || '(unknown)'} was not found in the imported project.`);
       const attachmentGid = String(mapping.attachment_gid || '');

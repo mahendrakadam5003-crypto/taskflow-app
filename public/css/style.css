@@ -349,7 +349,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .task-activity-change { padding: 9px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .task-activity-change b { color: var(--ink); }
 .task-activity-group { padding: 7px 0; border-bottom: 1px solid var(--line); }
-.task-activity-group-time { margin-bottom: 3px; color: var(--muted); font-size: 11px; }
+.activity-inline-time { color: var(--muted); font-size: 11px; font-weight: 400; white-space: nowrap; }
 .activity-group-entry.task-activity-change { padding: 3px 0; border: 0; }
 .activity-group-entry.comment { padding: 6px 0; border-bottom: 1px solid var(--line); }
 .activity-group-entry.comment:last-child { border-bottom: 0; }
@@ -453,6 +453,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .project-data-tools-feedback .hint { margin: 0; }
 .project-data-tools-issues { margin: 8px 0 0; padding: 9px 12px 9px 30px; border-left: 3px solid var(--red); background: rgba(180, 35, 24, .06); color: var(--red); font-size: 12px; overflow-wrap: anywhere; }
 .project-data-tools-issues li + li { margin-top: 4px; }
+.project-data-tools-warnings { margin: 8px 0 0; padding: 9px 12px 9px 30px; border-left: 3px solid var(--amber); background: var(--amber-bg); color: var(--ink); font-size: 12px; overflow-wrap: anywhere; }
+.project-data-tools-warnings li + li { margin-top: 4px; }
 .admin-table { width: 100%; border-collapse: collapse; }
 .admin-table th { text-align: left; font-size: 12px; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .admin-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: 13.5px; }
