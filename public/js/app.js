@@ -1477,6 +1477,7 @@ async function renderTasks() {
   activeTaskListController = controller;
   const loadTimeout = setTimeout(() => controller.abort(), 30_000);
   list.innerHTML = '<tr><td colspan="8" class="hint" style="padding:15px;">Loading tasks...</td></tr>';
+  let tasks = [];
   try {
     const searchInput = $('#task-search');
     const search = searchInput?.dataset.fullSearch === 'true' ? searchInput.value.trim() : '';
@@ -1490,7 +1491,6 @@ async function renderTasks() {
       const value = $(`#${id}`)?.value;
       if (value) query.set(key, value);
     });
-    let tasks;
     if (search) {
       tasks = await api(`/tasks/search?q=${encodeURIComponent(search)}`, { signal: controller.signal });
       if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
@@ -1514,6 +1514,20 @@ async function renderTasks() {
         }
         if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
         tasks.push(...page);
+        if (afterId === 0 && page.length === pageSize) {
+          list.innerHTML = tasks.map(task => `
+            <tr class="task-row ${task.status === 'done' ? 'done' : ''}" data-task-id="${task.id}">
+              <td></td>
+              <td class="task-title-cell"><b>${escapeHtml(task.title)}</b></td>
+              <td class="task-assignee-cell"><span class="assignee-chip">${escapeHtml(task.assignee_name || 'Unassigned')}</span></td>
+              <td>${escapeHtml(task.invoice_number || '—')}</td><td>${escapeHtml(task.customer_name || '—')}</td><td>${task.total_amount ? Number(task.total_amount).toFixed(2) : '—'}</td>
+              <td class="task-due-cell"><span class="task-due ${getDueState(task.due_date).className}">${escapeHtml(getDueState(task.due_date).label)}</span></td>
+              <td class="task-status-cell"><span class="task-status ${task.status === 'done' ? 'task-status-done' : 'task-status-open'}">${task.status === 'done' ? 'Completed' : 'Open'}</span></td>
+            </tr>`).join('') + '<tr id="task-list-loading-more"><td colspan="8" class="hint">Loading remaining tasks...</td></tr>';
+          $$('.task-row').forEach(row => {
+            row.onclick = () => openTaskDrawer(Number(row.dataset.taskId));
+          });
+        }
         if (page.length < pageSize) break;
         const nextAfterId = Number(page[page.length - 1].id);
         if (!Number.isFinite(nextAfterId) || nextAfterId <= afterId) break;
@@ -1563,9 +1577,12 @@ async function renderTasks() {
   } catch (err) {
     if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
     const message = err.name === 'AbortError'
-      ? 'Loading tasks timed out. Check your connection and retry.'
+      ? 'Task loading timed out before all results arrived.'
       : err.message;
-    list.innerHTML = `<tr><td colspan="8" class="form-error">${escapeHtml(message)} <button type="button" class="link-btn" id="task-list-retry">Retry</button></td></tr>`;
+    $('#task-list-loading-more')?.remove();
+    const errorRow = `<tr><td colspan="8" class="form-error">${escapeHtml(message)} <button type="button" class="link-btn" id="task-list-retry">Retry</button></td></tr>`;
+    if (tasks.length) list.insertAdjacentHTML('beforeend', errorRow);
+    else list.innerHTML = errorRow;
     $('#task-list-retry').onclick = () => renderTasks();
   } finally {
     clearTimeout(loadTimeout);
