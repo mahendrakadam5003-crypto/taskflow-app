@@ -55,6 +55,13 @@ async function getAccess(req) {
   return await db.prepare('SELECT approval_level, can_pay FROM reimbursement_access WHERE user_id = ?').get(req.session.userId) || { approval_level: 0, can_pay: 0 };
 }
 
+async function canAccessClaim(req, claim) {
+  if (!claim) return false;
+  if (req.session.role === 'admin' || Number(claim.user_id) === Number(req.session.userId)) return true;
+  const access = await getAccess(req);
+  return Number(access.approval_level) > 0;
+}
+
 function csvValue(value) {
   return `"${String(value ?? '').replace(/"/g, '""')}"`;
 }
@@ -104,13 +111,28 @@ router.get('/', async (req, res) => {
 
 router.get('/receipts/:fileId', async (req, res) => {
   try {
-    const claim = await db.prepare('SELECT user_id FROM reimbursements WHERE receipt_path = ? OR receipt_paths LIKE ?').get(`telegram:${req.params.fileId}`, `%telegram:${req.params.fileId}%`);
-    if (!claim) return res.status(404).json({ error: 'Receipt not found.' });
-    const access = await getAccess(req);
-    if (req.session.role !== 'admin' && Number(claim.user_id) !== Number(req.session.userId) && !access.approval_level) {
-      return res.status(403).json({ error: 'You do not have access to this receipt.' });
+    const attachments = await db.prepare(`SELECT reimbursement_id, original_name, mime_type
+      FROM telegram_attachments WHERE file_id = ? AND deleted_at IS NULL AND reimbursement_id IS NOT NULL
+      ORDER BY id DESC`).all(req.params.fileId);
+    if (!attachments.length) return res.status(404).json({ error: 'Receipt not found.' });
+    let attachment = null;
+    let linkedClaim = false;
+    for (const candidate of attachments) {
+      const claim = await db.prepare('SELECT id, user_id, receipt_path, receipt_paths FROM reimbursements WHERE id = ?').get(candidate.reimbursement_id);
+      if (!claim) continue;
+      let receiptPaths = [];
+      try { receiptPaths = claim.receipt_paths ? JSON.parse(claim.receipt_paths) : []; } catch (error) { receiptPaths = []; }
+      if (!Array.isArray(receiptPaths)) receiptPaths = [];
+      if (claim.receipt_path && !receiptPaths.includes(claim.receipt_path)) receiptPaths.unshift(claim.receipt_path);
+      if (!receiptPaths.includes(`telegram:${req.params.fileId}`)) continue;
+      linkedClaim = true;
+      if (await canAccessClaim(req, claim)) {
+        attachment = candidate;
+        break;
+      }
     }
-    const attachment = await db.prepare('SELECT original_name, mime_type FROM telegram_attachments WHERE file_id = ? ORDER BY id DESC LIMIT 1').get(req.params.fileId);
+    if (!linkedClaim) return res.status(404).json({ error: 'Receipt not found.' });
+    if (!attachment) return res.status(403).json({ error: 'You do not have access to this receipt.' });
     await streamFromTelegram(req.params.fileId, res, { originalName: attachment?.original_name });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -145,15 +167,20 @@ router.post('/', upload.array('receipt', 10), async (req, res) => {
     }
     const receiptPaths = [];
     const receiptMeta = [];
+    const uploadedAttachments = [];
     for (const [index, file] of (req.files || []).entries()) {
       if (index > 0) await new Promise(resolve => setTimeout(resolve, 350));
       const attachment = await uploadToTelegram(file);
-      await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type) VALUES (?, ?, ?, ?)').run(attachment.fileId, attachment.messageId, file.originalname, file.mimetype);
       receiptPaths.push(`telegram:${attachment.fileId}`);
       receiptMeta.push({ original_name: file.originalname, mime_type: file.mimetype });
+      uploadedAttachments.push({ attachment, file });
     }
     const info = await db.prepare(`INSERT INTO reimbursements (user_id, amount, currency, category, description, expense_date, receipt_path, receipt_paths, receipt_meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(req.session.userId, amount, String(req.body.currency || 'INR').trim().toUpperCase(), category, description, expenseDate, receiptPaths[0] || null, receiptPaths.length ? JSON.stringify(receiptPaths) : null, receiptMeta.length ? JSON.stringify(receiptMeta) : null);
+    for (const { attachment, file } of uploadedAttachments) {
+      await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, reimbursement_id) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(attachment.fileId, attachment.messageId, file.originalname, file.mimetype, req.session.userId, info.lastInsertRowid);
+    }
     await logActivity(req, 'Reimbursement added', 'reimbursement', info.lastInsertRowid, `${amount} ${String(req.body.currency || 'INR').trim().toUpperCase()} - ${category}`, req.session.userId);
     res.json({ ok: true, id: info.lastInsertRowid });
   } catch (error) {
@@ -191,8 +218,8 @@ router.put('/:id(\\d+)', upload.array('receipt', 10), async (req, res) => {
     for (const [index, file] of (req.files || []).entries()) {
       if (index > 0) await new Promise(resolve => setTimeout(resolve, 350));
       const attachment = await uploadToTelegram(file);
-      await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type) VALUES (?, ?, ?, ?)')
-        .run(attachment.fileId, attachment.messageId, file.originalname, file.mimetype);
+      await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, reimbursement_id) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(attachment.fileId, attachment.messageId, file.originalname, file.mimetype, req.session.userId, claim.id);
       receiptPaths.push(`telegram:${attachment.fileId}`);
       receiptMeta.push({ original_name: file.originalname, mime_type: file.mimetype });
     }
@@ -277,4 +304,5 @@ router.put('/:id/status', async (req, res) => {
   }
 });
 
+router.canAccessClaim = canAccessClaim;
 module.exports = router;

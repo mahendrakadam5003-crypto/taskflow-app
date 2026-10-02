@@ -68,6 +68,7 @@ const { router: authRouter } = require('./routes/auth');
 const tasksRouter = require('./routes/tasks');
 const attendanceRouter = require('./routes/attendance');
 const reimbursementsRouter = require('./routes/reimbursements');
+const uploadsRouter = require('./routes/uploads');
 
 const imageRetentionMs = 1000 * 60 * 60 * 24 * 92;
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN || null;
@@ -131,7 +132,7 @@ app.use('/api', tasksRouter);
 app.use('/api/attendance', attendanceRouter);
 app.use('/api/reimbursements', reimbursementsRouter);
 
-app.use('/uploads', express.static(uploadsDir));
+app.use('/uploads', uploadsRouter);
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ========================================================

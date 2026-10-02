@@ -6,7 +6,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { gunzipSync } = require('zlib');
 const axios = require('axios');
-const FormData = require('form-data');
 const db = require('../db');
 const { requireAuth, requireAdmin } = require('./auth');
 const { logActivity } = require('../audit');
@@ -152,13 +151,6 @@ async function getStorageUsage() {
 // uploads/downloads; without them, those two endpoints return a clear error
 // instead of silently failing.
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
-const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || null;
-
-// Hold incoming streams in memory RAM temporarily instead of writing to Local Disk
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 }, // Fully supports mixed documents up to 50MB
-});
 const commentsDir = path.join(__dirname, '..', 'uploads', 'comments');
 if (!fs.existsSync(commentsDir)) fs.mkdirSync(commentsDir, { recursive: true });
 const commentUpload = multer({
@@ -247,59 +239,35 @@ async function requireProjectAccess(req, res, next) {
   }
 }
 
-// ---- AUTOMATED UNLIMITED ATTACHMENT MANAGER ----
-
-// 1. Production Upload Controller Route
-router.post('/upload', upload.single('file'), async (req, res) => {
-  try {
-    if (!TELEGRAM_TOKEN || !CHANNEL_ID) {
-      return res.status(503).json({ error: 'File storage is not configured (missing TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID).' });
-    }
-    if (!req.file) return res.status(400).json({ error: "No file provided" });
-
-    const form = new FormData();
-    form.append('chat_id', CHANNEL_ID);
-    form.append('document', req.file.buffer, {
-      filename: req.file.originalname,
-      contentType: req.file.mimetype
-    });
-
-    const telegramRes = await axios.post(
-      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendDocument`,
-      form,
-      { headers: form.getHeaders(), maxContentLength: Infinity, maxBodyLength: Infinity }
-    );
-
-    const fileId = telegramRes.data.result.document.file_id;
-    const messageId = telegramRes.data.result.message_id;
-    await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type) VALUES (?, ?, ?, ?)').run(fileId, messageId, req.file.originalname, req.file.mimetype);
-
-    res.status(200).json({ 
-      success: true, 
-      fileId: fileId, 
-      messageId: messageId,
-      name: req.file.originalname 
-    });
-  } catch (error) {
-    console.error("Storage automated interface encountered an error:", error.message);
-    res.status(500).json({ error: "Automated cloud distribution upload failed" });
-  }
-});
-
-// 2. Production Download/Fetch Controller Route
+// ---- ATTACHMENT DOWNLOAD ----
 router.get('/download/:fileId', async (req, res) => {
   try {
     if (!TELEGRAM_TOKEN) {
       return res.status(503).json({ error: 'File storage is not configured (missing TELEGRAM_BOT_TOKEN).' });
     }
     const { fileId } = req.params;
+    const attachments = await db.prepare(`SELECT original_name, mime_type, task_id
+      FROM telegram_attachments WHERE file_id = ? AND deleted_at IS NULL AND task_id IS NOT NULL ORDER BY id DESC`).all(fileId);
+    if (!attachments.length) return res.status(404).json({ error: 'Attachment not found.' });
+    let attachment = null;
+    let taskExists = false;
+    for (const candidate of attachments) {
+      const task = await db.prepare('SELECT id FROM tasks WHERE id = ?').get(candidate.task_id);
+      if (!task) continue;
+      taskExists = true;
+      if (await canAccessTask(candidate.task_id, req.session.userId, req.session.role === 'admin')) {
+        attachment = candidate;
+        break;
+      }
+    }
+    if (!taskExists) return res.status(404).json({ error: 'Attachment not found.' });
+    if (!attachment) return res.status(403).json({ error: 'You do not have access to this attachment.' });
 
     const fileInfoRes = await axios.get(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
     const filePath = fileInfoRes.data.result.file_path;
 
     const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;
     const response = await axios({ method: 'get', url: fileUrl, responseType: 'stream' });
-    const attachment = await db.prepare('SELECT original_name, mime_type FROM telegram_attachments WHERE file_id = ? ORDER BY id DESC LIMIT 1').get(fileId);
     const filename = attachment?.original_name || path.basename(filePath) || 'attachment';
     const contentType = attachment?.mime_type || response.headers['content-type'];
     res.setHeader('Content-Disposition', `attachment; filename="${String(filename).replace(/["\r\n]/g, '_')}"`);
@@ -860,8 +828,8 @@ router.post('/admin/asana-import/:projectId/attachments', requireAdmin, handleAs
         continue;
       }
       const stored = await uploadToTelegram(file);
-      await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type) VALUES (?, ?, ?, ?)')
-        .run(stored.fileId, stored.messageId, filename, file.mimetype || 'application/octet-stream');
+      await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, task_id) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(stored.fileId, stored.messageId, filename, file.mimetype || 'application/octet-stream', req.session.userId, task.id);
       await db.prepare('INSERT INTO comments (task_id, user_id, body, image_path, attachment_name, attachment_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
         .run(task.id, req.session.userId, body, `/api/download/${encodeURIComponent(stored.fileId)}`, filename, file.mimetype || 'application/octet-stream', mapping.created_at || new Date().toISOString());
       results.push({ filename, status: 'imported', task: task.title });
@@ -1372,7 +1340,7 @@ router.post('/tasks/:id/comments', requireTaskCheckinToComment, commentUpload.si
     let imagePath = null;
     if (req.file) {
       const attachment = await uploadToTelegram(req.file);
-      await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type) VALUES (?, ?, ?, ?)').run(attachment.fileId, attachment.messageId, req.file.originalname, req.file.mimetype);
+      await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, task_id) VALUES (?, ?, ?, ?, ?, ?)').run(attachment.fileId, attachment.messageId, req.file.originalname, req.file.mimetype, req.session.userId, req.params.id);
       imagePath = `/api/download/${encodeURIComponent(attachment.fileId)}`;
     }
     const info = await db.prepare('INSERT INTO comments (task_id, user_id, body, image_path, attachment_name, attachment_type) VALUES (?, ?, ?, ?, ?, ?)')
@@ -1401,4 +1369,5 @@ router.put('/comments/:id', async (req, res) => {
   }
 });
 
+router.canAccessTask = canAccessTask;
 module.exports = router;

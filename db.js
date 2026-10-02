@@ -402,6 +402,9 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       message_id INTEGER NOT NULL,
       original_name TEXT,
       mime_type TEXT,
+      uploaded_by INTEGER,
+      task_id INTEGER,
+      reimbursement_id INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       deleted_at TEXT
     );`);
@@ -409,6 +412,38 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     const attachmentColumnNames = (attachmentColumns || []).map(row => row.name || row.NAME);
     if (!attachmentColumnNames.includes('original_name')) await dbDriverInterface.exec('ALTER TABLE telegram_attachments ADD COLUMN original_name TEXT');
     if (!attachmentColumnNames.includes('mime_type')) await dbDriverInterface.exec('ALTER TABLE telegram_attachments ADD COLUMN mime_type TEXT');
+    if (!attachmentColumnNames.includes('uploaded_by')) await dbDriverInterface.exec('ALTER TABLE telegram_attachments ADD COLUMN uploaded_by INTEGER');
+    if (!attachmentColumnNames.includes('task_id')) await dbDriverInterface.exec('ALTER TABLE telegram_attachments ADD COLUMN task_id INTEGER');
+    if (!attachmentColumnNames.includes('reimbursement_id')) await dbDriverInterface.exec('ALTER TABLE telegram_attachments ADD COLUMN reimbursement_id INTEGER');
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS telegram_attachments_task_id_idx ON telegram_attachments(task_id)');
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS telegram_attachments_reimbursement_id_idx ON telegram_attachments(reimbursement_id)');
+
+    const legacyCommentAttachments = await dbDriverInterface.prepare("SELECT task_id, user_id, image_path FROM comments WHERE image_path LIKE '/api/download/%'").all();
+    for (const comment of legacyCommentAttachments || []) {
+      const match = String(comment.image_path || '').match(/^\/api\/download\/([^/?#]+)/);
+      if (!match) continue;
+      let fileId;
+      try { fileId = decodeURIComponent(match[1]); } catch (error) { continue; }
+      await dbDriverInterface.prepare(`UPDATE telegram_attachments
+        SET uploaded_by = COALESCE(uploaded_by, ?), task_id = COALESCE(task_id, ?)
+        WHERE file_id = ? AND task_id IS NULL AND reimbursement_id IS NULL`)
+        .run(comment.user_id || null, comment.task_id, fileId);
+    }
+
+    const legacyClaims = await dbDriverInterface.prepare('SELECT id, user_id, receipt_path, receipt_paths FROM reimbursements WHERE receipt_path IS NOT NULL OR receipt_paths IS NOT NULL').all();
+    for (const claim of legacyClaims || []) {
+      let receiptPaths = [];
+      try { receiptPaths = claim.receipt_paths ? JSON.parse(claim.receipt_paths) : []; } catch (error) { receiptPaths = []; }
+      if (!Array.isArray(receiptPaths)) receiptPaths = [];
+      if (claim.receipt_path && !receiptPaths.includes(claim.receipt_path)) receiptPaths.unshift(claim.receipt_path);
+      for (const receiptPath of receiptPaths) {
+        if (typeof receiptPath !== 'string' || !receiptPath.startsWith('telegram:')) continue;
+        await dbDriverInterface.prepare(`UPDATE telegram_attachments
+          SET uploaded_by = COALESCE(uploaded_by, ?), reimbursement_id = COALESCE(reimbursement_id, ?)
+          WHERE file_id = ? AND task_id IS NULL AND reimbursement_id IS NULL`)
+          .run(claim.user_id, claim.id, receiptPath.slice('telegram:'.length));
+      }
+    }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS task_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
