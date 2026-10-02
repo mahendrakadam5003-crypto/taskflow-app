@@ -171,7 +171,7 @@ const asanaImportUpload = multer({
 });
 const asanaAttachmentUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024, files: 5 }
+  limits: { fileSize: 20 * 1024 * 1024, files: 5, fieldSize: 8 * 1024 * 1024 }
 });
 const handleAsanaUploadError = (uploadMiddleware, label) => (req, res, next) => {
   uploadMiddleware(req, res, error => {
@@ -399,7 +399,7 @@ router.get('/payment-history', async (req, res) => {
   const invoiceType = String(req.query.invoice_type || '').trim().toLowerCase();
   if (invoiceType && !INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invalid invoice type.' });
   let sql = `SELECT t.id, t.project_id, t.title, t.invoice_type, t.invoice_number, t.invoice_date, t.customer_name,
-    t.total_amount, t.payment_status, t.payment_received_date, t.amount_received,
+    t.total_amount, t.payment_status, t.payment_received_date, t.amount_received, t.assignee_id, t.asana_assignee_name,
     COALESCE(t.payment_member_id, t.assignee_id) AS payment_member_id,
     p.name AS project_name, member.name AS payment_member_name
     FROM tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN users member ON member.id=COALESCE(t.payment_member_id, t.assignee_id)
@@ -602,7 +602,14 @@ router.post('/admin/asana-import', requireAdmin, handleAsanaUploadError(asanaImp
   };
 
   const users = await db.prepare('SELECT id, name FROM users WHERE active = 1').all();
-  const usersByName = new Map((users || []).map(user => [String(user.name || '').trim().toLocaleLowerCase(), Number(user.id)]));
+  const usersByName = new Map();
+  for (const user of users || []) {
+    const key = String(user.name || '').trim().toLocaleLowerCase();
+    if (!key) continue;
+    const matches = usersByName.get(key) || [];
+    matches.push(Number(user.id));
+    usersByName.set(key, matches);
+  }
   let unmatchedNames = new Set();
   let sourcePeopleByGid = new Map();
   const getPersonName = person => {
@@ -616,7 +623,8 @@ router.post('/admin/asana-import', requireAdmin, handleAsanaUploadError(asanaImp
   const mapPerson = person => {
     const name = getPersonName(person);
     if (!name) return null;
-    const userId = usersByName.get(String(name).trim().toLocaleLowerCase()) || null;
+    const matchingUserIds = usersByName.get(String(name).trim().toLocaleLowerCase()) || [];
+    const userId = matchingUserIds.length === 1 ? matchingUserIds[0] : null;
     if (!userId) unmatchedNames.add(String(name).trim());
     return userId;
   };
@@ -960,7 +968,7 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     const afterId = Math.max(0, Number(req.query.after_id) || 0);
     const requestedLimit = Number.parseInt(req.query.limit, 10);
     const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 200) : 200;
-    let sql = `SELECT t.id,t.project_id,t.title,t.created_by,t.assignee_id,COALESCE(u.name,t.asana_assignee_name) AS assignee_name,t.due_date,t.status,t.position,t.created_at,t.updated_at,t.completed_at,t.work_mode,t.asana_gid FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? AND t.id>?`;
+    let sql = `SELECT t.id,t.project_id,t.title,t.created_by,t.assignee_id,COALESCE(u.name,t.asana_assignee_name) AS assignee_name,t.asana_assignee_name,t.due_date,t.status,t.position,t.created_at,t.updated_at,t.completed_at,t.work_mode,t.asana_gid FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? AND t.id>?`;
     const params = [req.params.id, afterId];
     if (status !== 'all') {
       sql += status === 'done' ? " AND t.status='done'" : " AND COALESCE(t.status, 'open') <> 'done'";
@@ -1011,7 +1019,7 @@ router.get('/tasks/search', async (req, res) => {
     if (!q) return res.json([]);
     const words = q.split(/\s+/).filter(Boolean);
     const admin = req.session.role === 'admin';
-    const sql = `SELECT t.id,t.project_id,t.title,t.status,t.due_date,p.name AS project_name,COALESCE(u.name,t.asana_assignee_name) AS assignee_name
+    const sql = `SELECT t.id,t.project_id,t.title,t.status,t.due_date,t.assignee_id,t.asana_assignee_name,p.name AS project_name,COALESCE(u.name,t.asana_assignee_name) AS assignee_name
       FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN users u ON u.id=t.assignee_id
       LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=?
       WHERE (p.created_by=? OR pm.user_id=? OR ?=1)
@@ -1122,7 +1130,7 @@ router.put('/tasks/:id', async (req, res) => {
     if (req.body.assignee_id !== undefined) {
       if (req.body.assignee_id && !(await canAccessProject((await db.prepare('SELECT project_id FROM tasks WHERE id=?').get(req.params.id)).project_id, Number(req.body.assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
       updates.push('assignee_id=?'); values.push(req.body.assignee_id || null);
-      updates.push('asana_assignee_name=NULL');
+      if (req.body.assignee_id) updates.push('asana_assignee_name=NULL');
     }
     if (!updates.length) return res.json({ ok: true });
     updates.push("updated_at=datetime('now')");

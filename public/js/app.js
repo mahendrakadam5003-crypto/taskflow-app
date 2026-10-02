@@ -3,6 +3,7 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 let activeTaskDrawerController = null;
 let taskListRequestId = 0;
+let dashboardSummaryRequestId = 0;
 
 async function api(path, opts = {}) {
   const res = await fetch('/api' + path, {
@@ -558,6 +559,7 @@ function showStorageDetails(storage) {
 }
 
 async function renderDashboard() {
+  const requestId = ++dashboardSummaryRequestId;
   updateDashboardGreeting();
   const adminCard = $('#dashboard-admin-card');
   if (adminCard) adminCard.style.display = ME?.role === 'admin' ? '' : 'none';
@@ -570,6 +572,7 @@ async function renderDashboard() {
   $$('.dashboard-card[data-dashboard-view]').forEach(card => { card.onclick = () => showView(card.dataset.dashboardView); });
   try {
     const summary = await api('/dashboard/summary');
+    if (requestId !== dashboardSummaryRequestId || $('#view-dashboard')?.classList.contains('hidden')) return;
     const summaryPanel = $('#dashboard-summary');
     if (summaryPanel) {
       const storageQuotaAvailable = isStorageQuotaAvailable(summary.storage);
@@ -620,6 +623,7 @@ async function renderDashboard() {
     const paymentHint = $('#dashboard-payment-history-hint');
     if (paymentHint && Number(summary.payment_alert_count || 0)) paymentHint.textContent = `${summary.payment_alert_count} invoice${summary.payment_alert_count === 1 ? '' : 's'} overdue`;
   } catch (error) {
+    if (requestId !== dashboardSummaryRequestId || $('#view-dashboard')?.classList.contains('hidden')) return;
     const summaryPanel = $('#dashboard-summary');
     if (summaryPanel) summaryPanel.innerHTML = '<div class="hint">Dashboard metrics are temporarily unavailable.</div>';
   }
@@ -692,7 +696,7 @@ async function renderPaymentHistory() {
           const selectedMemberId = row.payment_member_id ?? row.assignee_id ?? '';
           const invoiceTypeLabel = ({ cash: 'Cash', gst: 'GST' })[row.invoice_type] || 'GST';
           return `<tr>
-          <td><select class="payment-row-member" data-id="${row.id}"><option value="">Unassigned</option>${PEOPLE.map(person => `<option value="${person.id}" ${Number(selectedMemberId) === Number(person.id) ? 'selected' : ''}>${escapeHtml(person.name || person.NAME)}</option>`).join('')}</select></td><td><b>${escapeHtml(row.invoice_number || '—')}</b></td><td>${invoiceTypeLabel}</td><td>${escapeHtml(row.invoice_date || '—')}</td><td>${escapeHtml(row.customer_name || '—')}</td>
+          <td><select class="payment-row-member" data-id="${row.id}"><option value="">Unassigned</option>${PEOPLE.map(person => `<option value="${person.id}" ${Number(selectedMemberId) === Number(person.id) ? 'selected' : ''}>${escapeHtml(person.name || person.NAME)}</option>`).join('')}</select>${!selectedMemberId && row.asana_assignee_name ? `<small class="hint asana-unlinked-label" style="display:block;">Asana name: ${escapeHtml(row.asana_assignee_name)} · not linked to a TaskFlow account</small>` : ''}</td><td><b>${escapeHtml(row.invoice_number || '—')}</b></td><td>${invoiceTypeLabel}</td><td>${escapeHtml(row.invoice_date || '—')}</td><td>${escapeHtml(row.customer_name || '—')}</td>
           <td>${escapeHtml(row.title)}<small class="hint">${escapeHtml(row.project_name || '')}</small></td><td>${Number(row.total_amount || 0).toFixed(2)}</td>
           <td><select class="payment-row-status" data-id="${row.id}"><option value="received" ${row.payment_status === 'received' ? 'selected' : ''}>Received</option><option value="not_received" ${row.payment_status === 'not_received' ? 'selected' : ''}>Not received</option><option value="pending" ${row.payment_status === 'pending' ? 'selected' : ''}>Pending</option></select></td>
           <td><input class="payment-row-date" data-id="${row.id}" type="date" value="${escapeHtml(row.payment_received_date || '')}"></td><td><input class="payment-row-received" data-id="${row.id}" type="number" min="0" step="0.01" value="${Number(row.amount_received || 0).toFixed(2)}"></td>
@@ -1506,7 +1510,7 @@ async function renderTasks() {
       <tr class="task-row ${search ? 'search-result ' : ''}${task.status === 'done' ? 'done' : ''}" data-task-id="${task.id}">
         <td><button class="row-complete ${task.status === 'done' ? 'row-reopen' : ''}" data-task-id="${task.id}" title="${task.status === 'done' ? 'Reopen task' : 'Complete task'}">${task.status === 'done' ? '↻' : '✓'}</button></td>
         <td class="task-title-cell"><b>${escapeHtml(task.title)}</b>${search && task.project_name ? `<div class="task-result-project">Project: ${escapeHtml(task.project_name)}</div>` : ''}</td>
-        <td class="task-assignee-cell"><span class="assignee-chip">${escapeHtml(task.assignee_name || 'Unassigned')}</span></td>
+        <td class="task-assignee-cell"><span class="assignee-chip">${escapeHtml(task.assignee_name || 'Unassigned')}</span>${!task.assignee_id && task.asana_assignee_name ? `<small class="hint asana-unlinked-label" style="display:block;">Asana · not linked to a TaskFlow account</small>` : ''}</td>
         <td>${escapeHtml(task.invoice_number || '—')}</td><td>${escapeHtml(task.customer_name || '—')}</td><td>${task.total_amount ? Number(task.total_amount).toFixed(2) : '—'}</td>
         <td class="task-due-cell"><span class="task-due ${getDueState(task.due_date).className}">${escapeHtml(getDueState(task.due_date).label)}</span></td>
         <td class="task-status-cell"><span class="task-status ${task.status === 'done' ? 'task-status-done' : 'task-status-open'}">${task.status === 'done' ? 'Completed' : 'Open'}</span></td>
@@ -1572,6 +1576,8 @@ async function showNewTaskDrawer() {
   const deleteButton = $('#btn-delete-task');
   if (title) { title.value = ''; title.disabled = false; }
   if (assignee) assignee.innerHTML = '<option value="">No assignee</option>' + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
+  const assigneeOrigin = $('#drawer-assignee-origin');
+  if (assigneeOrigin) { assigneeOrigin.textContent = ''; assigneeOrigin.classList.add('hidden'); }
   if (assignee) assignee.disabled = false;
   if (due) { due.value = ''; due.disabled = false; }
   if (customerName) { customerName.value = ''; customerName.disabled = false; }
@@ -1710,7 +1716,7 @@ async function openTaskDrawer(taskId) {
     drawer.classList.remove('loading');
     $('#drawer-title').value = task.title || '';
     $('#drawer-title').disabled = taskActionsLocked;
-    $('#drawer-assignee').innerHTML = `<option value="">No assignee</option>${!task.assignee_id && task.asana_assignee_name ? `<option value="asana-unlinked" disabled>${escapeHtml(task.asana_assignee_name)}</option>` : ''}` + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
+    $('#drawer-assignee').innerHTML = '<option value="">No TaskFlow account assigned</option>' + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
     const currentAssigneeId = String(task.assignee_id ?? '');
     if (currentAssigneeId && !members.some(member => String(member.id) === currentAssigneeId)) {
       const option = document.createElement('option');
@@ -1719,7 +1725,15 @@ async function openTaskDrawer(taskId) {
       $('#drawer-assignee').append(option);
     }
     $('#drawer-assignee').disabled = !canEditTask;
-    $('#drawer-assignee').value = task.assignee_id || (task.asana_assignee_name ? 'asana-unlinked' : '');
+    $('#drawer-assignee').value = task.assignee_id || '';
+    const assigneeOrigin = $('#drawer-assignee-origin');
+    if (assigneeOrigin) {
+      const importedAssigneeName = String(task.asana_assignee_name || '').trim();
+      assigneeOrigin.textContent = !task.assignee_id && importedAssigneeName
+        ? `Asana assignee: ${importedAssigneeName} · not linked to a TaskFlow account; this task remains unassigned.`
+        : '';
+      assigneeOrigin.classList.toggle('hidden', !assigneeOrigin.textContent);
+    }
     const workModeInput = $('#drawer-work-mode');
     if (workModeInput) {
       workModeInput.value = task.work_mode || 'office';
@@ -2958,7 +2972,7 @@ async function renderAdmin() {
             tasks: Number(projectResult.tasks || 0)
           });
           if (projectResult.unmatched_users?.length) {
-            warnings.push(`${entry.source.project.name}: no TaskFlow accounts matched ${projectResult.unmatched_users.join(', ')}. Asana names are retained and shown on imported activity/tasks; assigning them inside TaskFlow requires creating matching accounts.`);
+            warnings.push(`${entry.source.project.name}: no unique exact-name TaskFlow accounts matched ${projectResult.unmatched_users.join(', ')}. These people remain unassigned; their original Asana names stay visible on imported tasks and activity. Create matching TaskFlow accounts only if you want to assign them.`);
             renderDataToolWarnings(warnings);
           }
 
@@ -2990,12 +3004,41 @@ async function renderAdmin() {
             if (file) matchedAttachments.push({ ...item, file });
             else missingFileCount++;
           }
-          for (let start = 0; start < matchedAttachments.length; start += 5) {
-            const batch = matchedAttachments.slice(start, start + 5);
-            const batchNumber = Math.floor(start / 5) + 1;
-            const batchCount = Math.ceil(matchedAttachments.length / 5);
+          const maxMappingBytes = 512 * 1024;
+          const attachmentBatches = [];
+          let batchItems = [];
+          let batchMappings = [];
+          for (const item of matchedAttachments) {
+            const mapping = {
+              task_gid: item.taskGid,
+              task_title: item.taskTitle,
+              attachment_gid: item.attachment.gid,
+              name: item.attachment.name || item.filename,
+              context: String(item.context || '').slice(-4000),
+              created_at: item.attachment.created_at
+            };
+            const nextMappings = [...batchMappings, mapping];
+            const nextSize = new TextEncoder().encode(JSON.stringify(nextMappings)).byteLength;
+            if (batchItems.length && (batchItems.length >= 5 || nextSize > maxMappingBytes)) {
+              attachmentBatches.push({ items: batchItems, mappings: batchMappings });
+              batchItems = [];
+              batchMappings = [];
+            }
+            if (new TextEncoder().encode(JSON.stringify([mapping])).byteLength > maxMappingBytes) {
+              failures.push(`${entry.source.project.name}/${item.filename}: attachment metadata is too large to import.`);
+              renderDataToolIssues(failures);
+              continue;
+            }
+            batchItems.push(item);
+            batchMappings.push(mapping);
+          }
+          if (batchItems.length) attachmentBatches.push({ items: batchItems, mappings: batchMappings });
+          for (let batchIndex = 0; batchIndex < attachmentBatches.length; batchIndex++) {
+            const { items: batch, mappings } = attachmentBatches[batchIndex];
+            const batchNumber = batchIndex + 1;
+            const batchCount = attachmentBatches.length;
             const attachmentForm = new FormData();
-            attachmentForm.append('mappings', JSON.stringify(batch.map(item => ({ task_gid: item.taskGid, task_title: item.taskTitle, attachment_gid: item.attachment.gid, name: item.attachment.name || item.filename, context: item.context, created_at: item.attachment.created_at }))));
+            attachmentForm.append('mappings', JSON.stringify(mappings));
             batch.forEach(item => attachmentForm.append('attachments', item.file, item.file.name));
             const attachmentPayload = await postFormWithProgress(`/api/admin/asana-import/${projectResult.project_id}/attachments`, attachmentForm, (percent, phase = 'upload') => {
               if (phase === 'processing') {
