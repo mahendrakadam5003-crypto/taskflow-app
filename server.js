@@ -5,7 +5,6 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const FormData = require('form-data');
-const bcrypt = require('bcryptjs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -130,31 +129,10 @@ app.use('/uploads', express.static(uploadsDir));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ========================================================
-// INSTANT PORT BINDING & EMERGENCY ACCOUNT SEEDING
+// INSTANT PORT BINDING
 // ========================================================
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`TaskFlow operational server running on port: ${PORT}`);
   setTimeout(() => cleanupExpiredUploads().catch(err => console.error('Upload cleanup failed:', err.message)), 10000);
   setInterval(() => cleanupExpiredUploads().catch(err => console.error('Upload cleanup failed:', err.message)), 24 * 60 * 60 * 1000);
-  
-  // Triggers the account injection script immediately after the network socket binds live
-  const forceCreateAdminAccount = async function forceCreateAdminAccount() {
-    try {
-      console.log("⚡ Checking and forcing admin profile deployment into cloud shards...");
-      const hash = bcrypt.hashSync('admin123', 10);
-      
-      // Inject row coordinates straight into your Turso production tables matrix clusters
-      await db.prepare(`INSERT OR IGNORE INTO users (name, username, password_hash, role, active) VALUES (?, ?, ?, ?, ?)`).run(
-        'System Admin Manager',
-        'admin',
-        hash,
-        'admin',
-        1
-      );
-      console.log("🚀 FORCE SEED COMPLETE: User 'admin' with password 'admin123' is now live inside Turso Cloud!");
-    } catch (err) {
-      console.error("Bypass verification note:", err.message);
-    }
-  };
-  db.ready.then(forceCreateAdminAccount).catch(err => console.error('Admin seed startup failed:', err.message));
 });

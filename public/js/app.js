@@ -4,6 +4,7 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 let activeTaskDrawerController = null;
 let taskListRequestId = 0;
 let dashboardSummaryRequestId = 0;
+let forcedPasswordModalOpen = false;
 
 async function api(path, opts = {}) {
   const res = await fetch('/api' + path, {
@@ -14,16 +15,22 @@ async function api(path, opts = {}) {
   });
   let data = null;
   try { data = await res.json(); } catch (e) { /* no body */ }
-  if (res.status === 401 && path !== '/auth/login' && ME) {
+  if (res.status === 401 && path !== '/auth/login' && path !== '/auth/change-password' && ME) {
     ME = null;
     $('#app')?.classList.add('hidden');
     $('#login-screen')?.classList.remove('hidden');
     const loginError = $('#login-error');
     if (loginError) loginError.textContent = 'Your session expired. Please sign in again.';
   }
+  if (res.status === 403 && data?.must_change_password) {
+    $('#startup-screen')?.classList.add('hidden');
+    $('#login-screen')?.classList.add('hidden');
+    showSelfPasswordModal(true);
+  }
   if (!res.ok) {
     const error = new Error((data && data.error) || `Request failed (${res.status} ${res.statusText})`);
     error.status = res.status;
+    error.mustChangePassword = Boolean(data?.must_change_password);
     throw error;
   }
   return data;
@@ -133,11 +140,12 @@ function closeModal() {
     modalEl.innerHTML = ''; 
     modalEl.classList.remove('user-edit-modal');
   }
+  forcedPasswordModalOpen = false;
 }
 
 const backdrop = $('#modal-backdrop');
 if (backdrop) {
-  backdrop.addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeModal(); });
+  backdrop.addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop' && !forcedPasswordModalOpen) closeModal(); });
 }
 
 function confirmModal(title, body, confirmLabel = 'Delete', danger = true) {
@@ -432,8 +440,13 @@ function stopTaskListPolling() {
     const rawMe = await api('/auth/me');
     // Unrolls any array wrappers returned from cloud proxies
     ME = Array.isArray(rawMe) ? rawMe[0] : rawMe;
+    if (ME.must_change_password) {
+      showSelfPasswordModal(true);
+      return;
+    }
     enterApp();
   } catch (e) {
+    if (e.mustChangePassword) return;
     if (e.status !== 401) {
       $('#startup-message').textContent = 'Unable to connect. Check your connection and try again.';
       $('#startup-retry').classList.remove('hidden');
@@ -462,7 +475,8 @@ if (loginForm) {
         body: { username: userField.value.trim(), password: passField.value },
       });
       ME = Array.isArray(rawLogin) ? rawLogin[0] : rawLogin;
-      enterApp();
+      if (ME.must_change_password) showSelfPasswordModal(true);
+      else enterApp();
     } catch (err) {
       if (errorEl) errorEl.textContent = err.message;
     }
@@ -3540,14 +3554,24 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
 }
 
 // ================= MODAL DIALOG OPERATIONS CONTEXTS =================
-function showSelfPasswordModal() {
+function showSelfPasswordModal(forced = false) {
+  if (forced && forcedPasswordModalOpen) return;
+  forcedPasswordModalOpen = forced;
   showModal(`
-    <h3>Change password</h3>
-    <input id="self-current-password" type="password" placeholder="Current password">
-    <input id="self-new-password" type="password" placeholder="New password (minimum 6 characters)">
+    <h3>${forced ? 'Set a new password to continue' : 'Change password'}</h3>
+    ${forced ? '<p>Your password must be changed before you can use TaskFlow.</p>' : ''}
+    <input id="self-current-password" type="password" placeholder="Current password" autocomplete="current-password">
+    <input id="self-new-password" type="password" placeholder="New password (minimum 6 characters)" autocomplete="new-password">
     <div id="self-password-error" class="form-error"></div>
-    <div class="modal-actions"><button class="btn btn-secondary" id="self-password-cancel">Cancel</button><button class="btn btn-primary" id="self-password-save">Update password</button></div>`);
-  $('#self-password-cancel').onclick = closeModal;
+    <div class="modal-actions">${forced ? '<button class="btn btn-secondary" id="self-password-cancel">Sign out</button>' : '<button class="btn btn-secondary" id="self-password-cancel">Cancel</button>'}<button class="btn btn-primary" id="self-password-save">Update password</button></div>`);
+  $('#self-password-cancel').onclick = async () => {
+    if (!forced) return closeModal();
+    try {
+      await api('/auth/logout', { method: 'POST' });
+      ME = null;
+      location.reload();
+    } catch (err) { $('#self-password-error').textContent = err.message; }
+  };
   $('#self-password-save').onclick = async () => {
     const error = $('#self-password-error');
     try {
@@ -3555,8 +3579,14 @@ function showSelfPasswordModal() {
         current_password: $('#self-current-password').value,
         new_password: $('#self-new-password').value
       }});
-      closeModal();
-      reloadWithActionMessage(currentViewName(), 'Password changed successfully.');
+      if (forced) {
+        ME = await api('/auth/me');
+        closeModal();
+        enterApp();
+      } else {
+        closeModal();
+        reloadWithActionMessage(currentViewName(), 'Password changed successfully.');
+      }
     } catch (err) { error.textContent = err.message; }
   };
 }

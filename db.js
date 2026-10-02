@@ -1,4 +1,5 @@
 const path = require('path');
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { createClient } = require('@libsql/client'); 
 
@@ -429,6 +430,16 @@ const initializationPromise = (async function initializeDatabaseScripts() {
 
     const rawUserPragmaRows = await dbDriverInterface.prepare("PRAGMA table_info(users)").all();
     const userColumns = (rawUserPragmaRows || []).map(row => row.name || row.NAME);
+    if (!userColumns.includes('must_change_password')) {
+      await dbDriverInterface.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0');
+      console.log('Migrated: added users.must_change_password column');
+    }
+    const adminAccounts = await dbDriverInterface.prepare("SELECT id, password_hash FROM users WHERE role = 'admin'").all();
+    for (const admin of adminAccounts || []) {
+      if (bcrypt.compareSync('admin123', String(admin.password_hash || admin.PASSWORD_HASH || ''))) {
+        await dbDriverInterface.prepare('UPDATE users SET must_change_password = 1 WHERE id = ?').run(admin.id || admin.ID);
+      }
+    }
     if (!userColumns.includes('department')) {
       await dbDriverInterface.exec("ALTER TABLE users ADD COLUMN department TEXT NOT NULL DEFAULT ''");
       console.log('Migrated: added users.department column');
@@ -539,10 +550,18 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     const totalUsers = usersCountObj ? (usersCountObj.c || usersCountObj['COUNT(*)']) : 0;
     
     if (!totalUsers || totalUsers === 0) {
-      const hash = bcrypt.hashSync('admin123', 10);
-      await dbDriverInterface.prepare(`INSERT INTO users (name, username, password_hash, role) VALUES (?, ?, ?, 'admin')`)
+      const initialPassword = process.env.INITIAL_ADMIN_PASSWORD || crypto.randomBytes(24).toString('base64url');
+      const hash = bcrypt.hashSync(initialPassword, 10);
+      const result = await dbDriverInterface.prepare(`INSERT INTO users (name, username, password_hash, role, active, must_change_password)
+        SELECT ?, ?, ?, 'admin', 1, 1 WHERE NOT EXISTS (SELECT 1 FROM users)`)
         .run('Admin', 'admin', hash);
-      console.log('✅ Base Admin Seeded Successfully -> User: admin | Pass: admin123');
+      if (result.changes) {
+        if (process.env.INITIAL_ADMIN_PASSWORD) {
+          console.log('Initial admin created with username "admin" using INITIAL_ADMIN_PASSWORD. Change it at first login.');
+        } else {
+          console.log(`Initial admin created. Username: admin | One-time password: ${initialPassword} | Change it at first login.`);
+        }
+      }
     }
 
     // 4. Default Settings Parameter Sync Check

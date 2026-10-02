@@ -5,16 +5,30 @@ const { logActivity } = require('../audit');
 
 const router = express.Router();
 
+function mustChangePassword(user) {
+  return Number(user.must_change_password ?? user.MUST_CHANGE_PASSWORD ?? 0) === 1;
+}
+
+function isPasswordFlowAllowed(req) {
+  const requestPath = String(req.originalUrl || req.path).split('?')[0];
+  return req.method === 'POST' && ['/api/auth/change-password', '/api/auth/logout', '/auth/change-password', '/auth/logout', '/change-password', '/logout'].includes(requestPath);
+}
+
+function rejectUntilPasswordChanged(res) {
+  return res.status(403).json({ error: 'Change your password before continuing.', must_change_password: true });
+}
+
 async function requireAuth(req, res, next) {
   if (!req.session || !req.session.userId) {
     return res.status(401).json({ error: 'Not logged in' });
   }
   try {
-    const user = await db.prepare('SELECT role, name, active FROM users WHERE id = ?').getStrict(req.session.userId);
+    const user = await db.prepare('SELECT role, name, active, must_change_password FROM users WHERE id = ?').getStrict(req.session.userId);
     if (!user || Number(user.active ?? user.ACTIVE ?? 1) !== 1) {
       req.session.destroy(() => {});
       return res.status(401).json({ error: 'Account is inactive. Contact an administrator.' });
     }
+    if (mustChangePassword(user) && !isPasswordFlowAllowed(req)) return rejectUntilPasswordChanged(res);
     req.session.role = String(user.role || user.ROLE);
     req.session.name = String(user.name || user.NAME);
     next();
@@ -28,11 +42,12 @@ async function requireAdmin(req, res, next) {
     return res.status(403).json({ error: 'Admin only' });
   }
   try {
-    const user = await db.prepare('SELECT role, active FROM users WHERE id = ?').getStrict(req.session.userId);
+    const user = await db.prepare('SELECT role, active, must_change_password FROM users WHERE id = ?').getStrict(req.session.userId);
     if (!user || Number(user.active ?? user.ACTIVE ?? 1) !== 1) {
       req.session.destroy(() => {});
       return res.status(401).json({ error: 'Account is inactive. Contact an administrator.' });
     }
+    if (mustChangePassword(user) && !isPasswordFlowAllowed(req)) return rejectUntilPasswordChanged(res);
     if (String(user.role || user.ROLE) !== 'admin') return res.status(403).json({ error: 'Admin only' });
     next();
   } catch (error) {
@@ -90,7 +105,7 @@ router.post('/login', async (req, res) => {
         console.error('Could not persist login session:', saveError);
         return res.status(500).json({ error: 'Unable to save your login session. Please try again.' });
       }
-      res.json({ id: userId, name: userName, username: userUsername, role: userRole });
+      res.json({ id: userId, name: userName, username: userUsername, role: userRole, must_change_password: mustChangePassword(user) });
     });
   } catch (error) {
     console.error("Critical authentication loop error:", error);
@@ -117,7 +132,7 @@ router.post('/change-password', requireAuth, async (req, res) => {
       return res.status(401).json({ error: 'Current password is incorrect' });
     }
 
-    await db.prepare('UPDATE users SET password_hash=? WHERE id=?')
+    await db.prepare('UPDATE users SET password_hash=?, must_change_password=0 WHERE id=?')
       .run(bcrypt.hashSync(String(new_password), 10), req.session.userId);
     await logActivity(req, 'Password changed', 'user', req.session.userId, 'Your password was changed', req.session.userId);
       
@@ -127,10 +142,10 @@ router.post('/change-password', requireAuth, async (req, res) => {
   }
 });
 
-router.get('/me', async (req, res) => {
+router.get('/me', requireAuth, async (req, res) => {
   if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Not logged in' });
   try {
-    const rawResult = await db.prepare('SELECT id, name, username, role FROM users WHERE id = ?').getStrict(req.session.userId);
+    const rawResult = await db.prepare('SELECT id, name, username, role, must_change_password FROM users WHERE id = ?').getStrict(req.session.userId);
     let user = Array.isArray(rawResult) ? rawResult[0] : rawResult;
     
     if (!user) return res.status(401).json({ error: 'User record not found' });
@@ -139,7 +154,8 @@ router.get('/me', async (req, res) => {
       name: user.name || user.NAME,
       username: user.username || user.USERNAME,
       department: user.department || user.DEPARTMENT || '',
-      role: user.role || user.ROLE
+      role: user.role || user.ROLE,
+      must_change_password: mustChangePassword(user)
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -238,7 +254,7 @@ router.put('/users/:id/reset-password', requireAdmin, async (req, res) => {
     }
 
     const hash = bcrypt.hashSync(String(password), 10);
-    await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, id);
+    await db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?').run(hash, id);
     const target = await db.prepare('SELECT name FROM users WHERE id = ?').get(id);
     await logActivity(req, 'Employee password changed', 'user', id, target ? target.name : `User ${id}`, id);
     res.json({ ok: true });
@@ -276,7 +292,7 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
     if (role !== undefined) await db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role === 'admin' ? 'admin' : 'employee', id);
     if (nextActive !== undefined) await db.prepare('UPDATE users SET active = ? WHERE id = ?').run(nextActive ? 1 : 0, id);
     
-    if (password) await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(String(password), 10), id);
+    if (password) await db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?').run(bcrypt.hashSync(String(password), 10), id);
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

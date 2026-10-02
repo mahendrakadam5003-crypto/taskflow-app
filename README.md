@@ -26,11 +26,11 @@ TaskFlow running:
   On your network: http://<this-PC's-LAN-IP>:3000
 ```
 
-Open `http://localhost:3000` on the PC itself. First login:
-- **username:** `admin`
-- **password:** `admin123`
+Open `http://localhost:3000` on the PC itself. On an empty database, the app creates the first admin account with username `admin` and a random one-time password printed to the server console. Set `INITIAL_ADMIN_PASSWORD` before first startup to provide your own initial password instead. The admin must change that password at first login. Existing databases are not reseeded.
 
-**Change this password immediately** — go to Admin → Team members → (you can reset a password by re-adding, or ask me to add a "change my own password" screen if you want it self-serve).
+Existing admin accounts still using the old `admin123` password are required to change it at next login. Admin password resets also require the recipient to change the password before continuing.
+
+If you deployed using credentials previously present in this repository's `.env.example`, rotate those credentials at their providers before relying on the deployment.
 
 ## 3. Access from phones (same WiFi)
 1. Find this PC's local IP address: on Windows, open Command Prompt and run `ipconfig`, look for "IPv4 Address" (something like `192.168.1.23`).
