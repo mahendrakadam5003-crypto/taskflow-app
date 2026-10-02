@@ -3701,3 +3701,14 @@ async function adminRemoveUser(userId, userName) {
     alert(err.message);
   }
 }
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    try {
+      const registration = await navigator.serviceWorker.register('/service-worker.js?v=20261002-3');
+      await registration.update();
+    } catch (error) {
+      console.warn('Service worker update failed:', error);
+    }
+  });
+}

@@ -1,9 +1,28 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const { rateLimit } = require('express-rate-limit');
 const db = require('../db');
 const { logActivity } = require('../audit');
 
 const router = express.Router();
+const loginLimitOptions = {
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { error: 'Too many login attempts. Please try again later.' }
+};
+const loginIpLimiter = rateLimit(loginLimitOptions);
+const loginUsernameLimiter = rateLimit({
+  ...loginLimitOptions,
+  keyGenerator: req => `username:${String(req.body?.username || '').trim().toLowerCase().slice(0, 128) || 'missing'}`
+});
+
+function logFailedLogin(req, username) {
+  const attemptedUsername = String(username || '').trim().toLowerCase().slice(0, 128);
+  console.warn('Failed login attempt', JSON.stringify({ username: attemptedUsername || null, ip: req.ip }));
+}
 
 function mustChangePassword(user) {
   return Number(user.must_change_password ?? user.MUST_CHANGE_PASSWORD ?? 0) === 1;
@@ -56,15 +75,17 @@ async function requireAdmin(req, res, next) {
 }
 
 // ASYNC LOGIN CONTROLLER: Robust property-safe unwrapper with relaxed status requirements
-router.post('/login', async (req, res) => {
+router.post('/login', loginIpLimiter, loginUsernameLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) {
+      logFailedLogin(req, username);
       return res.status(400).json({ error: 'Missing credentials' });
     }
 
     // Removed the active status requirement directly from the SQL string to guarantee matches clear
-    const rawResult = await db.prepare('SELECT * FROM users WHERE username = ?').getStrict(username.trim().toLowerCase());
+    const normalizedUsername = String(username).trim().toLowerCase();
+    const rawResult = await db.prepare('SELECT * FROM users WHERE username = ?').getStrict(normalizedUsername);
     
     let user = null;
     if (Array.isArray(rawResult)) {
@@ -74,10 +95,12 @@ router.post('/login', async (req, res) => {
     }
     
     if (!user || typeof user !== 'object') {
+      logFailedLogin(req, username);
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
     if (Number(user.active ?? user.ACTIVE ?? 1) !== 1) {
+      logFailedLogin(req, username);
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
@@ -89,10 +112,12 @@ router.post('/login', async (req, res) => {
     const userUsername = user.username || user.USERNAME;
 
     if (!passwordHash) {
+      logFailedLogin(req, username);
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
     if (!bcrypt.compareSync(String(password), String(passwordHash))) {
+      logFailedLogin(req, username);
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
@@ -108,6 +133,7 @@ router.post('/login', async (req, res) => {
       res.json({ id: userId, name: userName, username: userUsername, role: userRole, must_change_password: mustChangePassword(user) });
     });
   } catch (error) {
+    logFailedLogin(req, req.body?.username);
     console.error("Critical authentication loop error:", error);
     res.status(500).json({ error: 'Internal server error during login operation.' });
   }

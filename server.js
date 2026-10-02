@@ -7,6 +7,7 @@ if (sessionSecret.length < 32) {
 const express = require('express');
 const session = require('express-session');
 const FileStore = require('session-file-store')(session);
+const helmet = require('helmet');
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
@@ -17,6 +18,23 @@ const PORT = process.env.PORT || 3000;
 const isRender = process.env.RENDER === 'true';
 const sessionMaxAgeMs = 14 * 24 * 60 * 60 * 1000;
 if (isRender) app.set('trust proxy', 1);
+
+const nativeAppOrigins = new Set(['capacitor://localhost', 'http://localhost', 'https://localhost', 'ionic://localhost']);
+function verifyUnsafeRequestOrigin(req, res, next) {
+  if (!['POST', 'PUT', 'DELETE'].includes(req.method)) return next();
+  const origin = req.get('Origin');
+  if (!origin) return next();
+  if (nativeAppOrigins.has(origin)) return next();
+
+  try {
+    const parsedOrigin = new URL(origin).origin;
+    const requestOrigin = new URL(`${req.protocol}://${req.get('host')}`).origin;
+    if (parsedOrigin === origin && parsedOrigin === requestOrigin) return next();
+  } catch (error) {
+    return res.status(403).json({ error: 'Invalid request origin.' });
+  }
+  return res.status(403).json({ error: 'Invalid request origin.' });
+}
 
 // Import our central database client abstraction instance layer cleanly 
 const db = require('./db');
@@ -108,7 +126,16 @@ async function cleanupExpiredUploads() {
   if (removed) console.log(`Removed ${removed} attachment(s) older than three months; text records were kept.`);
 }
 
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+      'upgrade-insecure-requests': isRender ? [] : null
+    }
+  }
+}));
 app.use(express.json({ limit: '2mb' }));
+app.use(verifyUnsafeRequestOrigin);
 app.use((req, res, next) => {
   res.set('Accept-CH', 'Sec-CH-UA-Model, Sec-CH-UA-Platform-Version');
   next();

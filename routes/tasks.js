@@ -6,6 +6,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { gunzipSync } = require('zlib');
 const axios = require('axios');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const db = require('../db');
 const { requireAuth, requireAdmin } = require('./auth');
 const { logActivity } = require('../audit');
@@ -198,6 +199,15 @@ const PROJECT_ACTION_DEFAULTS = {
   complete_task: true
 };
 const INVOICE_TYPES = ['cash', 'gst'];
+const projectPinLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  keyGenerator: req => `${ipKeyGenerator(req.ip)}:project:${req.params.id}`,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { error: 'Too many PIN attempts. Please try again later.' }
+});
 async function canProjectAction(req, action) {
   if (req.session.role === 'admin') return true;
   if (!PROJECT_ACTIONS.includes(action)) return false;
@@ -910,7 +920,7 @@ router.put('/projects/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/projects/:id/unlock', requireProjectAccess, async (req, res) => {
+router.post('/projects/:id/unlock', requireProjectAccess, projectPinLimiter, async (req, res) => {
   try {
     const project = await db.prepare('SELECT * FROM projects WHERE id=?').get(req.params.id);
     if (!project) return res.status(404).json({ error: 'Not found' });
