@@ -180,6 +180,8 @@
         <select id="task-sort" class="task-sort" aria-label="Sort tasks">
           <option value="manual">Sort: Manual</option>
           <option value="title">Sort: Task name</option>
+          <option value="assignee">Sort: Assignee</option>
+          <option value="due">Sort: Due date</option>
         </select>
         <button class="btn btn-secondary" id="btn-task-clear-filters">Clear</button>
       </div>
@@ -200,7 +202,7 @@
         <div id="task-search-results-heading" class="task-search-results-heading hidden"></div>
         <table class="task-table">
           <thead>
-            <tr><th style="width:32px"></th><th>Task</th></tr>
+            <tr><th style="width:32px"></th><th>Task</th><th>Assignee</th><th>Due</th></tr>
           </thead>
           <tbody id="task-list"></tbody>
         </table>
@@ -318,6 +320,6 @@
   <div class="modal" id="modal"></div>
 </div>
 
-<script src="/js/app.js?v=20261003-3"></script>
+<script src="/js/app.js?v=20261003-4"></script>
 </body>
 </html>

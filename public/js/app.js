@@ -1476,7 +1476,7 @@ async function renderTasks() {
   const controller = new AbortController();
   activeTaskListController = controller;
   const loadTimeout = setTimeout(() => controller.abort(), 30_000);
-  list.innerHTML = '<tr><td colspan="2" class="hint" style="padding:15px;">Loading tasks...</td></tr>';
+  list.innerHTML = '<tr><td colspan="4" class="hint" style="padding:15px;">Loading tasks...</td></tr>';
   let tasks = [];
   try {
     const searchInput = $('#task-search');
@@ -1518,7 +1518,8 @@ async function renderTasks() {
           list.innerHTML = tasks.map(task => `
             <tr class="task-row ${task.status === 'done' ? 'done' : ''}" data-task-id="${task.id}">
               <td></td><td class="task-title-cell"><b>${escapeHtml(task.title)}</b></td>
-            </tr>`).join('') + '<tr id="task-list-loading-more"><td colspan="2" class="hint">Loading remaining tasks...</td></tr>';
+              <td class="task-assignee-cell">${escapeHtml(task.assignee_name || 'Unassigned')}</td><td class="task-due-cell">${escapeHtml(getDueState(task.due_date).label)}</td>
+            </tr>`).join('') + '<tr id="task-list-loading-more"><td colspan="4" class="hint">Loading remaining tasks...</td></tr>';
           $$('.task-row').forEach(row => {
             row.onclick = () => openTaskDrawer(Number(row.dataset.taskId));
           });
@@ -1538,11 +1539,14 @@ async function renderTasks() {
     const sort = $('#task-sort')?.value || 'manual';
     if (sort === 'manual' && !search) tasks.sort((a, b) => (Number(a.position) || 0) - (Number(b.position) || 0) || (a.created_at || '').localeCompare(b.created_at || ''));
     if (sort === 'title') tasks.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+    if (sort === 'assignee') tasks.sort((a, b) => (a.assignee_name || 'Unassigned').localeCompare(b.assignee_name || 'Unassigned'));
+    if (sort === 'due') tasks.sort((a, b) => (a.due_date || '9999-12-31').localeCompare(b.due_date || '9999-12-31'));
     list.innerHTML = tasks.length ? tasks.map(task => `
       <tr class="task-row ${search ? 'search-result ' : ''}${task.status === 'done' ? 'done' : ''}" data-task-id="${task.id}">
         <td><button class="row-complete ${task.status === 'done' ? 'row-reopen' : ''}" data-task-id="${task.id}" title="${task.status === 'done' ? 'Reopen task' : 'Complete task'}">${task.status === 'done' ? '↻' : '✓'}</button></td>
         <td class="task-title-cell"><b>${escapeHtml(task.title)}</b></td>
-      </tr>`).join('') : '<tr><td colspan="2" class="hint" style="padding:15px;">No open tasks yet.</td></tr>';
+        <td class="task-assignee-cell">${escapeHtml(task.assignee_name || 'Unassigned')}</td><td class="task-due-cell">${escapeHtml(getDueState(task.due_date).label)}</td>
+      </tr>`).join('') : '<tr><td colspan="4" class="hint" style="padding:15px;">No open tasks yet.</td></tr>';
     $$('.row-complete').forEach(button => {
       button.onclick = async () => {
         const reopening = button.classList.contains('row-reopen');
@@ -1569,7 +1573,7 @@ async function renderTasks() {
       ? 'Task loading timed out before all results arrived.'
       : err.message;
     $('#task-list-loading-more')?.remove();
-    const errorRow = `<tr><td colspan="2" class="form-error">${escapeHtml(message)} <button type="button" class="link-btn" id="task-list-retry">Retry</button></td></tr>`;
+    const errorRow = `<tr><td colspan="4" class="form-error">${escapeHtml(message)} <button type="button" class="link-btn" id="task-list-retry">Retry</button></td></tr>`;
     if (tasks.length) list.insertAdjacentHTML('beforeend', errorRow);
     else list.innerHTML = errorRow;
     $('#task-list-retry').onclick = () => renderTasks();

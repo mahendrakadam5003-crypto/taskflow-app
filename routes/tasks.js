@@ -946,7 +946,7 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     const afterId = Math.max(0, Number(req.query.after_id) || 0);
     const requestedLimit = Number.parseInt(req.query.limit, 10);
     const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 200) : 200;
-    let sql = `SELECT t.id,t.title,t.status,t.position,t.created_at FROM tasks t WHERE t.project_id=? AND t.id>?`;
+    let sql = `SELECT t.id,t.title,t.status,t.position,t.created_at,t.due_date,COALESCE(u.name,t.asana_assignee_name) AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? AND t.id>?`;
     const params = [req.params.id, afterId];
     if (status !== 'all') {
       sql += status === 'done' ? " AND t.status='done'" : " AND COALESCE(t.status, 'open') <> 'done'";
