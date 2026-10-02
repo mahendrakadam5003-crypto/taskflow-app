@@ -436,8 +436,10 @@ function stopTaskListPolling() {
 
 // ---------- boot backend authentication initialization ----------
 (async function init() {
+  const startupController = new AbortController();
+  const startupTimeout = setTimeout(() => startupController.abort(), 90_000);
   try {
-    const rawMe = await api('/auth/me');
+    const rawMe = await api('/auth/me', { signal: startupController.signal });
     // Unrolls any array wrappers returned from cloud proxies
     ME = Array.isArray(rawMe) ? rawMe[0] : rawMe;
     if (ME.must_change_password) {
@@ -448,12 +450,16 @@ function stopTaskListPolling() {
   } catch (e) {
     if (e.mustChangePassword) return;
     if (e.status !== 401) {
-      $('#startup-message').textContent = 'Unable to connect. Check your connection and try again.';
+      $('#startup-message').textContent = e.name === 'AbortError'
+        ? 'TaskFlow is taking longer than expected to respond. Please try again.'
+        : 'Unable to connect. Check your connection and try again.';
       $('#startup-retry').classList.remove('hidden');
     } else {
       $('#startup-screen').classList.add('hidden');
       $('#login-screen')?.classList.remove('hidden');
     }
+  } finally {
+    clearTimeout(startupTimeout);
   }
 })();
 $('#startup-retry').onclick = () => location.reload();
