@@ -13,6 +13,7 @@ const { uploadToTelegram } = require('../telegram-storage');
 
 const router = express.Router();
 router.use(requireAuth);
+const asanaImportProgress = new Map();
 
 function formatStorageUsage(totalBytes, usedBytes, source = 'turso') {
   const total = Number(totalBytes) || 0;
@@ -556,9 +557,35 @@ router.get('/admin/data-export', requireAdmin, async (req, res) => {
   }
 });
 
+router.get('/admin/asana-import/progress/:id', requireAdmin, (req, res) => {
+  const now = Date.now();
+  for (const [id, progress] of asanaImportProgress) {
+    if (now - progress.updated_at > 30 * 60 * 1000) asanaImportProgress.delete(id);
+  }
+  const progress = asanaImportProgress.get(String(req.params.id || ''));
+  if (!progress) return res.status(404).json({ error: 'Import progress not found.' });
+  res.json(progress);
+});
+
 router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projects', 20), async (req, res) => {
   const files = req.files || [];
   if (!files.length) return res.status(400).json({ error: 'Choose one or more Asana project JSON files.' });
+  const progressId = String(req.body?.progress_id || '').slice(0, 100);
+  let currentProgress = null;
+  const updateProgress = (completed, total, message, status = 'processing') => {
+    if (!progressId || !currentProgress) return;
+    const elapsedSeconds = Math.max(0.1, (Date.now() - currentProgress.started_at) / 1000);
+    const completedUnits = Math.max(0, Math.min(total, completed));
+    const percent = total ? Math.min(99, Math.floor((completedUnits / total) * 100)) : 0;
+    const unitsPerSecond = completedUnits / elapsedSeconds;
+    asanaImportProgress.set(progressId, {
+      status,
+      percent: status === 'complete' ? 100 : percent,
+      message,
+      eta_seconds: status === 'complete' ? 0 : (unitsPerSecond > 0 ? Math.ceil((total - completedUnits) / unitsPerSecond) : null),
+      updated_at: Date.now()
+    });
+  };
 
   const users = await db.prepare('SELECT id, name FROM users WHERE active = 1').all();
   const usersByName = new Map((users || []).map(user => [String(user.name || '').trim().toLocaleLowerCase(), Number(user.id)]));
@@ -594,6 +621,13 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
       if (!projectGid || !sourceProject?.name || !Array.isArray(source.tasks)) {
         throw new Error('Expected an Asana project JSON with project metadata and a tasks array.');
       }
+      const countImportUnits = bundle => 1
+        + (Array.isArray(bundle?.stories) ? bundle.stories.length : 0)
+        + (Array.isArray(bundle?.subtasks) ? bundle.subtasks.reduce((count, child) => count + countImportUnits(child), 0) : 0);
+      const totalImportUnits = source.tasks.reduce((count, bundle) => count + countImportUnits(bundle), 0);
+      currentProgress = { started_at: Date.now() };
+      updateProgress(0, totalImportUnits, `Preparing ${sourceProject.name}...`);
+      let completedImportUnits = 0;
       sourcePeopleByGid = new Map();
       const indexPerson = person => {
         if (!person || typeof person !== 'object' || Array.isArray(person)) return;
@@ -672,6 +706,8 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
             await historyInsert.run(rootTaskId, actorId, actorName, fieldName, '', text, createdAt, rootTaskId, fieldName, '', text, createdAt, actorId);
             importedStoryCount++;
           }
+          completedImportUnits++;
+          updateProgress(completedImportUnits, totalImportUnits, `Importing activity for ${currentPath[currentPath.length - 1]}...`);
         }
         for (const childBundle of bundle?.subtasks || []) {
           const child = childBundle.task || {};
@@ -682,6 +718,8 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
           await subtaskInsert.run(rootTaskId, subtaskTitle, subtaskDone, subtaskPosition, rootTaskId, subtaskTitle, subtaskDone, subtaskPosition);
           await importTaskActivity(childBundle, rootTaskId, currentPath);
         }
+        completedImportUnits++;
+        updateProgress(completedImportUnits, totalImportUnits, `Imported ${currentPath[currentPath.length - 1]}`);
       };
 
       for (const bundle of source.tasks) {
@@ -726,11 +764,16 @@ router.post('/admin/asana-import', requireAdmin, asanaImportUpload.array('projec
           );
         }
         importedTaskCount++;
+        updateProgress(completedImportUnits, totalImportUnits, `Importing task ${importedTaskCount} of ${source.tasks.length}: ${taskTitle}...`);
         await importTaskActivity(bundle, Number(taskInfo.lastInsertRowid));
       }
       await logActivity(req, 'Asana project imported', 'project', projectId, `${sourceProject.name}: ${importedTaskCount} tasks`, req.session.userId);
+      updateProgress(totalImportUnits, totalImportUnits, `Imported ${sourceProject.name}.`, 'complete');
       results.push({ file: file.originalname, status: 'imported', project_id: projectId, project_name: sourceProject.name, tasks: importedTaskCount, subtasks: importedSubtaskCount, comments: importedCommentCount, activity_items: importedStoryCount, unmatched_users: Array.from(unmatchedNames) });
     } catch (error) {
+      if (progressId) {
+        asanaImportProgress.set(progressId, { status: 'failed', percent: currentProgress ? Math.min(99, asanaImportProgress.get(progressId)?.percent || 0) : 0, message: error.message, eta_seconds: null, updated_at: Date.now() });
+      }
       if (projectId) {
         const taskIds = await db.prepare('SELECT id FROM tasks WHERE project_id = ?').all(projectId).catch(() => []);
         const ids = (taskIds || []).map(row => Number(row.id));

@@ -2747,22 +2747,51 @@ async function renderAdmin() {
       dataToolsProgress.value = 100;
       if (dataToolsPercent) dataToolsPercent.textContent = '100%';
     };
-    const postFormWithProgress = (url, formData, onProgress) => new Promise((resolve, reject) => {
+    const formatImportEta = seconds => {
+      if (seconds == null || !Number.isFinite(Number(seconds))) return 'estimating time';
+      const remaining = Math.max(0, Math.ceil(Number(seconds)));
+      if (remaining < 60) return `about ${remaining}s left`;
+      return `about ${Math.floor(remaining / 60)}m ${remaining % 60}s left`;
+    };
+    const postFormWithProgress = (url, formData, onProgress, progressId = null) => new Promise((resolve, reject) => {
       const request = new XMLHttpRequest();
+      let pollTimer = null;
+      let stopped = false;
+      const stopPolling = () => {
+        stopped = true;
+        clearTimeout(pollTimer);
+      };
+      const pollServerProgress = async () => {
+        if (stopped || !progressId) return;
+        try {
+          const response = await fetch(`/api/admin/asana-import/progress/${encodeURIComponent(progressId)}`, { credentials: 'same-origin', cache: 'no-store' });
+          if (response.ok) {
+            const progress = await response.json();
+            onProgress(progress.percent, 'server', progress);
+          }
+        } catch (error) {
+          console.warn('Import progress refresh failed:', error.message);
+        }
+        if (!stopped) pollTimer = setTimeout(pollServerProgress, 700);
+      };
       request.open('POST', url);
       request.withCredentials = true;
       request.upload.onprogress = event => {
         if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100), 'upload');
       };
-      request.upload.onload = () => onProgress(100, 'processing');
+      request.upload.onload = () => {
+        onProgress(100, 'processing');
+        pollServerProgress();
+      };
       request.onload = () => {
+        stopPolling();
         let payload = {};
         try { payload = JSON.parse(request.responseText); } catch (error) { }
         if (request.status >= 200 && request.status < 300) resolve(payload);
         else reject(new Error(payload.error || `Upload failed (${request.status}).`));
       };
-      request.onerror = () => reject(new Error('Network error while uploading data.'));
-      request.onabort = () => reject(new Error('Upload was cancelled.'));
+      request.onerror = () => { stopPolling(); reject(new Error('Network error while uploading data.')); };
+      request.onabort = () => { stopPolling(); reject(new Error('Upload was cancelled.')); };
       request.send(formData);
     });
     const importProjectsButton = $('#asana-project-import');
@@ -2812,9 +2841,17 @@ async function renderAdmin() {
         const directoryFilesByName = new Map(directoryFiles.map(file => [file.name.toLocaleLowerCase(), file]));
         for (let index = 0; index < projectsToImport.length; index++) {
           const entry = projectsToImport[index];
-          const projectProgress = (percent, phase = 'upload') => {
+          const projectProgress = (percent, phase = 'upload', serverProgress = null) => {
             if (phase === 'processing') {
               setDataToolsProgress(100, `Uploaded project ${index + 1} of ${projectsToImport.length}; waiting for the server to import ${entry.source.project.name}...`, true, 'Upload 100%');
+              return;
+            }
+            if (phase === 'server') {
+              if (serverProgress?.status === 'failed') {
+                setDataToolsProgress(percent, `Import failed: ${serverProgress.message}`, false, 'Failed');
+                return;
+              }
+              setDataToolsProgress(percent, `${serverProgress?.message || `Importing ${entry.source.project.name}...`} · ${formatImportEta(serverProgress?.eta_seconds)}`, false, `${percent}% · ${formatImportEta(serverProgress?.eta_seconds)}`);
               return;
             }
             setDataToolsProgress(percent, `Uploading project ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name} (${percent}%)...`, false, `File ${index + 1}/${projectsToImport.length}: ${percent}%`);
@@ -2822,7 +2859,9 @@ async function renderAdmin() {
           projectProgress(0);
           const projectForm = new FormData();
           projectForm.append('projects', entry.file, entry.file.name);
-          const projectPayload = await postFormWithProgress('/api/admin/asana-import', projectForm, projectProgress);
+          const progressId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          projectForm.append('progress_id', progressId);
+          const projectPayload = await postFormWithProgress('/api/admin/asana-import', projectForm, (percent, phase, serverProgress) => projectProgress(percent, phase, serverProgress), progressId);
           setDataToolsProgress(((index + 1) / projectsToImport.length) * 100, `Project ${index + 1} of ${projectsToImport.length} imported: ${entry.source.project.name}.`);
           const projectResult = projectPayload.results?.[0];
           if (!projectResult || projectResult.status === 'failed') {
