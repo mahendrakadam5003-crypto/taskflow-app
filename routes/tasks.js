@@ -526,11 +526,20 @@ router.put('/projects/:id/members', async (req, res) => {
   try {
     const projectAccess = await db.prepare('SELECT created_by FROM projects WHERE id=?').get(req.params.id);
     if (!projectAccess || (req.session.role !== 'admin' && Number(projectAccess.created_by) !== req.session.userId)) return res.status(403).json({ error: 'Only the project creator or admin can manage members' });
-    const ids = Array.isArray(req.body.user_ids) ? req.body.user_ids.map(Number).filter(Boolean) : [];
-    ids.push(Number(projectAccess.created_by));
-    await db.prepare('DELETE FROM project_members WHERE project_id=?').run(req.params.id);
-    const add = db.prepare('INSERT OR IGNORE INTO project_members (project_id,user_id) VALUES (?,?)');
-    for (const id of ids) await add.run(req.params.id, id);
+    const requestedIds = Array.isArray(req.body.user_ids) ? req.body.user_ids.map(Number) : [];
+    if (requestedIds.some(id => !Number.isSafeInteger(id) || id < 1)) return res.status(400).json({ error: 'Every project member must be a valid user ID.' });
+    const ids = [...new Set([...requestedIds, Number(projectAccess.created_by)])];
+    const placeholders = ids.map(() => '?').join(',');
+    const activeUsers = await db.prepare(`SELECT id FROM users WHERE active = 1 AND id IN (${placeholders})`).all(...ids);
+    if (activeUsers.length !== ids.length) return res.status(400).json({ error: 'Project members must be active users.' });
+    const statements = [
+      { sql: 'DELETE FROM project_members WHERE project_id = ?', args: [req.params.id] },
+      ...ids.map(userId => ({
+        sql: 'INSERT OR IGNORE INTO project_members (project_id,user_id) VALUES (?,?)',
+        args: [req.params.id, userId]
+      }))
+    ];
+    await db.batch(statements);
     res.json({ ok: true });
   } catch (err) { sendInternalError(res, err, 'Project member update failed'); }
 });
