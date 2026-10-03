@@ -371,26 +371,41 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
 });
 
 router.get('/payment-history/access/me', async (req, res) => {
-  res.json({ allowed: await canViewPaymentHistory(req) });
+  try {
+    res.json({ allowed: await canViewPaymentHistory(req) });
+  } catch (error) {
+    sendInternalError(res, error, 'Payment-history access lookup failed');
+  }
 });
 
 router.get('/payment-history/access', requireAdmin, async (req, res) => {
-  const rows = await db.prepare(`SELECT u.id AS user_id, u.name, u.username,
-    CASE WHEN pha.user_id IS NULL THEN 0 ELSE 1 END AS allowed
-    FROM users u LEFT JOIN payment_history_access pha ON pha.user_id=u.id
-    WHERE u.active=1 ORDER BY u.name`).all();
-  res.json(rows || []);
+  try {
+    const rows = await db.prepare(`SELECT u.id AS user_id, u.name, u.username,
+      CASE WHEN pha.user_id IS NULL THEN 0 ELSE 1 END AS allowed
+      FROM users u LEFT JOIN payment_history_access pha ON pha.user_id=u.id
+      WHERE u.active=1 ORDER BY u.name`).all();
+    res.json(rows);
+  } catch (error) {
+    sendInternalError(res, error, 'Payment-history access list failed');
+  }
 });
 
 router.put('/payment-history/access/:userId', requireAdmin, async (req, res) => {
-  const userId = Number(req.params.userId);
-  if (!userId) return res.status(400).json({ error: 'Invalid user.' });
-  if (req.body.allowed) {
-    await db.prepare('INSERT OR REPLACE INTO payment_history_access (user_id, granted_by) VALUES (?, ?)').run(userId, req.session.userId);
-  } else {
-    await db.prepare('DELETE FROM payment_history_access WHERE user_id=?').run(userId);
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isSafeInteger(userId) || userId < 1) return res.status(400).json({ error: 'Invalid user.' });
+    const target = await db.prepare('SELECT id, active FROM users WHERE id = ?').get(userId);
+    if (!target) return res.status(404).json({ error: 'User not found.' });
+    if (req.body.allowed && Number(target.active) !== 1) return res.status(400).json({ error: 'Cannot grant payment-history access to an inactive user.' });
+    if (req.body.allowed) {
+      await db.prepare('INSERT OR REPLACE INTO payment_history_access (user_id, granted_by) VALUES (?, ?)').run(userId, req.session.userId);
+    } else {
+      await db.prepare('DELETE FROM payment_history_access WHERE user_id=?').run(userId);
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    sendInternalError(res, error, 'Payment-history access update failed');
   }
-  res.json({ ok: true });
 });
 
 router.get('/payment-history', async (req, res) => {
