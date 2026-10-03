@@ -519,7 +519,7 @@ router.post('/projects', async (req, res) => {
 
 router.get('/projects/:id/members', requireProjectAccess, async (req, res) => {
   try {
-    res.json(await db.prepare(`SELECT u.id,u.name,u.username,u.role FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project_id=? ORDER BY u.name`).all(req.params.id));
+    res.json(await db.prepare(`SELECT u.id, u.name FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project_id=? ORDER BY u.name`).all(req.params.id));
   } catch (err) { sendInternalError(res, err, 'Project member list failed'); }
 });
 
