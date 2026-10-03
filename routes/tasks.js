@@ -157,9 +157,27 @@ async function getStorageUsage() {
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
 const commentsDir = path.join(__dirname, '..', 'uploads', 'comments');
 if (!fs.existsSync(commentsDir)) fs.mkdirSync(commentsDir, { recursive: true });
+const commentUploadTypes = new Map([
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.png', 'image/png'],
+  ['.gif', 'image/gif'],
+  ['.webp', 'image/webp'],
+  ['.pdf', 'application/pdf']
+]);
 const commentUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 }
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, callback) => {
+    const extension = path.extname(file.originalname).toLowerCase();
+    if (commentUploadTypes.get(extension) !== file.mimetype) {
+      const error = new Error('Comment attachments must be JPEG, PNG, GIF, WebP, or PDF files.');
+      error.status = 415;
+      error.code = 'UNSUPPORTED_FILE_TYPE';
+      return callback(error);
+    }
+    callback(null, true);
+  }
 });
 const asanaImportUpload = multer({
   storage: multer.memoryStorage(),
