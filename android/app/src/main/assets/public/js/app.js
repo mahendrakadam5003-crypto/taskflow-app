@@ -669,7 +669,10 @@ async function enterApp() {
   if (ME.role === 'admin' && navAdmin) navAdmin.style.display = '';
   
   try {
-    const rawPeople = await api('/auth/users/directory');
+    const rawPeople = await api('/auth/users/directory').catch((error) => {
+      if (error.status !== 403) throw error;
+      return [ME];
+    });
     PEOPLE = Array.isArray(rawPeople) ? rawPeople.flat(5) : [];
     const paymentAccess = await api('/payment-history/access/me');
     PROJECT_ACTION_ACCESS = await api('/project-action-access/me');

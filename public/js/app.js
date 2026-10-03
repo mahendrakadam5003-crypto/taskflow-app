@@ -793,7 +793,12 @@ async function enterApp() {
       api('/auth/reimbursement-access/me')
     ]);
     const canViewDirectory = ME.role === 'admin' || paymentAccess.allowed || Number(reimbursementAccess.approval_level) > 0;
-    const rawPeople = canViewDirectory ? await api('/auth/users/directory') : [];
+    const rawPeople = canViewDirectory
+      ? await api('/auth/users/directory').catch((error) => {
+        if (error.status !== 403) throw error;
+        return [ME];
+      })
+      : [];
     PEOPLE = Array.isArray(rawPeople) ? rawPeople.flat(5) : [];
     PROJECT_ACTION_ACCESS = projectActionAccess;
     const paymentAllowed = ME.role === 'admin' || paymentAccess.allowed;
