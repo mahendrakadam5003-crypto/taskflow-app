@@ -260,6 +260,9 @@ router.get('/download/:fileId', async (req, res) => {
       return res.status(503).json({ error: 'File storage is not configured (missing TELEGRAM_BOT_TOKEN).' });
     }
     const { fileId } = req.params;
+    if (typeof fileId !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(fileId)) {
+      return res.status(400).json({ error: 'Invalid attachment ID.' });
+    }
     const attachments = await db.prepare(`SELECT original_name, mime_type, task_id
       FROM telegram_attachments WHERE file_id = ? AND deleted_at IS NULL AND task_id IS NOT NULL ORDER BY id DESC`).all(fileId);
     if (!attachments.length) return res.status(404).json({ error: 'Attachment not found.' });
@@ -277,7 +280,7 @@ router.get('/download/:fileId', async (req, res) => {
     if (!taskExists) return res.status(404).json({ error: 'Attachment not found.' });
     if (!attachment) return res.status(403).json({ error: 'You do not have access to this attachment.' });
 
-    const fileInfoRes = await axios.get(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
+    const fileInfoRes = await axios.get(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${encodeURIComponent(fileId)}`);
     const filePath = fileInfoRes.data.result.file_path;
 
     const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;

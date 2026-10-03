@@ -2,16 +2,19 @@ const assert = require('node:assert/strict');
 const { after, before, test } = require('node:test');
 const express = require('express');
 const session = require('express-session');
-const axios = require('axios');
+const { Readable } = require('node:stream');
 
 const dbPath = require.resolve('../db');
 const authPath = require.resolve('../routes/auth');
 const auditPath = require.resolve('../audit');
 const storagePath = require.resolve('../telegram-storage');
-const originals = new Map([dbPath, authPath, auditPath, storagePath].map(modulePath => [modulePath, require.cache[modulePath]]));
+const axiosPath = require.resolve('axios');
+const originals = new Map([dbPath, authPath, auditPath, storagePath, axiosPath].map(modulePath => [modulePath, require.cache[modulePath]]));
 const originalTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
-const originalAxiosGet = axios.get;
 let telegramRequests = 0;
+let attachmentQueries = 0;
+let isProjectMember = false;
+let fileIdFromDb = 'telegram-secret-file-id';
 
 const mockDb = {
   prepare(sql) {
@@ -19,12 +22,13 @@ const mockDb = {
       get: async (...args) => {
         if (sql.includes('SELECT id FROM tasks WHERE id')) return Number(args[0]) === 900 ? { id: 900 } : null;
         if (sql.includes('SELECT project_id, assignee_id FROM tasks')) return { project_id: 200, assignee_id: 44 };
-        if (sql.includes('FROM projects p LEFT JOIN project_members')) return null;
+        if (sql.includes('FROM projects p LEFT JOIN project_members')) return isProjectMember ? { allowed: 1 } : null;
         return null;
       },
       all: async (...args) => {
         if (sql.includes('FROM telegram_attachments WHERE file_id = ?')) {
-          assert.equal(args[0], 'telegram-secret-file-id');
+          attachmentQueries += 1;
+          assert.equal(args[0], fileIdFromDb);
           return [{ original_name: 'private.pdf', mime_type: 'application/pdf', task_id: 900 }];
         }
         return [];
@@ -51,11 +55,14 @@ require.cache[authPath] = {
 };
 require.cache[auditPath] = { id: auditPath, filename: auditPath, loaded: true, exports: { logActivity: async () => {} } };
 require.cache[storagePath] = { id: storagePath, filename: storagePath, loaded: true, exports: { uploadToTelegram: async () => {} } };
-process.env.TELEGRAM_BOT_TOKEN = 'test-token';
-axios.get = async () => {
+const axiosMock = async () => ({ headers: { 'content-type': 'application/pdf' }, data: Readable.from(['test attachment']) });
+axiosMock.get = async url => {
   telegramRequests += 1;
-  throw new Error('Telegram must not be contacted for unauthorized downloads');
+  assert.ok(url.includes(encodeURIComponent(fileIdFromDb)));
+  return { data: { result: { file_path: 'documents/private.pdf' } } };
 };
+require.cache[axiosPath] = { id: axiosPath, filename: axiosPath, loaded: true, exports: axiosMock };
+process.env.TELEGRAM_BOT_TOKEN = 'test-token';
 
 const tasksRouter = require('../routes/tasks');
 const app = express();
@@ -94,16 +101,39 @@ after(async () => {
     else delete require.cache[modulePath];
   }
   delete require.cache[require.resolve('../routes/tasks')];
-  axios.get = originalAxiosGet;
   if (originalTelegramToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
   else process.env.TELEGRAM_BOT_TOKEN = originalTelegramToken;
 });
 
 test('logged-in non-member cannot download a Telegram file attached to another task', async () => {
+  isProjectMember = false;
+  fileIdFromDb = 'telegram-secret-file-id';
+  attachmentQueries = 0;
   telegramRequests = 0;
   const response = await fetch(`${baseUrl}/api/download/telegram-secret-file-id`, {
     headers: { Cookie: cookie }
   });
   assert.equal(response.status, 403);
   assert.equal(telegramRequests, 0, 'Telegram lookup must not run before task authorization');
+});
+
+test('download rejects malformed file IDs before querying or contacting Telegram', async () => {
+  attachmentQueries = 0;
+  telegramRequests = 0;
+  const response = await fetch(`${baseUrl}/api/download/bad%20file-id`, { headers: { Cookie: cookie } });
+  assert.equal(response.status, 400);
+  assert.equal(attachmentQueries, 0);
+  assert.equal(telegramRequests, 0);
+});
+
+test('authorized Telegram download URL encodes the validated file ID', async () => {
+  isProjectMember = true;
+  fileIdFromDb = 'File_id-123';
+  telegramRequests = 0;
+  const response = await fetch(`${baseUrl}/api/download/${encodeURIComponent(fileIdFromDb)}`, { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), 'test attachment');
+  assert.equal(telegramRequests, 1);
+  isProjectMember = false;
+  fileIdFromDb = 'telegram-secret-file-id';
 });
