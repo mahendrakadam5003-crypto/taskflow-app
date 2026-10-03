@@ -156,8 +156,6 @@ async function getStorageUsage() {
 // uploads/downloads; without them, those two endpoints return a clear error
 // instead of silently failing.
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
-const commentsDir = path.join(__dirname, '..', 'uploads', 'comments');
-if (!fs.existsSync(commentsDir)) fs.mkdirSync(commentsDir, { recursive: true });
 const commentUploadTypes = new Map([
   ['.jpg', 'image/jpeg'],
   ['.jpeg', 'image/jpeg'],
