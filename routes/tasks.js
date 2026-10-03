@@ -549,7 +549,7 @@ router.get('/project-action-access/me', async (req, res) => {
 
 router.get('/admin/data-export', requireAdmin, async (req, res) => {
   try {
-    const projects = await db.prepare('SELECT * FROM projects ORDER BY name, id').all();
+    const projects = await db.prepare('SELECT id, name, created_by, asana_gid, created_at FROM projects ORDER BY name, id').all();
     const exportedProjects = [];
     for (const project of projects || []) {
       const [members, taskRows] = await Promise.all([
@@ -561,14 +561,16 @@ router.get('/admin/data-export', requireAdmin, async (req, res) => {
           WHERE t.project_id = ? ORDER BY t.position, t.id`).all(project.id)
       ]);
       const taskIds = (taskRows || []).map(task => Number(task.id));
-      let subtasks = [], comments = [], history = [], checkins = [];
+      let subtasks = [], comments = [], history = [], checkins = [], attachments = [];
       if (taskIds.length) {
         const placeholders = taskIds.map(() => '?').join(',');
-        [subtasks, comments, history, checkins] = await Promise.all([
+        [subtasks, comments, history, checkins, attachments] = await Promise.all([
           db.prepare(`SELECT * FROM subtasks WHERE task_id IN (${placeholders}) ORDER BY task_id, position, id`).all(...taskIds),
           db.prepare(`SELECT c.*, u.name AS user_name FROM comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.task_id IN (${placeholders}) ORDER BY c.created_at, c.id`).all(...taskIds),
           db.prepare(`SELECT h.*, u.name AS actor_name FROM task_history h LEFT JOIN users u ON u.id = h.actor_id WHERE h.task_id IN (${placeholders}) ORDER BY h.created_at, h.id`).all(...taskIds),
-          db.prepare(`SELECT * FROM task_checkins WHERE task_id IN (${placeholders}) ORDER BY task_id, id`).all(...taskIds)
+          db.prepare(`SELECT * FROM task_checkins WHERE task_id IN (${placeholders}) ORDER BY task_id, id`).all(...taskIds),
+          db.prepare(`SELECT id, file_id, message_id, original_name, mime_type, uploaded_by, task_id, created_at, deleted_at
+            FROM telegram_attachments WHERE task_id IN (${placeholders}) ORDER BY task_id, id`).all(...taskIds)
         ]);
       }
       exportedProjects.push({
@@ -579,7 +581,8 @@ router.get('/admin/data-export', requireAdmin, async (req, res) => {
           subtasks: (subtasks || []).filter(item => Number(item.task_id) === Number(task.id)),
           comments: (comments || []).filter(item => Number(item.task_id) === Number(task.id)),
           history: (history || []).filter(item => Number(item.task_id) === Number(task.id)),
-          checkins: (checkins || []).filter(item => Number(item.task_id) === Number(task.id))
+          checkins: (checkins || []).filter(item => Number(item.task_id) === Number(task.id)),
+          attachments: (attachments || []).filter(item => Number(item.task_id) === Number(task.id))
         }))
       });
     }
