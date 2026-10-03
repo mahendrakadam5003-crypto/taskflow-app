@@ -555,23 +555,31 @@ router.put('/projects/:id/members', async (req, res) => {
 });
 
 router.get('/project-action-access', requireAdmin, async (req, res) => {
-  const rows = await db.prepare(`SELECT u.id AS user_id, u.name, u.username, u.role,
-    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.create_project, 1) END AS create_project,
-    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.edit_project, 1) END AS edit_project,
-    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.delete_project, 0) END AS delete_project,
-    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.create_task, 1) END AS create_task,
-    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.edit_task, 1) END AS edit_task,
-    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.delete_task, 0) END AS delete_task,
-    CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.complete_task, 1) END AS complete_task
-    FROM users u LEFT JOIN project_action_access paa ON paa.user_id=u.id
-    WHERE u.active=1 ORDER BY u.name`).all();
-  res.json(rows || []);
+  try {
+    const rows = await db.prepare(`SELECT u.id AS user_id, u.name, u.username, u.role,
+      CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.create_project, 1) END AS create_project,
+      CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.edit_project, 1) END AS edit_project,
+      CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.delete_project, 0) END AS delete_project,
+      CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.create_task, 1) END AS create_task,
+      CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.edit_task, 1) END AS edit_task,
+      CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.delete_task, 0) END AS delete_task,
+      CASE WHEN u.role='admin' THEN 1 ELSE COALESCE(paa.complete_task, 1) END AS complete_task
+      FROM users u LEFT JOIN project_action_access paa ON paa.user_id=u.id
+      WHERE u.active=1 ORDER BY u.name`).all();
+    res.json(rows);
+  } catch (error) {
+    sendInternalError(res, error, 'Project action access list failed');
+  }
 });
 
 router.get('/project-action-access/me', async (req, res) => {
-  if (req.session.role === 'admin') return res.json(Object.fromEntries(PROJECT_ACTIONS.map(action => [action, true])));
-  const row = await db.prepare(`SELECT ${PROJECT_ACTIONS.join(', ')} FROM project_action_access WHERE user_id=?`).get(req.session.userId);
-  res.json(Object.fromEntries(PROJECT_ACTIONS.map(action => [action, row ? Number(row[action]) === 1 : PROJECT_ACTION_DEFAULTS[action]])));
+  try {
+    if (req.session.role === 'admin') return res.json(Object.fromEntries(PROJECT_ACTIONS.map(action => [action, true])));
+    const row = await db.prepare(`SELECT ${PROJECT_ACTIONS.join(', ')} FROM project_action_access WHERE user_id=?`).get(req.session.userId);
+    res.json(Object.fromEntries(PROJECT_ACTIONS.map(action => [action, row ? Number(row[action]) === 1 : PROJECT_ACTION_DEFAULTS[action]])));
+  } catch (error) {
+    sendInternalError(res, error, 'Current project action access lookup failed');
+  }
 });
 
 router.get('/admin/data-export', requireAdmin, async (req, res) => {
