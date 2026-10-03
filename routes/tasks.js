@@ -470,17 +470,24 @@ router.put('/payment-history/:id', async (req, res) => {
   if (!(await canViewPaymentHistory(req))) return res.status(403).json({ error: 'You do not have payment-history access.' });
   const status = ['received', 'not_received', 'pending'].includes(req.body.payment_status) ? req.body.payment_status : null;
   if (!status) return res.status(400).json({ error: 'Invalid payment status.' });
-  const task = await db.prepare(`SELECT id, total_amount FROM tasks
+  const task = await db.prepare(`SELECT id, project_id, assignee_id, payment_member_id,
+      payment_status, payment_received_date, total_amount, amount_received FROM tasks
     WHERE id=? AND COALESCE(no_billing_required, 0)=0
       AND invoice_number IS NOT NULL AND trim(invoice_number) <> ''
       AND invoice_date IS NOT NULL AND trim(invoice_date) <> ''`).get(req.params.id);
   if (!task) return res.status(404).json({ error: 'Invoice task not found.' });
+  if (!(await canAccessTask(task.id, req.session.userId, req.session.role === 'admin'))) {
+    return res.status(403).json({ error: 'You do not have access to this task.' });
+  }
   const paymentAmounts = parsePaymentAmounts(task.total_amount, req.body.amount_received);
   if (!paymentAmounts) return res.status(400).json({ error: 'Received amount must be valid to two decimals and cannot exceed the invoice total.' });
   const memberId = req.body.payment_member_id ? Number(req.body.payment_member_id) : null;
   if (memberId && !(await db.prepare('SELECT id FROM users WHERE id=? AND active=1').get(memberId))) return res.status(400).json({ error: 'Selected member was not found.' });
   await db.prepare('UPDATE tasks SET payment_member_id=?, payment_status=?, payment_received_date=?, amount_received=?, updated_at=datetime(\'now\') WHERE id=?')
     .run(memberId, status, req.body.payment_received_date || null, paymentAmounts.receivedAmount, req.params.id);
+  await logActivity(req, 'Invoice payment updated', 'task', task.id,
+    `Status: ${task.payment_status} -> ${status}; received: ${Number(task.amount_received || 0).toFixed(2)} -> ${paymentAmounts.receivedAmount.toFixed(2)}; member: ${task.payment_member_id ?? 'unassigned'} -> ${memberId ?? 'unassigned'}`,
+    task.assignee_id || req.session.userId);
   res.json({ ok: true });
 });
 
