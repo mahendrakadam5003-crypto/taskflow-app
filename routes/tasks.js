@@ -3,7 +3,6 @@ const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 const { gunzipSync } = require('zlib');
 const axios = require('axios');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
