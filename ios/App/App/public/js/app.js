@@ -2256,7 +2256,7 @@ async function renderAdmin() {
           <input id="u-name" placeholder="Full name">
           <input id="u-username" placeholder="Username">
           <select id="u-department"><option value="">No department</option>${departmentOptions}</select>
-          <input id="u-password" placeholder="Password" type="password">
+          <input id="u-password" placeholder="Password (10 characters minimum)" type="password" minlength="10">
           <select id="u-role">
             <option value="employee">Employee</option>
             <option value="admin">Admin</option>
@@ -2583,6 +2583,7 @@ async function renderAdmin() {
       const role = $('#u-role').value;
 
       if (!name || !username || !password) return alert('Please complete all form fields.');
+      if (password.length < 10) return alert('Password must be at least 10 characters long.');
 
       try {
         await api('/auth/users', { method: 'POST', body: { name, username, password, department, role } });
@@ -2696,7 +2697,7 @@ function showSelfPasswordModal() {
   showModal(`
     <h3>Change password</h3>
     <input id="self-current-password" type="password" placeholder="Current password">
-    <input id="self-new-password" type="password" placeholder="New password (minimum 6 characters)">
+    <input id="self-new-password" type="password" minlength="10" placeholder="New password (minimum 10 characters)">
     <div id="self-password-error" class="form-error"></div>
     <div class="modal-actions"><button class="btn btn-secondary" id="self-password-cancel">Cancel</button><button class="btn btn-primary" id="self-password-save">Update password</button></div>`);
   $('#self-password-cancel').onclick = closeModal;
@@ -2718,7 +2719,7 @@ async function adminChangePassword(userId, userName) {
     <h3>Modify Credentials for ${escapeHtml(userName)}</h3>
     <div style="margin: 15px 0;">
       <label style="display:block; margin-bottom:5px; font-weight:bold;">New Password</label>
-      <input id="adm-new-pass" type="password" placeholder="Enter new password (min 4 characters)" autofocus style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px;">
+      <input id="adm-new-pass" type="password" minlength="10" placeholder="Enter new password (min 10 characters)" autofocus style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px;">
     </div>
     <div id="adm-pass-error" class="form-error" style="color:red; margin-bottom:10px; font-size:13px;"></div>
     <div class="modal-actions">
@@ -2734,8 +2735,8 @@ async function adminChangePassword(userId, userName) {
     const errorEl = $('#adm-pass-error');
     if (errorEl) errorEl.textContent = '';
 
-    if (!password || password.length < 4) {
-      if (errorEl) errorEl.textContent = 'Password must be at least 4 characters long.';
+    if (!password || password.length < 10) {
+      if (errorEl) errorEl.textContent = 'Password must be at least 10 characters long.';
       return;
     }
 
