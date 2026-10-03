@@ -14,6 +14,7 @@ const { sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { uploadToTelegram } = require('../telegram-storage');
 const { parseMoneyAmount, parsePaymentAmounts } = require('../lib/money');
 const { getConfiguredTursoDatabaseName } = require('../lib/turso-config');
+const { businessDate } = require('../lib/business-date');
 
 const router = express.Router();
 wrapAsyncRoutes(router);
@@ -333,7 +334,7 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
       FROM tasks t JOIN projects p ON p.id = t.project_id
       WHERE COALESCE(t.status, 'open') <> 'done' AND (? = 'admin' OR p.created_by = ? OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = ?))`)
       .all(req.session.role, req.session.userId, req.session.userId);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = businessDate();
     const projects = projectRows.map(project => {
       const projectTasks = taskRows.filter(task => Number(task.project_id) === Number(project.id));
       return { ...project, open_tasks: projectTasks.length, overdue_tasks: projectTasks.filter(task => task.due_date && task.due_date < today).length };
@@ -353,8 +354,8 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
         AND t.invoice_number IS NOT NULL AND trim(t.invoice_number) <> ''
         AND t.invoice_date IS NOT NULL AND trim(t.invoice_date) <> ''
         AND COALESCE(t.payment_status, 'not_received') <> 'received'
-        AND t.invoice_date IS NOT NULL AND date(t.invoice_date, '+30 days') < date('now')
-      ORDER BY t.invoice_date ASC`).all() : [];
+        AND t.invoice_date IS NOT NULL AND date(t.invoice_date, '+30 days') < ?
+      ORDER BY t.invoice_date ASC`).all(today) : [];
     res.json({
       projects,
       open_tasks: taskRows.length,
