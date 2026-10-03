@@ -120,4 +120,5 @@ test('payment-history editor must have task access and successful edits are audi
   assert.ok(audit);
   assert.match(audit[4], /Status: pending -> received/);
   assert.match(audit[4], /received: 25\.00 -> 75\.00/);
+  assert.match(writes[0].args[4], /^\d{4}-\d{2}-\d{2}T.*Z$/);
 });

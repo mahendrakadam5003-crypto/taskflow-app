@@ -483,8 +483,9 @@ router.put('/payment-history/:id', async (req, res) => {
   if (!paymentAmounts) return res.status(400).json({ error: 'Received amount must be valid to two decimals and cannot exceed the invoice total.' });
   const memberId = req.body.payment_member_id ? Number(req.body.payment_member_id) : null;
   if (memberId && !(await db.prepare('SELECT id FROM users WHERE id=? AND active=1').get(memberId))) return res.status(400).json({ error: 'Selected member was not found.' });
-  await db.prepare('UPDATE tasks SET payment_member_id=?, payment_status=?, payment_received_date=?, amount_received=?, updated_at=datetime(\'now\') WHERE id=?')
-    .run(memberId, status, req.body.payment_received_date || null, paymentAmounts.receivedAmount, req.params.id);
+  const updatedAt = new Date().toISOString();
+  await db.prepare('UPDATE tasks SET payment_member_id=?, payment_status=?, payment_received_date=?, amount_received=?, updated_at=? WHERE id=?')
+    .run(memberId, status, req.body.payment_received_date || null, paymentAmounts.receivedAmount, updatedAt, req.params.id);
   await logActivity(req, 'Invoice payment updated', 'task', task.id,
     `Status: ${task.payment_status} -> ${status}; received: ${Number(task.amount_received || 0).toFixed(2)} -> ${paymentAmounts.receivedAmount.toFixed(2)}; member: ${task.payment_member_id ?? 'unassigned'} -> ${memberId ?? 'unassigned'}`,
     task.assignee_id || req.session.userId);
