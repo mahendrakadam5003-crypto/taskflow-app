@@ -13,6 +13,7 @@ const { logActivity } = require('../audit');
 const { sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { uploadToTelegram } = require('../telegram-storage');
 const { parseMoneyAmount, parsePaymentAmounts } = require('../lib/money');
+const { getConfiguredTursoDatabaseName } = require('../lib/turso-config');
 
 const router = express.Router();
 wrapAsyncRoutes(router);
@@ -94,7 +95,7 @@ async function getStorageUsage() {
 
     const databasesResponse = await axios.get(`https://api.turso.tech/v1/organizations/${encodeURIComponent(organization)}/databases`, { headers });
     const databases = Array.isArray(databasesResponse.data?.databases) ? databasesResponse.data.databases : [];
-    const requestedDatabase = process.env.TURSO_DATABASE || 'taskflow-db-mahendrakadam5003-crypto';
+    const requestedDatabase = getConfiguredTursoDatabaseName();
     const database = databases.find(item => [item.Name, item.name, item.Hostname, item.hostname].includes(requestedDatabase))
       || databases.find(item => String(item.Hostname || item.hostname || '').startsWith(`${requestedDatabase}.`))
       || (databases.length === 1 ? databases[0] : null);
