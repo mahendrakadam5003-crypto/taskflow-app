@@ -495,14 +495,24 @@ router.put('/payment-history/:id', async (req, res) => {
 router.post('/projects', async (req, res) => {
   try {
     if (!(await canProjectAction(req, 'create_project'))) return res.status(403).json({ error: 'You do not have permission to create projects.' });
-    const { name, pin, member_ids = [] } = req.body;
-    if (!name || !name.trim()) return res.status(400).json({ error: 'Name required' });
-    const pinHash = pin ? bcrypt.hashSync(String(pin), 10) : null;
+    const { name, pin, member_ids = [] } = req.body || {};
+    if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'Name required' });
+    if (pin !== undefined && pin !== null && pin !== '' && (typeof pin !== 'string' || !/^\d{4,12}$/.test(pin))) {
+      return res.status(400).json({ error: 'Project PIN must contain 4 to 12 digits.' });
+    }
+    if (!Array.isArray(member_ids)) return res.status(400).json({ error: 'Project member IDs must be an array.' });
+    const requestedIds = member_ids.map(Number);
+    if (requestedIds.some(id => !Number.isSafeInteger(id) || id < 1)) return res.status(400).json({ error: 'Every project member must be a valid user ID.' });
+    const memberIds = [...new Set([Number(req.session.userId), ...requestedIds])];
+    const placeholders = memberIds.map(() => '?').join(',');
+    const activeUsers = await db.prepare(`SELECT id FROM users WHERE active=1 AND id IN (${placeholders})`).all(...memberIds);
+    if (activeUsers.length !== memberIds.length) return res.status(400).json({ error: 'Project members must be active users.' });
+    const pinHash = pin ? await bcrypt.hash(pin, 10) : null;
     const info = await db.prepare('INSERT INTO projects (name,pin_hash,created_by) VALUES (?,?,?)').run(name.trim(), pinHash, req.session.userId);
-    await db.prepare('INSERT OR IGNORE INTO project_members (project_id,user_id) VALUES (?,?)').run(info.lastInsertRowid, req.session.userId);
-    const ids = Array.isArray(member_ids) ? member_ids : [];
-    const add = db.prepare('INSERT OR IGNORE INTO project_members (project_id,user_id) VALUES (?,?)');
-    for (const id of ids) if (Number(id) !== req.session.userId) await add.run(info.lastInsertRowid, Number(id));
+    await db.batch(memberIds.map(userId => ({
+      sql: 'INSERT OR IGNORE INTO project_members (project_id,user_id) VALUES (?,?)',
+      args: [info.lastInsertRowid, userId]
+    })));
     res.json({ id: info.lastInsertRowid });
   } catch (err) { sendInternalError(res, err, 'Project creation failed'); }
 });
@@ -996,7 +1006,7 @@ router.post('/projects/:id/unlock', requireProjectAccess, projectPinLimiter, asy
   try {
     const project = await db.prepare('SELECT * FROM projects WHERE id=?').get(req.params.id);
     if (!project) return res.status(404).json({ error: 'Not found' });
-    if (!project.pin_hash || bcrypt.compareSync(String(req.body.pin || ''), project.pin_hash)) return res.json({ ok: true });
+    if (!project.pin_hash || await bcrypt.compare(String(req.body.pin || ''), project.pin_hash)) return res.json({ ok: true });
     res.status(401).json({ error: 'Wrong PIN' });
   } catch (err) { sendInternalError(res, err, 'Project unlock failed'); }
 });

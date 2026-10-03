@@ -1052,7 +1052,7 @@ btnNewProject.style.display = PROJECT_ACTION_ACCESS.create_project ? '' : 'none'
     showModal(`
       <h3>New project</h3>
       <input id="np-name" placeholder="Project name" autofocus>
-      <input id="np-pin" placeholder="Optional PIN (leave blank for none)" type="text" inputmode="numeric">
+      <input id="np-pin" placeholder="Optional PIN (4-12 digits)" type="text" inputmode="numeric" minlength="4" maxlength="12" pattern="[0-9]{4,12}">
       <p class="hint">A PIN adds light in-app privacy — anyone opening this project on this device will be asked for it.</p>
       <div id="np-error" class="form-error"></div>
       <div class="modal-actions">
@@ -1064,6 +1064,10 @@ btnNewProject.style.display = PROJECT_ACTION_ACCESS.create_project ? '' : 'none'
       const name = $('#np-name').value.trim();
       if (!name) return;
       const pin = $('#np-pin').value.trim();
+      if (pin && !/^\d{4,12}$/.test(pin)) {
+        $('#np-error').textContent = 'Project PIN must contain 4 to 12 digits.';
+        return;
+      }
       try {
         await api('/projects', { method: 'POST', body: { name, pin: pin || null } });
         closeModal();
