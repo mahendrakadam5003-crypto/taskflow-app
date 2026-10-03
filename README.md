@@ -15,8 +15,16 @@ Unzip this folder anywhere on your PC (e.g. `C:\TaskFlow`), then open a terminal
 
 ```
 npm install
+```
+
+For an isolated local SQLite database, explicitly enable local mode before starting:
+
+```powershell
+$env:USE_LOCAL_DB = '1'
 npm start
 ```
+
+Without `USE_LOCAL_DB=1`, TaskFlow requires both `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` and stops if either is missing or the database is unreachable.
 
 The local server listens on `127.0.0.1:3000`. Open `http://127.0.0.1:3000` on the PC itself. Local installs do not accept connections from other LAN devices.
 

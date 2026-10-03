@@ -12,6 +12,7 @@ const { requireAuth, requireAdmin } = require('./auth');
 const { logActivity } = require('../audit');
 const { sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { uploadToTelegram } = require('../telegram-storage');
+const { parseMoneyAmount, parsePaymentAmounts } = require('../lib/money');
 
 const router = express.Router();
 wrapAsyncRoutes(router);
@@ -319,7 +320,7 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
     });
     const reimbursementWhere = req.session.role === 'admin' ? '' : ' AND user_id = ?';
     const reimbursementParams = reimbursementWhere ? [req.session.userId] : [];
-    const reimbursement = await db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS amount
+    const reimbursement = await db.prepare(`SELECT COUNT(*) AS count, ROUND(COALESCE(SUM(amount), 0), 2) AS amount
       FROM reimbursements WHERE status IN ('submitted', 'approved_level_1')${reimbursementWhere}`).get(...reimbursementParams);
     const activeTask = await db.prepare(`SELECT t.id, t.project_id, t.title, t.customer_name, p.name AS project_name
       FROM task_checkins c JOIN tasks t ON t.id=c.task_id JOIN projects p ON p.id=t.project_id
@@ -342,7 +343,7 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
       pending_reimbursement_amount: Number(reimbursement?.amount || 0),
       active_task: activeTask || null,
       payment_alert_count: paymentAlerts.length,
-      payment_alerts: paymentAlerts.map(row => ({ ...row, pending_amount: Math.max(0, Number(row.total_amount || 0) - Number(row.amount_received || 0)) })),
+      payment_alerts: paymentAlerts.map(row => ({ ...row, pending_amount: Math.round(Math.max(0, Number(row.total_amount || 0) - Number(row.amount_received || 0)) * 100) / 100 })),
       storage: req.session.role === 'admin' ? await getStorageUsage() : null
     });
   } catch (err) { sendInternalError(res, err, 'Dashboard summary failed'); }
@@ -393,7 +394,7 @@ router.get('/payment-history', async (req, res) => {
   sql += " ORDER BY COALESCE(t.invoice_date, '9999-12-31') DESC, t.id DESC";
   if (!req.query.from && !req.query.to) sql += ' LIMIT 25';
   const rows = await db.prepare(sql).all(...params);
-  res.json(rows.map(row => ({ ...row, pending_amount: Math.max(0, Number(row.total_amount || 0) - Number(row.amount_received || 0)) })));
+  res.json(rows.map(row => ({ ...row, pending_amount: Math.round(Math.max(0, Number(row.total_amount || 0) - Number(row.amount_received || 0)) * 100) / 100 })));
 });
 
 router.get('/payment-history/summary', async (req, res) => {
@@ -410,15 +411,15 @@ router.get('/payment-history/summary', async (req, res) => {
   if (invoiceType) { conditions.push('t.invoice_type = ?'); params.push(invoiceType); }
   if (req.query.status) { conditions.push('t.payment_status = ?'); params.push(req.query.status); }
   const row = await db.prepare(`SELECT COUNT(*) AS invoice_count,
-      COALESCE(SUM(t.total_amount), 0) AS total_revenue,
-      COALESCE(SUM(t.amount_received), 0) AS payment_received,
-      COALESCE(SUM(CASE WHEN t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS payment_pending,
-      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='cash' THEN t.total_amount ELSE 0 END), 0) AS cash_revenue,
-      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='cash' THEN t.amount_received ELSE 0 END), 0) AS cash_received,
-      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='cash' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS cash_pending,
-      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' THEN t.total_amount ELSE 0 END), 0) AS gst_revenue,
-      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' THEN t.amount_received ELSE 0 END), 0) AS gst_received,
-      COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0) AS gst_pending
+      ROUND(COALESCE(SUM(t.total_amount), 0), 2) AS total_revenue,
+      ROUND(COALESCE(SUM(t.amount_received), 0), 2) AS payment_received,
+      ROUND(COALESCE(SUM(CASE WHEN t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0), 2) AS payment_pending,
+      ROUND(COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='cash' THEN t.total_amount ELSE 0 END), 0), 2) AS cash_revenue,
+      ROUND(COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='cash' THEN t.amount_received ELSE 0 END), 0), 2) AS cash_received,
+      ROUND(COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='cash' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0), 2) AS cash_pending,
+      ROUND(COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' THEN t.total_amount ELSE 0 END), 0), 2) AS gst_revenue,
+      ROUND(COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' THEN t.amount_received ELSE 0 END), 0), 2) AS gst_received,
+      ROUND(COALESCE(SUM(CASE WHEN lower(COALESCE(t.invoice_type, 'gst'))='gst' AND t.total_amount > t.amount_received THEN t.total_amount - t.amount_received ELSE 0 END), 0), 2) AS gst_pending
     FROM tasks t WHERE ${conditions.join(' AND ')}`).get(...params);
   const amount = key => Number(row?.[key] || 0);
   res.json({
@@ -434,16 +435,17 @@ router.put('/payment-history/:id', async (req, res) => {
   if (!(await canViewPaymentHistory(req))) return res.status(403).json({ error: 'You do not have payment-history access.' });
   const status = ['received', 'not_received', 'pending'].includes(req.body.payment_status) ? req.body.payment_status : null;
   if (!status) return res.status(400).json({ error: 'Invalid payment status.' });
-  const task = await db.prepare(`SELECT id FROM tasks
+  const task = await db.prepare(`SELECT id, total_amount FROM tasks
     WHERE id=? AND COALESCE(no_billing_required, 0)=0
       AND invoice_number IS NOT NULL AND trim(invoice_number) <> ''
       AND invoice_date IS NOT NULL AND trim(invoice_date) <> ''`).get(req.params.id);
   if (!task) return res.status(404).json({ error: 'Invoice task not found.' });
-  const received = Math.max(0, Number(req.body.amount_received) || 0);
+  const paymentAmounts = parsePaymentAmounts(task.total_amount, req.body.amount_received);
+  if (!paymentAmounts) return res.status(400).json({ error: 'Received amount must be valid to two decimals and cannot exceed the invoice total.' });
   const memberId = req.body.payment_member_id ? Number(req.body.payment_member_id) : null;
   if (memberId && !(await db.prepare('SELECT id FROM users WHERE id=? AND active=1').get(memberId))) return res.status(400).json({ error: 'Selected member was not found.' });
   await db.prepare('UPDATE tasks SET payment_member_id=?, payment_status=?, payment_received_date=?, amount_received=?, updated_at=datetime(\'now\') WHERE id=?')
-    .run(memberId, status, req.body.payment_received_date || null, received, req.params.id);
+    .run(memberId, status, req.body.payment_received_date || null, paymentAmounts.receivedAmount, req.params.id);
   res.json({ ok: true });
 });
 
@@ -1041,7 +1043,8 @@ router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     const normalizedInvoiceNumber = noBillingRequired ? null : String(invoice_number || '').trim() || null;
     const normalizedInvoiceDate = noBillingRequired ? null : (invoice_date || null);
     const normalizedCustomerName = noBillingRequired ? '' : String(customer_name || '').trim();
-    const normalizedTotalAmount = noBillingRequired ? 0 : Math.max(0, Number(total_amount) || 0);
+    const normalizedTotalAmount = noBillingRequired ? 0 : parseMoneyAmount(total_amount ?? 0);
+    if (normalizedTotalAmount === null) return res.status(400).json({ error: 'Invoice total must be a non-negative amount with at most two decimal places.' });
     const info = await db.prepare(`INSERT INTO tasks(project_id,title,description,no_billing_required,created_by,assignee_id,due_date,invoice_type,invoice_number,invoice_date,customer_name,total_amount,work_mode)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(req.params.id, title.trim(), String(description || '').trim(), noBillingRequired ? 1 : 0, req.session.userId, assignee_id || null, due_date || null, invoiceType, normalizedInvoiceNumber, normalizedInvoiceDate, normalizedCustomerName, normalizedTotalAmount, workMode);
     if (!noBillingRequired && assignee_id && normalizedInvoiceNumber) {
@@ -1061,13 +1064,24 @@ router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
 
 router.put('/tasks/:id', async (req, res) => {
   try {
+    if (req.body.status !== undefined && !['open', 'done'].includes(req.body.status)) {
+      return res.status(400).json({ error: 'Task status must be open or done.' });
+    }
+    if (req.body.work_mode !== undefined && !['office', 'on_field'].includes(req.body.work_mode)) {
+      return res.status(400).json({ error: 'Task work mode must be office or on_field.' });
+    }
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
     if (req.body.status !== undefined && !(await canProjectAction(req, 'complete_task'))) return res.status(403).json({ error: 'You do not have permission to complete tasks.' });
     const workModeChangeRequested = req.body.work_mode !== undefined;
     if (workModeChangeRequested && !(await canChangeTaskWorkMode(req))) return res.status(403).json({ error: 'You do not have permission to change the task work location. Ask an administrator.' });
     if (Object.keys(req.body).some(key => !['status', 'work_mode'].includes(key)) && !(await canProjectAction(req, 'edit_task'))) return res.status(403).json({ error: 'You do not have permission to edit tasks.' });
-    const taskBefore = await db.prepare('SELECT title, description, status, assignee_id, due_date, payment_member_id, invoice_number, invoice_date, customer_name, total_amount, invoice_type, no_billing_required, work_mode FROM tasks WHERE id=?').get(req.params.id);
+    const taskBefore = await db.prepare('SELECT title, description, status, assignee_id, due_date, payment_member_id, invoice_number, invoice_date, customer_name, total_amount, amount_received, invoice_type, no_billing_required, work_mode FROM tasks WHERE id=?').get(req.params.id);
     if (!taskBefore) return res.status(404).json({ error: 'Task not found.' });
+    const nextTotalAmount = req.body.total_amount === undefined
+      ? Number(taskBefore.total_amount || 0)
+      : parseMoneyAmount(req.body.total_amount);
+    if (nextTotalAmount === null) return res.status(400).json({ error: 'Invoice total must be a non-negative amount with at most two decimal places.' });
+    if (nextTotalAmount < Number(taskBefore.amount_received || 0)) return res.status(400).json({ error: 'Invoice total cannot be less than the amount already received.' });
     const noBillingRequired = req.body.no_billing_required === undefined
       ? Number(taskBefore.no_billing_required) === 1
       : req.body.no_billing_required === true || Number(req.body.no_billing_required) === 1;
@@ -1075,7 +1089,7 @@ router.put('/tasks/:id', async (req, res) => {
       const invoiceNumber = String(req.body.invoice_number ?? taskBefore.invoice_number ?? '').trim();
       const invoiceDate = String(req.body.invoice_date ?? taskBefore.invoice_date ?? '').trim();
       const customerName = String(req.body.customer_name ?? taskBefore.customer_name ?? '').trim();
-      const totalAmount = Number(req.body.total_amount ?? taskBefore.total_amount ?? 0);
+      const totalAmount = nextTotalAmount;
       const invoiceType = String(req.body.invoice_type ?? taskBefore.invoice_type ?? '').trim().toLowerCase();
       if (!customerName || !invoiceNumber || !invoiceDate || !INVOICE_TYPES.includes(invoiceType) || !Number.isFinite(totalAmount) || totalAmount <= 0) {
         return res.status(400).json({ error: 'Complete the billing details (customer, invoice type, invoice number, invoice date, and total amount) or select No billing required before completing this task.' });
@@ -1119,7 +1133,7 @@ router.put('/tasks/:id', async (req, res) => {
     if (!noBillingRequired && req.body.invoice_number !== undefined) { updates.push('invoice_number=?'); values.push(String(req.body.invoice_number || '').trim() || null); }
     if (!noBillingRequired && req.body.invoice_date !== undefined) { updates.push('invoice_date=?'); values.push(req.body.invoice_date || null); }
     if (!noBillingRequired && req.body.customer_name !== undefined) { updates.push('customer_name=?'); values.push(String(req.body.customer_name || '').trim()); }
-    if (!noBillingRequired && req.body.total_amount !== undefined) { updates.push('total_amount=?'); values.push(Math.max(0, Number(req.body.total_amount) || 0)); }
+    if (!noBillingRequired && req.body.total_amount !== undefined) { updates.push('total_amount=?'); values.push(nextTotalAmount); }
     if (req.body.work_mode !== undefined) { updates.push('work_mode=?'); values.push(nextWorkMode); }
     if (req.body.assignee_id !== undefined) {
       if (req.body.assignee_id && !(await canAccessProject((await db.prepare('SELECT project_id FROM tasks WHERE id=?').get(req.params.id)).project_id, Number(req.body.assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });

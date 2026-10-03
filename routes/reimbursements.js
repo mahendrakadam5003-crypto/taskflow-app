@@ -8,8 +8,10 @@ const { csvValue } = require('../csv');
 const { requireAuth, requireAdmin } = require('./auth');
 const { sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { uploadToTelegram, streamFromTelegram } = require('../telegram-storage');
+const { parseMoneyAmount } = require('../lib/money');
 
 const router = express.Router();
+
 wrapAsyncRoutes(router);
 router.use(requireAuth);
 
@@ -83,9 +85,9 @@ router.get('/summary', async (req, res) => {
   try {
     const access = await getAccess(req);
     let sql = `SELECT COUNT(*) AS claim_count,
-      COALESCE(SUM(r.amount), 0) AS total_amount,
-      COALESCE(SUM(CASE WHEN r.status IN ('submitted', 'approved_level_1') THEN r.amount ELSE 0 END), 0) AS pending_amount,
-      COALESCE(SUM(CASE WHEN r.status IN ('approved', 'paid') THEN r.amount ELSE 0 END), 0) AS approved_amount
+      ROUND(COALESCE(SUM(r.amount), 0), 2) AS total_amount,
+      ROUND(COALESCE(SUM(CASE WHEN r.status IN ('submitted', 'approved_level_1') THEN r.amount ELSE 0 END), 0), 2) AS pending_amount,
+      ROUND(COALESCE(SUM(CASE WHEN r.status IN ('approved', 'paid') THEN r.amount ELSE 0 END), 0), 2) AS approved_amount
       FROM reimbursements r JOIN users u ON u.id = r.user_id
       WHERE r.expense_date <= date('now', 'localtime')`;
     const params = [];
@@ -157,12 +159,12 @@ router.get('/export.csv', async (req, res) => {
 
 router.post('/', upload.array('receipt', 10), async (req, res) => {
   try {
-    const amount = Number(req.body.amount);
+    const amount = parseMoneyAmount(req.body.amount, { allowZero: false });
     const category = String(req.body.category || '').trim();
     const expenseDate = String(req.body.expense_date || '').trim();
     const description = String(req.body.description || '').trim();
-    if (!Number.isFinite(amount) || amount <= 0 || !category || !expenseDate) {
-      return res.status(400).json({ error: 'Amount, category, and expense date are required.' });
+    if (amount === null || !category || !expenseDate) {
+      return res.status(400).json({ error: 'A positive amount with at most two decimal places, category, and expense date are required.' });
     }
     const receiptPaths = [];
     const receiptMeta = [];
@@ -194,13 +196,13 @@ router.put('/:id(\\d+)', upload.array('receipt', 10), async (req, res) => {
     if (Number(claim.user_id) !== Number(req.session.userId)) return res.status(403).json({ error: 'You can only edit your own expenses.' });
     if (claim.status !== 'submitted') return res.status(409).json({ error: 'Expenses can only be edited before the first approval.' });
 
-    const amount = Number(req.body.amount);
+    const amount = parseMoneyAmount(req.body.amount, { allowZero: false });
     const currency = String(req.body.currency || claim.currency || 'INR').trim().toUpperCase();
     const category = String(req.body.category || '').trim();
     const expenseDate = String(req.body.expense_date || '').trim();
     const description = String(req.body.description || '').trim();
-    if (!Number.isFinite(amount) || amount <= 0 || !currency || !category || !expenseDate || !description) {
-      return res.status(400).json({ error: 'Amount, currency, category, date, and description are required.' });
+    if (amount === null || !currency || !category || !expenseDate || !description) {
+      return res.status(400).json({ error: 'A positive amount with at most two decimal places, currency, category, date, and description are required.' });
     }
 
     let receiptPaths = [];
@@ -252,14 +254,18 @@ router.delete('/:id', requireAdmin, async (req, res) => {
 });
 
 router.put('/bulk-status', async (req, res) => {
-  const ids = Array.isArray(req.body.ids) ? req.body.ids.map(Number).filter(Number.isInteger) : [];
+  const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.map(Number).filter(Number.isInteger))] : [];
   if (!ids.length) return res.status(400).json({ error: 'Select at least one reimbursement.' });
   try {
     const access = await getAccess(req);
     if (!access.approval_level) return res.status(403).json({ error: 'You do not have reimbursement approval access.' });
     const updated = [];
-    for (const id of ids) {
-      const claim = await db.prepare('SELECT user_id, status, amount, currency, category FROM reimbursements WHERE id = ?').get(id);
+    const claims = await Promise.all(ids.map(id => db.prepare('SELECT id, user_id, status, amount, currency, category FROM reimbursements WHERE id = ?').get(id)));
+    if (claims.some(claim => claim && Number(claim.user_id) === Number(req.session.userId))) {
+      return res.status(403).json({ error: 'You cannot approve or pay your own reimbursement.' });
+    }
+    for (const [index, id] of ids.entries()) {
+      const claim = claims[index];
       if (!claim) continue;
       if (req.session.role !== 'admin' && ((access.approval_level === 1 && claim.status !== 'submitted') || (access.approval_level >= 2 && claim.status !== 'approved_level_1'))) {
         return res.status(400).json({ error: `Reimbursement ${id} is not waiting for your approval stage.` });
@@ -284,6 +290,7 @@ router.put('/:id/status', async (req, res) => {
     if (!access.approval_level) return res.status(403).json({ error: 'You do not have reimbursement approval access.' });
     const claim = await db.prepare('SELECT user_id, status, amount, currency, category FROM reimbursements WHERE id = ?').get(req.params.id);
     if (!claim) return res.status(404).json({ error: 'Claim not found.' });
+    if (Number(claim.user_id) === Number(req.session.userId)) return res.status(403).json({ error: 'You cannot approve or pay your own reimbursement.' });
     if (status === 'rejected') {
       if (claim.status === 'paid') return res.status(400).json({ error: 'A paid claim cannot be rejected.' });
     } else if (status === 'approved' && req.session.role !== 'admin') {

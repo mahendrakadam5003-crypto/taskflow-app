@@ -37,7 +37,6 @@ function verifyUnsafeRequestOrigin(req, res, next) {
   return res.status(403).json({ error: 'Invalid request origin.' });
 }
 
-// Import our central database client abstraction instance layer cleanly 
 const db = require('./db');
 
 class TursoSessionStore extends session.Store {
@@ -56,9 +55,9 @@ class TursoSessionStore extends session.Store {
     const expiresAt = sessionData.cookie?.expires
       ? new Date(sessionData.cookie.expires).getTime()
       : Date.now() + Number(sessionData.cookie?.maxAge || 86400000);
-    db.prepare(`INSERT INTO web_sessions (sid, data, expires_at) VALUES (?, ?, ?)
-      ON CONFLICT(sid) DO UPDATE SET data = excluded.data, expires_at = excluded.expires_at`)
-      .run(sid, JSON.stringify(sessionData), expiresAt)
+    db.prepare(`INSERT INTO web_sessions (sid, data, user_id, expires_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(sid) DO UPDATE SET data = excluded.data, user_id = excluded.user_id, expires_at = excluded.expires_at`)
+      .run(sid, JSON.stringify(sessionData), sessionData.userId || null, expiresAt)
       .then(() => callback?.(null))
       .catch(callback);
   }
@@ -77,6 +76,11 @@ class TursoSessionStore extends session.Store {
       .then(() => callback?.(null))
       .catch(callback);
   }
+}
+
+async function cleanupExpiredSessions() {
+  await db.ready;
+  await db.deleteExpiredSessions(Date.now());
 }
 
 // ========================================================
@@ -375,17 +379,27 @@ app.use((error, req, res, next) => {
   });
 });
 
-// ========================================================
-// INSTANT PORT BINDING
-// ========================================================
-const server = app.listen(PORT, bindAddress, () => {
-  console.log(`TaskFlow operational server running on ${bindAddress}:${PORT}`);
-  setTimeout(() => cleanupExpiredUploads().catch(err => console.error('Startup cleanup failed:', err)), 10000);
-  setInterval(() => cleanupExpiredUploads().catch(err => console.error('Upload cleanup failed:', err.message)), 24 * 60 * 60 * 1000);
+let server;
+const startupPromise = (async () => {
+  await db.ready;
+  await cleanupExpiredSessions();
+  server = app.listen(PORT, bindAddress, () => {
+    console.log(`TaskFlow operational server running on ${bindAddress}:${PORT}`);
+    cleanupExpiredUploads().catch(err => console.error('Startup cleanup failed:', err));
+    setInterval(() => cleanupExpiredUploads().catch(err => console.error('Upload cleanup failed:', err.message)), 24 * 60 * 60 * 1000);
+    setInterval(() => cleanupExpiredSessions().catch(err => console.error('Session cleanup failed:', err.message)), 24 * 60 * 60 * 1000);
+  });
+})().catch(error => {
+  console.error('Server startup failed:', error);
+  process.exitCode = 1;
 });
 
 process.on('unhandledRejection', reason => {
   console.error('Unhandled promise rejection; shutting down:', reason);
-  server.close(() => process.exit(1));
-  setTimeout(() => process.exit(1), 10000).unref();
+  if (server) {
+    server.close(() => process.exit(1));
+    setTimeout(() => process.exit(1), 10000).unref();
+  } else {
+    process.exit(1);
+  }
 });

@@ -1,24 +1,25 @@
-const path = require('path');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { createClient } = require('@libsql/client'); 
 
-let db = null;
+const useLocalDatabase = process.env.USE_LOCAL_DB === '1';
+let db;
 
-const syncUrl = process.env.TURSO_DATABASE_URL || "libsql://taskflow-db-mahendrakadam5003-crypto.aws-ap-south-1.turso.io";
-const normalizeToken = (value) => typeof value === 'string' ? value.trim().replace(/^Bearer\s+/i, '').trim() : value;
-const authToken = normalizeToken(process.env.TURSO_AUTH_TOKEN || null);
-
-try {
-  if (!authToken) throw new Error('TURSO_AUTH_TOKEN is not configured');
-  db = createClient({ url: syncUrl, authToken: authToken });
-  console.log("☁️ Successfully connected to permanent Turso Cloud Data Vault Infrastructure Layer.");
-} catch (initErr) {
-  console.error("Critical Cloud connection mapping failure:", initErr.message);
-  db = createClient({ url: "file:" + path.join(__dirname, "taskflow.db") });
+if (useLocalDatabase) {
+  db = createClient({ url: 'file:taskflow.db' });
+  console.warn('Using the explicitly enabled local SQLite database.');
+} else {
+  const databaseUrl = String(process.env.TURSO_DATABASE_URL || '').trim();
+  const authToken = String(process.env.TURSO_AUTH_TOKEN || '').trim().replace(/^Bearer\s+/i, '').trim();
+  if (!databaseUrl || !authToken) {
+    throw new Error('TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are required unless USE_LOCAL_DB=1.');
+  }
+  if (!/^libsql:\/\//i.test(databaseUrl) && !/^https:\/\//i.test(databaseUrl)) {
+    throw new Error('TURSO_DATABASE_URL must be a remote libsql:// or https:// URL; set USE_LOCAL_DB=1 for local SQLite.');
+  }
+  db = createClient({ url: databaseUrl, authToken });
 }
 
-// Global interface driver alignment abstraction layers
 const dbDriverInterface = {
   exec: async (sql) => {
     try { return await db.execute(sql); } catch(e) {
@@ -29,6 +30,7 @@ const dbDriverInterface = {
     }
   },
   batch: async statements => db.batch(statements, 'write'),
+  deleteExpiredSessions: async now => dbDriverInterface.prepare('DELETE FROM web_sessions WHERE expires_at <= ?').run(now),
   prepare: (sql) => {
     return {
       get: async (...params) => {
@@ -49,10 +51,11 @@ const dbDriverInterface = {
   }
 };
 
-// Initialize each schema matrix separately to solve the multi-statement constraints error loop
 const initializationPromise = (async function initializeDatabaseScripts() {
   try {
-    console.log("⚙️ Building cloud database tables...");
+    await db.execute('SELECT 1');
+    if (!useLocalDatabase) console.log('Connected to the configured Turso database.');
+    await db.execute('PRAGMA foreign_keys = ON');
     
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,32 +65,58 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       role TEXT NOT NULL DEFAULT 'employee',
       department TEXT NOT NULL DEFAULT '',
       active INTEGER NOT NULL DEFAULT 1,
+      must_change_password INTEGER NOT NULL DEFAULT 0,
       token_version INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
-    const duplicateUsername = await dbDriverInterface.prepare(`SELECT username, COUNT(*) AS duplicate_count
-      FROM users GROUP BY username COLLATE NOCASE HAVING COUNT(*) > 1 LIMIT 1`).get();
+    const duplicateUsername = await dbDriverInterface.prepare(`SELECT lower(trim(username)) AS normalized_username, COUNT(*) AS duplicate_count
+      FROM users GROUP BY lower(trim(username)) HAVING COUNT(*) > 1 LIMIT 1`).get();
     if (duplicateUsername) {
-      throw new Error(`Cannot enforce unique usernames until duplicate account "${duplicateUsername.username}" is resolved.`);
+      throw new Error(`Cannot enforce unique usernames until duplicate account "${duplicateUsername.normalized_username}" is resolved.`);
     }
-    await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users(username COLLATE NOCASE)');
+    await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_unique ON users(lower(trim(username)))');
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT
     );`);
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS schema_version (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );`);
+    const schemaVersionRow = await dbDriverInterface.prepare('SELECT MAX(version) AS version FROM schema_version').get();
+    let schemaVersion = Number(schemaVersionRow?.version || 0);
+    const needsSchemaUpgrade = schemaVersion < 3;
+    const markSchemaVersion = async version => {
+      await dbDriverInterface.prepare('INSERT OR IGNORE INTO schema_version (version) VALUES (?)').run(version);
+      schemaVersion = Math.max(schemaVersion, version);
+    };
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS web_sessions (
       sid TEXT PRIMARY KEY,
       data TEXT NOT NULL,
+      user_id INTEGER,
       expires_at INTEGER NOT NULL
     );`);
+    if (needsSchemaUpgrade) {
+      const sessionColumns = await dbDriverInterface.prepare('PRAGMA table_info(web_sessions)').all();
+      if (!sessionColumns.some(row => row.name === 'user_id')) {
+        await dbDriverInterface.exec('ALTER TABLE web_sessions ADD COLUMN user_id INTEGER');
+      }
+    }
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS web_sessions_expires_at_idx ON web_sessions(expires_at)');
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS departments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
+    const duplicateDepartments = await dbDriverInterface.prepare(`SELECT lower(trim(name)) AS normalized_name, COUNT(*) AS duplicate_count
+      FROM departments GROUP BY lower(trim(name)) HAVING COUNT(*) > 1 LIMIT 1`).get();
+    if (duplicateDepartments) {
+      throw new Error(`Cannot enforce case-insensitive department names until duplicate department "${duplicateDepartments.normalized_name}" is resolved.`);
+    }
+    await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS departments_name_lower_unique ON departments(lower(trim(name)))');
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS projects (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,9 +126,11 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       asana_gid TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
-    const projectColumns = await dbDriverInterface.prepare('PRAGMA table_info(projects)').all();
-    if (!(projectColumns || []).some(row => row.name === 'asana_gid')) {
-      await dbDriverInterface.exec('ALTER TABLE projects ADD COLUMN asana_gid TEXT');
+    if (needsSchemaUpgrade) {
+      const projectColumns = await dbDriverInterface.prepare('PRAGMA table_info(projects)').all();
+      if (!projectColumns.some(row => row.name === 'asana_gid')) {
+        await dbDriverInterface.exec('ALTER TABLE projects ADD COLUMN asana_gid TEXT');
+      }
     }
     await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS projects_asana_gid_unique ON projects(asana_gid) WHERE asana_gid IS NOT NULL');
 
@@ -109,6 +140,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       added_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (project_id, user_id)
     );`);
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS project_members_user_id_idx ON project_members(user_id)');
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS project_action_access (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -123,9 +155,11 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       updated_by INTEGER REFERENCES users(id),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
-    const actionAccessColumns = await dbDriverInterface.prepare('PRAGMA table_info(project_action_access)').all();
-    if (!(actionAccessColumns || []).some(row => row.name === 'manage_task_work_mode')) {
-      await dbDriverInterface.exec('ALTER TABLE project_action_access ADD COLUMN manage_task_work_mode INTEGER NOT NULL DEFAULT 0');
+    if (needsSchemaUpgrade) {
+      const actionAccessColumns = await dbDriverInterface.prepare('PRAGMA table_info(project_action_access)').all();
+      if (!actionAccessColumns.some(row => row.name === 'manage_task_work_mode')) {
+        await dbDriverInterface.exec('ALTER TABLE project_action_access ADD COLUMN manage_task_work_mode INTEGER NOT NULL DEFAULT 0');
+      }
     }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS tasks (
@@ -140,7 +174,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       invoice_type TEXT NOT NULL DEFAULT 'gst',
       invoice_number TEXT,
       invoice_date TEXT,
-      customer_name TEXT DEFAULT '',
+      customer_name TEXT NOT NULL DEFAULT '',
       total_amount REAL NOT NULL DEFAULT 0,
       payment_member_id INTEGER REFERENCES users(id),
       payment_status TEXT NOT NULL DEFAULT 'not_received',
@@ -152,13 +186,15 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       position INTEGER NOT NULL DEFAULT 0,
       asana_gid TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
       completed_at TEXT
     );`);
+    if (needsSchemaUpgrade) {
     const taskSchemaColumns = await dbDriverInterface.prepare('PRAGMA table_info(tasks)').all();
     const taskSchemaColumnNames = (taskSchemaColumns || []).map(row => row.name);
     if (!taskSchemaColumnNames.includes('asana_gid')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN asana_gid TEXT');
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS tasks_project_id_id_idx ON tasks(project_id, id)');
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS tasks_assignee_id_idx ON tasks(assignee_id)');
     if (!taskSchemaColumnNames.includes('asana_assignee_name')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN asana_assignee_name TEXT');
     await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS tasks_project_asana_gid_unique ON tasks(project_id, asana_gid) WHERE asana_gid IS NOT NULL');
     if (!taskSchemaColumnNames.includes('no_billing_required')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN no_billing_required INTEGER NOT NULL DEFAULT 0');
@@ -167,14 +203,13 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     if (!taskSchemaColumnNames.includes('invoice_date')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN invoice_date TEXT');
     if (!taskSchemaColumnNames.includes('customer_name')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN customer_name TEXT NOT NULL DEFAULT ''");
     if (!taskSchemaColumnNames.includes('total_amount')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN total_amount REAL NOT NULL DEFAULT 0');
-    await dbDriverInterface.exec("UPDATE tasks SET invoice_type='gst' WHERE lower(invoice_type)='igst'");
     if (!taskSchemaColumnNames.includes('payment_member_id')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN payment_member_id INTEGER REFERENCES users(id)');
     if (!taskSchemaColumnNames.includes('payment_status')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN payment_status TEXT NOT NULL DEFAULT 'not_received'");
     if (!taskSchemaColumnNames.includes('payment_received_date')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN payment_received_date TEXT');
     if (!taskSchemaColumnNames.includes('amount_received')) await dbDriverInterface.exec('ALTER TABLE tasks ADD COLUMN amount_received REAL NOT NULL DEFAULT 0');
     if (!taskSchemaColumnNames.includes('work_mode')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN work_mode TEXT NOT NULL DEFAULT 'office'");
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS idx_tasks_project_position_created ON tasks(project_id, position, created_at)');
-    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)');
+    }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS task_checkin_users (
       task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -206,13 +241,20 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       check_out_lat REAL,
       check_out_lng REAL
     );`);
+    if (needsSchemaUpgrade) {
     const taskCheckinIndexes = await dbDriverInterface.prepare('PRAGMA index_list(task_checkins)').all();
     const taskCheckinColumns = await dbDriverInterface.prepare('PRAGMA table_info(task_checkins)').all();
-    const requiredLocationColumns = (taskCheckinColumns || []).filter(column => ['check_in_lat', 'check_in_lng'].includes(column.name));
-    const needsCheckinRebuild = (taskCheckinIndexes || []).some(index => Number(index.unique) === 1)
-      || requiredLocationColumns.some(column => Number(column.notnull ?? column.NOTNULL) === 1);
+    const requiredLocationColumns = taskCheckinColumns.filter(column => ['check_in_lat', 'check_in_lng'].includes(column.name));
+    let needsCheckinRebuild = requiredLocationColumns.some(column => Number(column.notnull) === 1);
+    for (const index of taskCheckinIndexes.filter(row => Number(row.unique) === 1 && row.name !== 'task_checkins_one_open_per_user')) {
+      const quotedIndexName = `"${String(index.name).replace(/"/g, '""')}"`;
+      const indexedColumns = await dbDriverInterface.prepare(`PRAGMA index_info(${quotedIndexName})`).all();
+      const names = indexedColumns.map(column => column.name).sort();
+      if (names.length === 2 && names[0] === 'task_id' && names[1] === 'user_id') needsCheckinRebuild = true;
+    }
     if (needsCheckinRebuild) {
-      await dbDriverInterface.exec(`CREATE TABLE task_checkins_rebuilt (
+      await dbDriverInterface.batch([
+        { sql: `CREATE TABLE task_checkins_rebuilt (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -222,13 +264,23 @@ const initializationPromise = (async function initializeDatabaseScripts() {
         check_out_at TEXT,
         check_out_lat REAL,
         check_out_lng REAL
-      );`);
-      await dbDriverInterface.exec(`INSERT INTO task_checkins_rebuilt
+      );` },
+        { sql: `INSERT INTO task_checkins_rebuilt
         (id, task_id, user_id, check_in_at, check_in_lat, check_in_lng, check_out_at, check_out_lat, check_out_lng)
         SELECT id, task_id, user_id, check_in_at, check_in_lat, check_in_lng, check_out_at, check_out_lat, check_out_lng
-        FROM task_checkins`);
-      await dbDriverInterface.exec('DROP TABLE task_checkins');
-      await dbDriverInterface.exec('ALTER TABLE task_checkins_rebuilt RENAME TO task_checkins');
+        FROM task_checkins` },
+        { sql: 'DROP TABLE task_checkins' },
+        { sql: 'ALTER TABLE task_checkins_rebuilt RENAME TO task_checkins' }
+      ]);
+    }
+    const duplicateOpenCheckin = await dbDriverInterface.prepare(`SELECT task_id, user_id, COUNT(*) AS duplicate_count
+      FROM task_checkins WHERE check_out_at IS NULL GROUP BY task_id, user_id HAVING COUNT(*) > 1 LIMIT 1`).get();
+    if (duplicateOpenCheckin) {
+      throw new Error(`Close duplicate open task check-ins for task ${duplicateOpenCheckin.task_id}, user ${duplicateOpenCheckin.user_id} before startup.`);
+    }
+    await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS task_checkins_one_open_per_user ON task_checkins(task_id, user_id) WHERE check_out_at IS NULL');
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS task_checkins_task_id_idx ON task_checkins(task_id)');
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS task_checkins_user_checkin_idx ON task_checkins(user_id, check_in_at)');
     }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS subtasks (
@@ -238,6 +290,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       done INTEGER NOT NULL DEFAULT 0,
       position INTEGER NOT NULL DEFAULT 0
     );`);
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS subtasks_task_position_idx ON subtasks(task_id, position)');
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS comments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,12 +304,14 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       edited_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
-    const commentColumns = await dbDriverInterface.prepare('PRAGMA table_info(comments)').all();
-    if (!(commentColumns || []).some(row => row.name === 'edited_at')) {
-      await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN edited_at TEXT');
-    }
-    if (!(commentColumns || []).some(row => row.name === 'author_name')) {
-      await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN author_name TEXT');
+    if (needsSchemaUpgrade) {
+      const commentColumns = await dbDriverInterface.prepare('PRAGMA table_info(comments)').all();
+      if (!commentColumns.some(row => row.name === 'edited_at')) {
+        await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN edited_at TEXT');
+      }
+      if (!commentColumns.some(row => row.name === 'author_name')) {
+        await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN author_name TEXT');
+      }
     }
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS comments_task_activity_idx ON comments(task_id, created_at, id)');
 
@@ -289,6 +344,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       distance_meters REAL NOT NULL DEFAULT 0,
       place_changed INTEGER NOT NULL DEFAULT 0
     );`);
+    if (needsSchemaUpgrade) {
     const locationColumns = await dbDriverInterface.prepare('PRAGMA table_info(attendance_locations)').all();
     const locationColumnNames = (locationColumns || []).map(row => row.name);
     if (!locationColumnNames.includes('distance_meters')) await dbDriverInterface.exec('ALTER TABLE attendance_locations ADD COLUMN distance_meters REAL NOT NULL DEFAULT 0');
@@ -313,6 +369,9 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       await dbDriverInterface.exec('DROP TABLE attendance_locations');
       await dbDriverInterface.exec('ALTER TABLE attendance_locations_rebuilt RENAME TO attendance_locations');
     }
+    }
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS attendance_locations_attendance_id_idx ON attendance_locations(attendance_id)');
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS attendance_locations_recorded_at_idx ON attendance_locations(recorded_at)');
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS tracking_access (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -365,10 +424,14 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
-    const reimbursementColumns = await dbDriverInterface.prepare('PRAGMA table_info(reimbursements)').all();
-    const reimbursementColumnNames = (reimbursementColumns || []).map(row => row.name);
-    if (!reimbursementColumnNames.includes('receipt_paths')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN receipt_paths TEXT');
-    if (!reimbursementColumnNames.includes('receipt_meta')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN receipt_meta TEXT');
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS reimbursements_user_status_idx ON reimbursements(user_id, status)');
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS reimbursements_expense_date_idx ON reimbursements(expense_date)');
+    if (needsSchemaUpgrade) {
+      const reimbursementColumns = await dbDriverInterface.prepare('PRAGMA table_info(reimbursements)').all();
+      const reimbursementColumnNames = reimbursementColumns.map(row => row.name);
+      if (!reimbursementColumnNames.includes('receipt_paths')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN receipt_paths TEXT');
+      if (!reimbursementColumnNames.includes('receipt_meta')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN receipt_meta TEXT');
+    }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS reimbursement_access (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -396,9 +459,11 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS idx_activity_log_created_id ON activity_log(created_at DESC, id DESC)');
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS idx_activity_log_actor_id ON activity_log(actor_id, id DESC)');
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS idx_activity_log_subject_user_id ON activity_log(subject_user_id, id DESC)');
-    const activityColumns = await dbDriverInterface.prepare('PRAGMA table_info(activity_log)').all();
-    if (!(activityColumns || []).some(row => row.name === 'subject_user_id')) {
-      await dbDriverInterface.exec('ALTER TABLE activity_log ADD COLUMN subject_user_id INTEGER REFERENCES users(id)');
+    if (needsSchemaUpgrade) {
+      const activityColumns = await dbDriverInterface.prepare('PRAGMA table_info(activity_log)').all();
+      if (!activityColumns.some(row => row.name === 'subject_user_id')) {
+        await dbDriverInterface.exec('ALTER TABLE activity_log ADD COLUMN subject_user_id INTEGER REFERENCES users(id)');
+      }
     }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS telegram_attachments (
@@ -416,6 +481,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       last_error TEXT,
       failed_at TEXT
     );`);
+    if (needsSchemaUpgrade) {
     const attachmentColumns = await dbDriverInterface.prepare('PRAGMA table_info(telegram_attachments)').all();
     const attachmentColumnNames = (attachmentColumns || []).map(row => row.name);
     if (!attachmentColumnNames.includes('original_name')) await dbDriverInterface.exec('ALTER TABLE telegram_attachments ADD COLUMN original_name TEXT');
@@ -435,7 +501,10 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       const match = String(comment.image_path || '').match(/^\/api\/download\/([^/?#]+)/);
       if (!match) continue;
       let fileId;
-      try { fileId = decodeURIComponent(match[1]); } catch (error) { continue; }
+      try { fileId = decodeURIComponent(match[1]); } catch (error) {
+        console.warn('Skipping a legacy attachment with an invalid encoded file id.');
+        continue;
+      }
       await dbDriverInterface.prepare(`UPDATE telegram_attachments
         SET uploaded_by = COALESCE(uploaded_by, ?), task_id = COALESCE(task_id, ?)
         WHERE file_id = ? AND task_id IS NULL AND reimbursement_id IS NULL`)
@@ -445,7 +514,10 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     const legacyClaims = await dbDriverInterface.prepare('SELECT id, user_id, receipt_path, receipt_paths FROM reimbursements WHERE receipt_path IS NOT NULL OR receipt_paths IS NOT NULL').all();
     for (const claim of legacyClaims || []) {
       let receiptPaths = [];
-      try { receiptPaths = claim.receipt_paths ? JSON.parse(claim.receipt_paths) : []; } catch (error) { receiptPaths = []; }
+      try { receiptPaths = claim.receipt_paths ? JSON.parse(claim.receipt_paths) : []; } catch (error) {
+        console.warn(`Skipping malformed legacy receipt paths for reimbursement ${claim.id}.`);
+        receiptPaths = [];
+      }
       if (!Array.isArray(receiptPaths)) receiptPaths = [];
       if (claim.receipt_path && !receiptPaths.includes(claim.receipt_path)) receiptPaths.unshift(claim.receipt_path);
       for (const receiptPath of receiptPaths) {
@@ -455,6 +527,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
           WHERE file_id = ? AND task_id IS NULL AND reimbursement_id IS NULL`)
           .run(claim.user_id, claim.id, receiptPath.slice('telegram:'.length));
       }
+    }
     }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS task_history (
@@ -467,14 +540,17 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       new_value TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
-    const taskHistoryColumns = await dbDriverInterface.prepare('PRAGMA table_info(task_history)').all();
-    if (!(taskHistoryColumns || []).some(row => row.name === 'author_name')) {
-      await dbDriverInterface.exec('ALTER TABLE task_history ADD COLUMN author_name TEXT');
+    if (needsSchemaUpgrade) {
+      const taskHistoryColumns = await dbDriverInterface.prepare('PRAGMA table_info(task_history)').all();
+      if (!taskHistoryColumns.some(row => row.name === 'author_name')) {
+        await dbDriverInterface.exec('ALTER TABLE task_history ADD COLUMN author_name TEXT');
+      }
     }
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS task_history_task_activity_idx ON task_history(task_id, created_at, id)');
 
-    console.log("✅ Cloud tables initialized. Running migrations and seeds...");
+    if (needsSchemaUpgrade) console.log('Applying database schema upgrades.');
 
+    if (needsSchemaUpgrade) {
     const rawUserPragmaRows = await dbDriverInterface.prepare("PRAGMA table_info(users)").all();
     const userColumns = rawUserPragmaRows.map(row => row.name);
     if (!userColumns.includes('must_change_password')) {
@@ -502,11 +578,14 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     await dbDriverInterface.exec('UPDATE users SET active = 0 WHERE active IS NULL');
     await dbDriverInterface.exec('UPDATE users SET token_version = 0 WHERE token_version IS NULL');
     const departmentMigration = await dbDriverInterface.prepare("SELECT value FROM settings WHERE key = '_legacy_departments_migrated'").get();
-    if (!departmentMigration) {
+    if (schemaVersion < 1 && !departmentMigration) {
       await dbDriverInterface.exec("INSERT OR IGNORE INTO departments (name) SELECT DISTINCT trim(department) FROM users WHERE trim(department) <> ''");
       await dbDriverInterface.prepare("INSERT INTO settings (key, value) VALUES ('_legacy_departments_migrated', '1') ON CONFLICT(key) DO NOTHING").run();
     }
+    if (schemaVersion < 1) await markSchemaVersion(1);
+    }
 
+    if (needsSchemaUpgrade) {
     const rawAttendancePragmaRows = await dbDriverInterface.prepare("PRAGMA table_info(attendance)").all();
     const attendanceColumns = rawAttendancePragmaRows.map(row => row.name);
     if (!attendanceColumns.includes('in_location_text')) {
@@ -519,8 +598,10 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     if (!attendanceColumns.includes('in_device_info')) await dbDriverInterface.exec('ALTER TABLE attendance ADD COLUMN in_device_info TEXT');
     if (!attendanceColumns.includes('out_device_type')) await dbDriverInterface.exec('ALTER TABLE attendance ADD COLUMN out_device_type TEXT');
     if (!attendanceColumns.includes('out_device_info')) await dbDriverInterface.exec('ALTER TABLE attendance ADD COLUMN out_device_info TEXT');
+    }
 
-    const duplicateAttendanceDays = await dbDriverInterface.prepare(`SELECT user_id, date
+    const attendanceMergeMarker = schemaVersion >= 2;
+    const duplicateAttendanceDays = attendanceMergeMarker ? [] : await dbDriverInterface.prepare(`SELECT user_id, date
       FROM attendance GROUP BY user_id, date HAVING COUNT(*) > 1`).all();
     for (const duplicateDay of duplicateAttendanceDays) {
       const records = await dbDriverInterface.prepare(`SELECT * FROM attendance
@@ -531,24 +612,29 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       const notes = [...new Set(records.flatMap(record => String(record.notes || '').split('\n').map(note => note.trim()).filter(Boolean)))].join('\n') || null;
       const locationStatus = [...records].reverse().find(record => record.location_status)?.location_status || null;
       const keepId = records[0].id;
-      await dbDriverInterface.prepare(`UPDATE attendance SET punch_in = ?, in_lat = ?, in_lng = ?,
+      const statements = [{ sql: `UPDATE attendance SET punch_in = ?, in_lat = ?, in_lng = ?,
         in_location_text = ?, in_device_type = ?, in_device_info = ?, punch_out = ?, out_lat = ?, out_lng = ?,
         out_location_text = ?, out_device_type = ?, out_device_info = ?, location_status = ?, notes = ?
-        WHERE id = ?`).run(
-        earliestPunchIn.punch_in, earliestPunchIn.in_lat, earliestPunchIn.in_lng,
-        earliestPunchIn.in_location_text, earliestPunchIn.in_device_type, earliestPunchIn.in_device_info,
-        latestPunchOut.punch_out, latestPunchOut.out_lat, latestPunchOut.out_lng,
-        latestPunchOut.out_location_text, latestPunchOut.out_device_type, latestPunchOut.out_device_info,
-        locationStatus, notes, keepId
-      );
+        WHERE id = ?`, args: [
+          earliestPunchIn.punch_in, earliestPunchIn.in_lat, earliestPunchIn.in_lng,
+          earliestPunchIn.in_location_text, earliestPunchIn.in_device_type, earliestPunchIn.in_device_info,
+          latestPunchOut.punch_out, latestPunchOut.out_lat, latestPunchOut.out_lng,
+          latestPunchOut.out_location_text, latestPunchOut.out_device_type, latestPunchOut.out_device_info,
+          locationStatus, notes, keepId
+        ] }];
       for (const duplicate of records.slice(1)) {
-        await dbDriverInterface.prepare('UPDATE attendance_locations SET attendance_id = ? WHERE attendance_id = ?').run(keepId, duplicate.id);
-        await dbDriverInterface.prepare("UPDATE activity_log SET entity_id = ? WHERE entity_type = 'attendance' AND entity_id = ?").run(keepId, duplicate.id);
-        await dbDriverInterface.prepare('DELETE FROM attendance WHERE id = ?').run(duplicate.id);
+        statements.push(
+          { sql: 'UPDATE attendance_locations SET attendance_id = ? WHERE attendance_id = ?', args: [keepId, duplicate.id] },
+          { sql: "UPDATE activity_log SET entity_id = ? WHERE entity_type = 'attendance' AND entity_id = ?", args: [keepId, duplicate.id] },
+          { sql: 'DELETE FROM attendance WHERE id = ?', args: [duplicate.id] }
+        );
       }
+      await dbDriverInterface.batch(statements);
     }
+    if (!attendanceMergeMarker) await markSchemaVersion(2);
     await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS attendance_user_date_unique ON attendance (user_id, date)');
 
+    if (needsSchemaUpgrade) {
     const rawTaskPragmaRows = await dbDriverInterface.prepare("PRAGMA table_info(tasks)").all();
     const taskColumns = rawTaskPragmaRows.map(row => row.name);
     if (!taskColumns.includes('created_by')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN created_by INTEGER REFERENCES users(id)");
@@ -556,7 +642,6 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     await dbDriverInterface.exec("UPDATE tasks SET updated_at = created_at WHERE updated_at IS NULL");
     if (!taskColumns.includes('completed_at')) await dbDriverInterface.exec("ALTER TABLE tasks ADD COLUMN completed_at TEXT");
 
-    // 1. Column Migration Checks
     const rawPragmaRows = await dbDriverInterface.prepare("PRAGMA table_info(comments)").all();
     const commentCols = [];
     if (Array.isArray(rawPragmaRows)) {
@@ -580,17 +665,16 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN attachment_type TEXT');
       console.log('Migrated: added comments.attachment_type column');
     }
+    }
 
-    // 2. Project Creator Membership Seeding
-    const projectsToSeed = await dbDriverInterface.prepare('SELECT id, created_by FROM projects WHERE created_by IS NOT NULL').all();
-    const seedMember = dbDriverInterface.prepare('INSERT OR IGNORE INTO project_members (project_id, user_id) VALUES (?, ?)');
-    for (const p of projectsToSeed) {
-      if (p && p.id && p.created_by) {
-        await seedMember.run(p.id, p.created_by);
+    if (needsSchemaUpgrade) {
+      const projectsToSeed = await dbDriverInterface.prepare('SELECT id, created_by FROM projects WHERE created_by IS NOT NULL').all();
+      const seedMember = dbDriverInterface.prepare('INSERT OR IGNORE INTO project_members (project_id, user_id) VALUES (?, ?)');
+      for (const project of projectsToSeed) {
+        if (project.id && project.created_by) await seedMember.run(project.id, project.created_by);
       }
     }
 
-    // 3. Base Administrative User Account Seeding
     const usersCountObj = await dbDriverInterface.prepare('SELECT COUNT(*) as c FROM users').get();
     const totalUsers = Number(usersCountObj?.c ?? 0);
     
@@ -609,7 +693,6 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       }
     }
 
-    // 4. Default Settings Parameter Sync Check
     const defaults = {
       office_lat: '',
       office_lng: '',
@@ -618,15 +701,12 @@ const initializationPromise = (async function initializeDatabaseScripts() {
       attachment_retention_days: '0',
       attendance_location_retention_days: '60'
     };
-    const getSetting = dbDriverInterface.prepare('SELECT value FROM settings WHERE key = ?');
-    const setSetting = dbDriverInterface.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
-    for (const [k, v] of Object.entries(defaults)) {
-      const check = await getSetting.get(k);
-      if (!check) {
-        await setSetting.run(k, v);
-      }
-    }
-    console.log("🏁 Permanent Turso database architecture fully synchronized!");
+    await dbDriverInterface.batch(Object.entries(defaults).map(([key, value]) => ({
+      sql: 'INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)',
+      args: [key, value]
+    })));
+    if (needsSchemaUpgrade) await markSchemaVersion(3);
+    console.log('Database schema and default settings are ready.');
   } catch (err) {
     console.error('Database initialization failed:', err);
     throw err;

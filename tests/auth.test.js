@@ -20,29 +20,60 @@ const user = {
   token_version: 0,
   password_hash: ''
 };
+const otherUser = {
+  id: 2,
+  name: 'Second Employee',
+  username: 'second',
+  department: 'Testing',
+  role: 'employee',
+  active: 1,
+  must_change_password: 0,
+  token_version: 0,
+  password_hash: ''
+};
+const users = new Map([[user.id, user], [otherUser.id, otherUser]]);
+const deletedSessionUsers = [];
 
 const mockDb = {
   prepare(sql) {
     return {
       get: async (...args) => {
         if (sql.includes('FROM users WHERE username = ?')) {
-          return args[0] === user.username ? { ...user } : null;
+          const found = [...users.values()].find(row => row.username === args[0]);
+          return found ? { ...found } : null;
         }
         if (sql.includes('FROM users WHERE id')) {
-          return Number(args.at(-1)) === user.id ? { ...user } : null;
+          const found = users.get(Number(args.at(-1)));
+          return found ? { ...found } : null;
         }
         return null;
       },
       all: async () => [],
       run: async (...args) => {
+        if (sql.includes('DELETE FROM web_sessions WHERE user_id')) {
+          deletedSessionUsers.push(Number(args[0]));
+          return { changes: 1 };
+        }
         if (sql.includes('UPDATE users SET password_hash')) {
-          user.password_hash = args[0];
-          user.must_change_password = sql.includes('must_change_password=0') ? 0 : 1;
-          user.token_version += 1;
+          const target = users.get(Number(args.at(-1)));
+          target.password_hash = args[0];
+          target.must_change_password = sql.includes('must_change_password=0') ? 0 : 1;
+          target.token_version += 1;
           return { changes: 1 };
         }
         if (sql.includes('UPDATE users SET token_version')) {
-          user.token_version += 1;
+          const target = users.get(Number(args.at(-1)));
+          target.token_version += 1;
+          return { changes: 1 };
+        }
+        if (sql.includes('UPDATE users SET active')) {
+          const target = users.get(Number(args.at(-1)));
+          target.active = Number(args[0]);
+          return { changes: 1 };
+        }
+        if (sql.includes('UPDATE users SET role')) {
+          const target = users.get(Number(args.at(-1)));
+          target.role = args[0];
           return { changes: 1 };
         }
         return { changes: 0 };
@@ -142,6 +173,7 @@ test('malformed login bodies fail quickly without server errors', async () => {
 });
 
 test('password change invalidates the other browser session', async () => {
+  deletedSessionUsers.length = 0;
   const browserOne = await login();
   const browserTwo = await login();
 
@@ -151,6 +183,7 @@ test('password change invalidates the other browser session', async () => {
     body: { current_password: 'initial-password-123', new_password: 'replacement-password-456' }
   });
   assert.equal(changeResponse.status, 200);
+  assert.deepEqual(deletedSessionUsers, [user.id]);
 
   const changedSessionCookie = changeResponse.headers.get('set-cookie')?.split(';', 1)[0];
   assert.ok(changedSessionCookie, 'password change should issue a regenerated session cookie');
@@ -188,5 +221,35 @@ test('employee sessions receive 403 from every admin-only auth route', async () 
   for (const [method, route, body] of adminRoutes) {
     const response = await request(route, { method, body, cookie: employeeCookie });
     assert.equal(response.status, 403, `${method} ${route} should be forbidden`);
+  }
+});
+
+test('admin password reset and user deactivation delete persistent sessions', async () => {
+  const originalUser = { ...user };
+  const originalOtherUser = { ...otherUser };
+  deletedSessionUsers.length = 0;
+  try {
+    user.role = 'admin';
+    const adminCookie = await login('replacement-password-456');
+    const reset = await request('/users/2/reset-password', {
+      method: 'PUT',
+      cookie: adminCookie,
+      body: { password: 'reset-password-12345' }
+    });
+    assert.equal(reset.status, 200);
+    assert.deepEqual(deletedSessionUsers, [otherUser.id]);
+
+    deletedSessionUsers.length = 0;
+    const deactivate = await request('/users/2', {
+      method: 'PUT',
+      cookie: adminCookie,
+      body: { active: false }
+    });
+    assert.equal(deactivate.status, 200);
+    assert.deepEqual(deletedSessionUsers, [otherUser.id]);
+  } finally {
+    Object.assign(user, originalUser);
+    Object.assign(otherUser, originalOtherUser);
+    deletedSessionUsers.length = 0;
   }
 });
