@@ -31,6 +31,11 @@ Without `USE_LOCAL_DB=1`, TaskFlow requires both `TURSO_DATABASE_URL` and `TURSO
 
 The admin dashboard's Turso storage quota also requires `TURSO_PLATFORM_TOKEN`. `TURSO_ORG` and `TURSO_DATABASE` are optional when the platform token can discover the organization and the database URL identifies the database.
 
+### Multi-company control database (Phase 1)
+The separate control database stores company registry, plans, super-admin accounts, usage snapshots, backup records, billing notes, and audit entries. It is not used by company routes yet; tenant routing and login are later phases. Create a separate Turso database and database token, then set `CONTROL_DATABASE_URL` and `CONTROL_AUTH_TOKEN` in the environment. Set `APP_ENCRYPTION_KEY` to a private 32-byte key encoded as 64 hexadecimal characters; generate one with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Back up this key securely: tenant database tokens encrypted with it cannot be recovered without the same key.
+
+Run `npm run migrate:control` to create or safely upgrade the control schema. Migrations are versioned and repeatable. The initial Solo, Team, and Business plans have limits of 1, 10, and 50 users and 1 GB, 10 GB, and unlimited storage, respectively; these are seed defaults, not enforced limits yet.
+
 The local server listens on `127.0.0.1:3000`. Open `http://127.0.0.1:3000` on the PC itself. Local installs do not accept connections from other LAN devices.
 
 On an empty database, the app creates the first admin account with username `admin` and a random one-time password printed to the server console. Set `INITIAL_ADMIN_PASSWORD` before first startup to provide your own initial password instead. The admin must change that password at first login. Existing databases are not reseeded.
