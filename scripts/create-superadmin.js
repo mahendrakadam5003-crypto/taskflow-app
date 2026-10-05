@@ -70,7 +70,7 @@ async function bootstrapConfiguredSuperAdmin(environment = process.env, getDatab
     const existingAdmin = result.rows?.[0];
     if (existingAdmin) {
       if (await bcrypt.compare(configured.password, existingAdmin.password_hash)) {
-        await transaction.rollback();
+        await transaction.commit();
         return 'unchanged';
       }
       const passwordHash = await bcrypt.hash(configured.password, 12);

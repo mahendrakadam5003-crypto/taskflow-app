@@ -93,6 +93,7 @@ if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 const { router: authRouter } = require('./routes/auth');
 const { createSuperAdminRouter } = require('./routes/superadmin');
 const { bootstrapConfiguredSuperAdmin } = require('./scripts/create-superadmin');
+const { registerLegacyCompany } = require('./scripts/register-legacy-company');
 const tasksRouter = require('./routes/tasks');
 const attendanceRouter = require('./routes/attendance');
 const reimbursementsRouter = require('./routes/reimbursements');
@@ -397,6 +398,16 @@ app.use((error, req, res, next) => {
 let server;
 const startupPromise = (async () => {
   await db.ready;
+  try {
+    const companyLink = await registerLegacyCompany();
+    if (companyLink.status === 'registered') {
+      console.log(`Existing company "${companyLink.name}" registered in the super-admin overview without moving its data.`);
+    } else if (companyLink.status === 'already-registered') {
+      console.log(`Existing company "${companyLink.name}" is already registered in the super-admin overview.`);
+    }
+  } catch (error) {
+    console.error(`Existing company registration failed; the company workspace will continue unchanged: ${error.message}`);
+  }
   try {
     const superAdminBootstrap = await bootstrapConfiguredSuperAdmin();
     if (superAdminBootstrap === 'created') console.log('Initial super-admin account created. Remove SUPERADMIN_PASSWORD from the environment.');
