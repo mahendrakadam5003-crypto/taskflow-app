@@ -35,7 +35,7 @@ function createDbDriverInterface(db) {
   };
 }
 
-async function initTenantSchema(db) {
+async function initTenantSchema(db, { seedInitialAdmin = true } = {}) {
   const dbDriverInterface = createDbDriverInterface(db);
   try {
     await db.execute('SELECT 1');
@@ -667,7 +667,7 @@ async function initTenantSchema(db) {
     const usersCountObj = await dbDriverInterface.prepare('SELECT COUNT(*) as c FROM users').get();
     const totalUsers = Number(usersCountObj?.c ?? 0);
     
-    if (!totalUsers || totalUsers === 0) {
+    if (seedInitialAdmin && (!totalUsers || totalUsers === 0)) {
       const initialPassword = process.env.INITIAL_ADMIN_PASSWORD || crypto.randomBytes(24).toString('base64url');
       const hash = bcrypt.hashSync(initialPassword, 10);
       const result = await dbDriverInterface.prepare(`INSERT INTO users (name, username, password_hash, role, active, must_change_password)

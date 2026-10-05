@@ -7,6 +7,9 @@ const loginError = document.getElementById('login-error');
 const overviewError = document.getElementById('overview-error');
 const managementMessage = document.getElementById('management-message');
 const logoutButton = document.getElementById('logout-button');
+const companyForm = document.getElementById('company-form');
+const companyFormError = document.getElementById('company-form-error');
+const createdCompanyDetails = document.getElementById('created-company-details');
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -112,6 +115,12 @@ function renderCompanies(companies, plans) {
       <td><button class="button button-quiet company-save" type="button" data-company-save="${company.id}">Save</button></td>
     </tr>`;
   }).join('');
+  const planSelect = document.getElementById('new-company-plan');
+  const currentPlanId = planSelect.value;
+  planSelect.innerHTML = plans.map(plan =>
+    `<option value="${plan.id}">${escapeHtml(plan.name)}${plan.maxUsers === null ? ' — unlimited users' : ` — ${plan.maxUsers} users`}</option>`
+  ).join('');
+  if (plans.some(plan => String(plan.id) === currentPlanId)) planSelect.value = currentPlanId;
 }
 
 async function loadOverview() {
@@ -157,6 +166,54 @@ document.getElementById('company-rows').addEventListener('click', async event =>
   } catch (error) {
     overviewError.textContent = error.message;
     overviewError.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+companyForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = document.getElementById('create-company-button');
+  const formData = new FormData(companyForm);
+  button.disabled = true;
+  companyFormError.classList.add('hidden');
+  createdCompanyDetails.classList.add('hidden');
+  managementMessage.classList.add('hidden');
+  try {
+    const result = await request('companies', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: formData.get('name'),
+        code: formData.get('code'),
+        ownerEmail: formData.get('ownerEmail'),
+        adminName: formData.get('adminName'),
+        adminUsername: formData.get('adminUsername'),
+        planId: Number(formData.get('planId'))
+      })
+    });
+    const fields = [
+      ['Company', result.company.name],
+      ['Company code', result.company.code],
+      ['Company admin username', result.admin.username],
+      ['One-time password', result.admin.oneTimePassword],
+      ['Trial ends', result.company.trialEndsAt]
+    ];
+    createdCompanyDetails.innerHTML = `<h3>Company created — save these login details now</h3>
+      <p>Share the credentials securely with the company admin. The password is shown only in this response.</p>
+      ${fields.map(([label, value]) => `<p><strong>${escapeHtml(label)}:</strong> <code>${escapeHtml(value)}</code></p>`).join('')}
+      <button class="button button-quiet" id="dismiss-created-details" type="button">I have saved these details</button>`;
+    createdCompanyDetails.classList.remove('hidden');
+    document.getElementById('dismiss-created-details').addEventListener('click', () => {
+      createdCompanyDetails.replaceChildren();
+      createdCompanyDetails.classList.add('hidden');
+    }, { once: true });
+    companyForm.reset();
+    managementMessage.textContent = 'New company provisioned with its own database and 90-day trial.';
+    managementMessage.classList.remove('hidden');
+    await loadOverview();
+  } catch (error) {
+    companyFormError.textContent = error.message;
+    companyFormError.classList.remove('hidden');
   } finally {
     button.disabled = false;
   }

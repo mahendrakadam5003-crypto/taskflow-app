@@ -70,6 +70,18 @@ footer span { padding: 0 6px; color: var(--accent); }
 .summary-label { color: #92a1b4; font-size: 11px; }
 .summary-value { margin: 15px 0 0; font-size: 29px; font-weight: 650; letter-spacing: -.04em; }
 .summary-caption { margin-top: 4px; color: #75869c; font-size: 10px; }
+.provision-panel { margin-bottom: 20px; }
+.provision-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; padding: 18px 24px 24px; }
+.form-field { min-width: 0; }
+.provision-form label { align-self: end; }
+.provision-form .company-setting { width: 100%; max-width: none; min-height: 46px; }
+.provision-form button, .provision-form .message { grid-column: 1 / -1; }
+.provision-form button { justify-content: center; margin-top: 18px; }
+.optional-label { color: #75869c; font-weight: 400; }
+.created-details { margin: 0 24px 24px; padding: 16px; border: 1px solid rgba(69, 214, 196, .24); border-radius: 10px; background: rgba(69, 214, 196, .08); color: #c9f4ee; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.created-details h3 { margin: 0 0 8px; color: #9aeee2; font-size: 15px; }
+.created-details p { margin: 4px 0; }
+.created-details strong { color: #fff; }
 .companies-panel { overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: rgba(23, 36, 56, .76); }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 22px 24px; border-bottom: 1px solid var(--line); }
 .section-heading .eyebrow { margin-bottom: 7px; }
@@ -105,6 +117,8 @@ td { padding: 16px 18px; border-top: 1px solid var(--line); color: #d7e0eb; font
   .summary-value { font-size: 25px; }
   .page-heading { align-items: flex-start; }
   .read-only-pill { margin-top: 9px; }
+  .provision-form { grid-template-columns: 1fr; padding-right: 16px; padding-left: 16px; }
+  .created-details { margin-right: 16px; margin-left: 16px; }
 }
 
 @media (max-width: 430px) {

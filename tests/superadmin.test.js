@@ -165,7 +165,7 @@ test('startup bootstrap refuses to overwrite a different super-admin username', 
   assert.equal(rolledBack, true);
 });
 
-async function createApp() {
+async function createApp({ provisionCompany } = {}) {
   const controlDb = createClient({ url: 'file::memory:' });
   await migrateControlDatabase(controlDb);
   const passwordHash = await bcrypt.hash('Superadmin-Test-Password-2026!', 4);
@@ -187,7 +187,8 @@ async function createApp() {
   app.use(express.json());
   app.use('/api/superadmin', createSuperAdminRouter({
     getDatabase: async () => controlDb,
-    secureCookies: false
+    secureCookies: false,
+    provisionCompany
   }));
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
@@ -354,6 +355,54 @@ test('super-admin can update company status and plan without changing tenant cre
     assert.equal(overviewData.summary.suspendedCount, 1);
     assert.equal(overviewData.companies[0].status, 'suspended');
     assert.equal(overviewData.companies[0].planName, 'Solo');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await controlDb.close();
+  }
+});
+
+test('super-admin company provisioning is authenticated and returns one-time details without caching', async () => {
+  let provisionedBody;
+  const { controlDb, server, baseUrl } = await createApp({
+    provisionCompany: async (body, admin) => {
+      provisionedBody = { body, admin };
+      return {
+        company: { id: 2, code: 'new-company', name: 'New Company', status: 'trial', trialEndsAt: '2027-01-03', planId: 1 },
+        admin: { name: 'New Admin', username: 'new-admin', oneTimePassword: 'one-time-secret' }
+      };
+    }
+  });
+  try {
+    const unauthorized = await fetch(`${baseUrl}/companies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'new-company' })
+    });
+    assert.equal(unauthorized.status, 401);
+
+    const login = await fetch(`${baseUrl}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'test owner', password: 'Superadmin-Test-Password-2026!' })
+    });
+    const cookie = login.headers.get('set-cookie').split(';', 1)[0];
+    const created = await fetch(`${baseUrl}/companies`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: 'new-company',
+        name: 'New Company',
+        planId: 1
+      })
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await created.json(), {
+      company: { id: 2, code: 'new-company', name: 'New Company', status: 'trial', trialEndsAt: '2027-01-03', planId: 1 },
+      admin: { name: 'New Admin', username: 'new-admin', oneTimePassword: 'one-time-secret' }
+    });
+    assert.equal(provisionedBody.admin.id, 1);
+    assert.equal(provisionedBody.body.code, 'new-company');
   } finally {
     await new Promise(resolve => server.close(resolve));
     await controlDb.close();

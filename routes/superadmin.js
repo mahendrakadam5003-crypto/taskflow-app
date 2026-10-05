@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const express = require('express');
 const { rateLimit } = require('express-rate-limit');
 const { getControlDatabase } = require('../control-db');
+const { provisionCompany: defaultProvisionCompany, ProvisioningError } = require('../company-provisioning');
 
 const COOKIE_NAME = 'taskflow.superadmin.sid';
 const SESSION_DURATION_MS = 4 * 60 * 60 * 1000;
@@ -44,7 +45,11 @@ function clearSessionCookie(res, { secureCookies }) {
   });
 }
 
-function createSuperAdminRouter({ getDatabase = getControlDatabase, secureCookies = process.env.RENDER === 'true' } = {}) {
+function createSuperAdminRouter({
+  getDatabase = getControlDatabase,
+  secureCookies = process.env.RENDER === 'true',
+  provisionCompany = defaultProvisionCompany
+} = {}) {
   const router = express.Router();
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -210,6 +215,22 @@ function createSuperAdminRouter({ getDatabase = getControlDatabase, secureCookie
       })),
       registeredCompaniesOnly: true
     });
+  }));
+
+  router.post('/companies', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+
+    try {
+      const result = await provisionCompany(req.body, admin);
+      res.set('Cache-Control', 'no-store');
+      return res.status(201).json(result);
+    } catch (error) {
+      if (error instanceof ProvisioningError) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
+      throw error;
+    }
   }));
 
   router.put('/companies/:companyId', handle(async (req, res) => {
