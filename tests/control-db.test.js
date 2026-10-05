@@ -102,12 +102,28 @@ test('control database migration is versioned, repeatable, and seeds sample plan
     }
     const migrations = await client.execute('SELECT version FROM control_schema_migrations');
     assert.deepEqual(migrations.rows.map(row => Number(row.version)), [
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, CURRENT_SCHEMA_VERSION
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, CURRENT_SCHEMA_VERSION
     ]);
     const pricing = await client.execute('SELECT monthly_price_paise, yearly_discount_pct, yearly_price_paise, tax_pct, currency, is_current FROM pricing_versions');
     assert.deepEqual(pricing.rows.map(row => [Number(row.monthly_price_paise), Number(row.yearly_discount_pct), Number(row.yearly_price_paise), Number(row.tax_pct), row.currency, Number(row.is_current)]), [[19900, 10, 214920, 18, 'INR', 1]]);
     const pricingSettings = await client.execute('SELECT trial_days, trial_max_users, trial_storage_limit_mb, grace_period_days, read_only_period_days, trial_approval_mode, seat_addition_billing FROM pricing_settings WHERE id = 1');
     assert.deepEqual(pricingSettings.rows.map(row => [Number(row.trial_days), Number(row.trial_max_users), Number(row.trial_storage_limit_mb), Number(row.grace_period_days), Number(row.read_only_period_days), row.trial_approval_mode, row.seat_addition_billing]), [[7, 3, 1024, 3, 7, 'manual', 'immediate']]);
+  } finally {
+    await client.close();
+  }
+});
+
+test('control migration enforces manually approved trials without touching tenant records', async () => {
+  const client = createClient({ url: 'file::memory:' });
+  try {
+    await migrateControlDatabase(client);
+    await client.execute("UPDATE pricing_settings SET trial_approval_mode = 'auto' WHERE id = 1");
+    await client.execute('DELETE FROM control_schema_migrations WHERE version = 13');
+    assert.equal(await migrateControlDatabase(client), CURRENT_SCHEMA_VERSION);
+    const result = await client.execute('SELECT trial_approval_mode FROM pricing_settings WHERE id = 1');
+    assert.equal(result.rows[0].trial_approval_mode, 'manual');
+    const migration = await client.execute('SELECT version FROM control_schema_migrations WHERE version = 13');
+    assert.equal(migration.rows.length, 1);
   } finally {
     await client.close();
   }

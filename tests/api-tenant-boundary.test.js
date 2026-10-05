@@ -31,6 +31,7 @@ test('tenant context middleware is installed before every API router', () => {
   assert.notEqual(contextPosition, -1);
   assert.ok(apiMounts.length > 0);
   for (const mount of apiMounts) assert.ok(mount.index > contextPosition, `${mount[0]} must follow tenant context middleware`);
+  assert.match(server, /req\.path === '\/api\/public\/demo-requests'/);
 });
 
 test('scheduled maintenance never invokes automatic company deletion', () => {

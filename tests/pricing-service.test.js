@@ -36,6 +36,7 @@ test('pricing input validates editable settings and rejects fractional paise or 
   assert.equal(parseRupeesToPaise('2149.20'), 214920);
   assert.equal(parseRupeesToPaise('199.001'), null);
   assert.equal(validatePricingInput({ ...validInput, trialDays: '61' }, now), null);
+  assert.equal(validatePricingInput({ ...validInput, trialApprovalMode: 'auto' }, now), null);
   assert.equal(validatePricingInput({ ...validInput, taxPct: '100.1' }, now), null);
   assert.equal(validatePricingInput({ ...validInput, monthlyPrice: '-1' }, now), null);
   assert.equal(validatePricingInput({ ...validInput, effectiveFrom: '2026-10-05' }, now), null);

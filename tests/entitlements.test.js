@@ -77,6 +77,21 @@ test('read-only blocks writes, while locked access is limited to admin billing r
   let result = await callMiddleware(createEntitlementMiddleware({ getCompanyAccessState: async () => state }), {
     path: '/api/tasks', method: 'GET', companyTenantId: 12, session: { role: 'employee' }
   });
+
+  test('public request endpoints bypass company authentication entitlements', async () => {
+    let resolved = false;
+    const middleware = createEntitlementMiddleware({
+      async getCompanyAccessState() {
+        resolved = true;
+        return { state: 'locked', reasons: ['trial_ended'], message: 'Trial ended.' };
+      }
+    });
+    const result = await callMiddleware(middleware, {
+      path: '/api/public/demo-requests', method: 'POST', companyTenantId: undefined
+    });
+    assert.equal(result.next, true);
+    assert.equal(resolved, false);
+  });
   assert.equal(result.next, true);
   assert.equal(result.headers['X-Company-Access-State'], 'read_only');
 

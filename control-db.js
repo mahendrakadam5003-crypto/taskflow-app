@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 12;
+const CURRENT_SCHEMA_VERSION = 13;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -422,6 +422,12 @@ const CONTROL_MIGRATIONS = [{
     'CREATE INDEX IF NOT EXISTS subscription_change_requests_company_idx ON subscription_change_requests(company_id, created_at)',
     'CREATE UNIQUE INDEX IF NOT EXISTS subscription_change_requests_one_pending_idx ON subscription_change_requests(company_id) WHERE status = \'pending\'',
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [12] }
+  ]
+}, {
+  version: 13,
+  statements: [
+    "UPDATE pricing_settings SET trial_approval_mode = 'manual' WHERE trial_approval_mode <> 'manual'",
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [13] }
   ]
 }];
 

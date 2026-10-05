@@ -13,6 +13,7 @@ const createdCompanyDetails = document.getElementById('created-company-details')
 let overviewData = null;
 let activeCompanyDetail = null;
 let planRecords = [];
+let demoRequests = [];
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -126,6 +127,7 @@ async function loadUserErrors(status = 'open') {
 
 function renderCompanies(companies, plans) {
   overviewData = overviewData || { companies, plans };
+  planRecords = plans;
   const planSelect = document.getElementById('new-company-plan');
   const currentPlanId = planSelect.value;
   planSelect.innerHTML = plans.map(plan =>
@@ -463,6 +465,51 @@ async function loadCompanyDetail(companyId) {
   }
 }
 
+function renderDemoRequests() {
+  document.getElementById('demo-request-count').textContent =
+    `${demoRequests.filter(item => item.status === 'new').length} new`;
+  document.getElementById('demo-request-list').innerHTML = demoRequests.length
+    ? demoRequests.map(item => `<article class="record-row"><div>
+        <strong>${escapeHtml(item.companyName)} · ${escapeHtml(item.name)}</strong>
+        <small>${escapeHtml(item.email)}${item.phone ? ` · ${escapeHtml(item.phone)}` : ''} · team ${Number(item.teamSize)}</small>
+        ${item.message ? `<small>${escapeHtml(item.message)}</small>` : ''}
+        <small>Request #${item.id} · ${escapeHtml(formatDate(item.createdAt))} · ${escapeHtml(item.status)}</small>
+      </div><div class="record-actions">${item.status === 'new'
+        ? `<button class="button button-primary" type="button" data-demo-approve="${item.id}">Approve</button><button class="button button-quiet" type="button" data-demo-reject="${item.id}">Reject</button>`
+        : `<button class="button button-primary" type="button" data-demo-provision="${item.id}">Create trial</button>`}</div></article>`).join('')
+    : '<p class="muted">No demo requests are awaiting action.</p>';
+}
+
+async function loadDemoRequests() {
+  const errorTarget = document.getElementById('demo-request-load-error');
+  errorTarget.classList.add('hidden');
+  try {
+    const result = await request('demo-requests');
+    demoRequests = result.requests || [];
+    renderDemoRequests();
+  } catch (error) {
+    errorTarget.textContent = error.message;
+    errorTarget.classList.remove('hidden');
+  }
+}
+
+function prefillDemoRequest(item) {
+  const code = item.companyName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 61) || `trial-${item.id}`;
+  let username = (item.email.split('@')[0] || 'admin').replace(/[^a-z0-9._-]/g, '-').slice(0, 64);
+  if (!/^[a-z0-9]/.test(username)) username = `admin-${username}`.slice(0, 64);
+  document.getElementById('new-company-name').value = item.companyName;
+  document.getElementById('new-company-code').value = code;
+  document.getElementById('new-company-email').value = item.email;
+  document.getElementById('new-admin-name').value = item.name;
+  document.getElementById('new-admin-username').value = username;
+  document.getElementById('demo-request-id').value = String(item.id);
+  const trialPlan = planRecords.find(plan => plan.name.toLowerCase() === 'trial');
+  if (trialPlan) document.getElementById('new-company-plan').value = String(trialPlan.id);
+  showControlPage('overview');
+  document.getElementById('company-form').scrollIntoView({ block: 'start', behavior: 'smooth' });
+  document.getElementById('new-company-code').focus();
+}
+
 async function loadOverview() {
   try {
     const data = await request('overview');
@@ -473,6 +520,7 @@ async function loadOverview() {
     overviewError.classList.add('hidden');
     showOverview();
     loadUserErrors();
+    loadDemoRequests();
   } catch (error) {
     if (error.status === 401) return showLogin();
     overviewError.textContent = error.message;
@@ -510,6 +558,37 @@ document.getElementById('user-error-list').addEventListener('click', async event
     const target = document.getElementById('user-error-load-error');
     target.textContent = error.message;
     target.classList.remove('hidden');
+    button.disabled = false;
+  }
+});
+
+document.getElementById('demo-request-refresh').addEventListener('click', loadDemoRequests);
+document.getElementById('demo-request-list').addEventListener('click', async event => {
+  const approveButton = event.target.closest('[data-demo-approve]');
+  const rejectButton = event.target.closest('[data-demo-reject]');
+  const provisionButton = event.target.closest('[data-demo-provision]');
+  const button = approveButton || rejectButton || provisionButton;
+  if (!button) return;
+  const item = demoRequests.find(requestItem => requestItem.id === Number(button.dataset.demoApprove
+    || button.dataset.demoReject || button.dataset.demoProvision));
+  if (!item) return;
+  if (provisionButton) return prefillDemoRequest(item);
+  if (rejectButton && !window.confirm(`Reject the demo request from ${item.companyName}?`)) return;
+  button.disabled = true;
+  try {
+    await request(`demo-requests/${item.id}/${approveButton ? 'approve' : 'reject'}`, { method: 'POST' });
+    if (approveButton) {
+      item.status = 'approved';
+      renderDemoRequests();
+      prefillDemoRequest(item);
+    } else {
+      await loadDemoRequests();
+    }
+  } catch (error) {
+    const target = document.getElementById('demo-request-load-error');
+    target.textContent = error.message;
+    target.classList.remove('hidden');
+  } finally {
     button.disabled = false;
   }
 });
@@ -853,7 +932,9 @@ companyForm.addEventListener('submit', async event => {
         ownerEmail: formData.get('ownerEmail'),
         adminName: formData.get('adminName'),
         adminUsername: formData.get('adminUsername'),
-        planId: Number(formData.get('planId'))
+        planId: Number(formData.get('planId')),
+        ...(document.getElementById('demo-request-id').value
+          ? { demoRequestId: Number(document.getElementById('demo-request-id').value) } : {})
       })
     });
     const fields = [
@@ -873,7 +954,7 @@ companyForm.addEventListener('submit', async event => {
       createdCompanyDetails.classList.add('hidden');
     }, { once: true });
     companyForm.reset();
-    managementMessage.textContent = 'New company provisioned with its own database and 90-day trial.';
+    managementMessage.textContent = `New company provisioned with its own database and a trial through ${formatDate(result.company.trialEndsAt)}.`;
     managementMessage.classList.remove('hidden');
     await loadOverview();
   } catch (error) {

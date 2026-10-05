@@ -60,7 +60,7 @@ function validatePricingInput(body, now = new Date()) {
     || !/^[A-Z]{3}$/.test(currency) || !currencySymbol || currencySymbol.length > 8
     || !['immediate', 'next_invoice'].includes(seatAdditionBilling)
     || !['new_customers', 'existing_next_renewal'].includes(priceChangeScope)
-    || !['manual', 'auto'].includes(trialApprovalMode) || !effectiveFrom) return null;
+    || trialApprovalMode !== 'manual' || !effectiveFrom) return null;
 
   const yearlyPricePaise = yearlyPriceOverridePaise ?? calculateYearlyPricePaise(monthlyPricePaise, yearlyDiscountTenths);
   return {

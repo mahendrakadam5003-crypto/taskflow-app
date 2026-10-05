@@ -23,10 +23,19 @@ const settings = {
   trial_approval_mode: 'manual'
 };
 const audits = [];
+const demoRequestRows = [];
 const controlDb = {
   async execute(statement) {
     const sql = typeof statement === 'string' ? statement : statement.sql;
     const args = typeof statement === 'string' ? [] : statement.args || [];
+    if (sql.startsWith('INSERT INTO demo_requests')) {
+      const row = {
+        id: demoRequestRows.length + 1, name: args[0], email: args[1], phone: args[2],
+        company_name: args[3], team_size: args[4], message: args[5], status: 'new', consented_at: args[6]
+      };
+      demoRequestRows.push(row);
+      return { lastInsertRowid: row.id };
+    }
     if (sql.includes('FROM super_admin_sessions s')) {
       return { rows: [{ id: 9, name: 'Pricing Admin', username: 'pricing-admin', admin_token_version: 0, session_token_version: 0, expires_at: Date.now() + 60000 }] };
     }
@@ -104,6 +113,39 @@ test('public pricing is anonymous and pricing edits require super-admin password
 
   const unauthenticated = await fetch(`${baseUrl}/api/superadmin/pricing`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ currentPassword: password })
+  });
+
+  test('demo requests are anonymous, validated, consented, and remain pending manual approval', async () => {
+    const invalid = await fetch(`${baseUrl}/api/public/demo-requests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Sam', email: 'sam@example.test', companyName: 'Example', teamSize: 2 })
+    });
+    assert.equal(invalid.status, 400);
+
+    const trapped = await fetch(`${baseUrl}/api/public/demo-requests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ website: 'bot.example' })
+    });
+    assert.equal(trapped.status, 202);
+    assert.equal(demoRequestRows.length, 0);
+
+    const response = await fetch(`${baseUrl}/api/public/demo-requests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Sam Owner', email: 'SAM@EXAMPLE.TEST', phone: '555-0100',
+        companyName: 'Example Co', teamSize: 4, message: 'Please contact me.',
+        consent: true
+      })
+    });
+    assert.equal(response.status, 201);
+    assert.deepEqual(await response.json(), { id: 1, status: 'pending_review' });
+    assert.equal(demoRequestRows[0].email, 'sam@example.test');
+    assert.equal(demoRequestRows[0].status, 'new');
+    assert.equal(demoRequestRows[0].team_size, 4);
+    assert.ok(demoRequestRows[0].consented_at);
   });
   assert.equal(unauthenticated.status, 401);
 

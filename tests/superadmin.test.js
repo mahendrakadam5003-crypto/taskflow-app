@@ -799,6 +799,76 @@ test('super-admin company provisioning is authenticated and returns one-time det
     });
     assert.equal(provisionedBody.admin.id, 1);
     assert.equal(provisionedBody.body.code, 'new-company');
+
+    await controlDb.execute({
+      sql: `INSERT INTO companies (id, code, name, status, plan_id, tenant_db_url, tenant_db_token_encrypted)
+        VALUES (2, 'new-company', 'New Company', 'trial', 1, 'libsql://new.example', 'encrypted-token')`,
+      args: []
+    });
+    const demoRequest = await controlDb.execute({
+      sql: `INSERT INTO demo_requests
+        (name, email, company_name, team_size, consented_at, status)
+        VALUES (?, ?, ?, ?, ?, 'approved')`,
+      args: ['New Admin', 'admin@example.test', 'New Company', 4, new Date().toISOString()]
+    });
+    const converted = await fetch(`${baseUrl}/companies`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: 'new-company',
+        name: 'New Company',
+        planId: 1,
+        demoRequestId: Number(demoRequest.lastInsertRowid)
+      })
+    });
+    assert.equal(converted.status, 201, await converted.clone().text());
+    const conversionState = await controlDb.execute({
+      sql: 'SELECT status, company_id FROM demo_requests WHERE id = ?',
+      args: [Number(demoRequest.lastInsertRowid)]
+    });
+    assert.equal(conversionState.rows[0].status, 'converted');
+    assert.equal(Number(conversionState.rows[0].company_id), 2);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await controlDb.close();
+  }
+});
+
+test('super-admin can approve and reject queued demo requests for manual trial setup', async () => {
+  const { controlDb, server, baseUrl } = await createApp();
+  try {
+    const first = await controlDb.execute({
+      sql: `INSERT INTO demo_requests (name, email, company_name, team_size, consented_at)
+        VALUES (?, ?, ?, ?, ?)`,
+      args: ['Ari Owner', 'ari@example.test', 'Ari Co', 5, new Date().toISOString()]
+    });
+    const second = await controlDb.execute({
+      sql: `INSERT INTO demo_requests (name, email, company_name, team_size, consented_at)
+        VALUES (?, ?, ?, ?, ?)`,
+      args: ['Bea Owner', 'bea@example.test', 'Bea Co', 2, new Date().toISOString()]
+    });
+    const login = await fetch(`${baseUrl}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'test owner', password: 'Superadmin-Test-Password-2026!' })
+    });
+    const headers = { Cookie: login.headers.get('set-cookie').split(';', 1)[0] };
+    const inbox = await fetch(`${baseUrl}/demo-requests`, { headers });
+    assert.equal(inbox.status, 200);
+    assert.equal((await inbox.json()).requests.length, 2);
+
+    const approved = await fetch(`${baseUrl}/demo-requests/${first.lastInsertRowid}/approve`, {
+      method: 'POST', headers
+    });
+    assert.equal(approved.status, 200);
+    assert.equal((await approved.json()).status, 'approved');
+    const rejected = await fetch(`${baseUrl}/demo-requests/${second.lastInsertRowid}/reject`, {
+      method: 'POST', headers
+    });
+    assert.equal(rejected.status, 200);
+    assert.equal((await rejected.json()).status, 'rejected');
+    const remaining = await (await fetch(`${baseUrl}/demo-requests`, { headers })).json();
+    assert.deepEqual(remaining.requests.map(item => item.status), ['approved']);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await controlDb.close();

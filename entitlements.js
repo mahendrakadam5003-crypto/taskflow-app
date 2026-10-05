@@ -117,7 +117,8 @@ function createEntitlementService({
 function createEntitlementMiddleware({ getCompanyAccessState }) {
   if (typeof getCompanyAccessState !== 'function') throw new TypeError('An entitlement state resolver is required.');
   return (req, res, next) => {
-    if (!req.path.startsWith('/api/') || req.path === '/api/superadmin' || req.path.startsWith('/api/superadmin/')) return next();
+    if (!req.path.startsWith('/api/') || req.path.startsWith('/api/public/')
+      || req.path === '/api/superadmin' || req.path.startsWith('/api/superadmin/')) return next();
     Promise.resolve(getCompanyAccessState(req.companyTenantId)).then(access => {
       req.companyAccessState = access;
       res.setHeader('X-Company-Access-State', access.state);

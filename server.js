@@ -398,6 +398,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api/')
     || req.path === '/api/public/pricing'
+    || req.path === '/api/public/demo-requests'
     || req.path === '/api/superadmin'
     || req.path.startsWith('/api/superadmin/')) return next();
   if (req.method === 'POST' && ['/api/auth/login', '/api/auth/logout', '/api/auth/end-support'].includes(req.path)) return next();

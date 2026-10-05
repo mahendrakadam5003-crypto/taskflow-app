@@ -151,6 +151,7 @@ function createSuperAdminRouter({
     legacyHeaders: false,
     message: { error: 'Too many sign-in attempts. Try again later.' }
   });
+  const demoRequestsInProvisioning = new Set();
 
   const handle = callback => (req, res, next) => {
     Promise.resolve(callback(req, res, next)).catch(next);
@@ -625,12 +626,91 @@ function createSuperAdminRouter({
     });
   }));
 
+  router.get('/demo-requests', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const controlDb = await getDatabase();
+    const result = await controlDb.execute(`SELECT id, name, email, phone, company_name, team_size,
+        message, status, created_at FROM demo_requests
+      WHERE status IN ('new', 'approved') AND company_id IS NULL
+      ORDER BY created_at DESC, id DESC LIMIT 100`);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ requests: (result.rows || []).map(row => ({
+      id: Number(row.id), name: row.name, email: row.email, phone: row.phone,
+      companyName: row.company_name, teamSize: Number(row.team_size), message: row.message,
+      status: row.status, createdAt: row.created_at
+    })) });
+  }));
+
+  router.post('/demo-requests/:requestId/approve', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const requestId = Number(req.params.requestId);
+    if (!Number.isSafeInteger(requestId) || requestId < 1) return res.status(400).json({ error: 'Choose a valid demo request.' });
+    const controlDb = await getDatabase();
+    const result = await controlDb.execute({
+      sql: `UPDATE demo_requests SET status = 'approved', approved_by = ?, updated_at = datetime('now')
+        WHERE id = ? AND status = 'new' AND company_id IS NULL`,
+      args: [admin.id, requestId]
+    });
+    if (Number(result.rowsAffected || 0) !== 1) return res.status(409).json({ error: 'New demo request not found.' });
+    await writeAudit(controlDb, admin, null, 'Demo request approved', `Demo request ${requestId} approved for manual trial provisioning.`);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ id: requestId, status: 'approved' });
+  }));
+
+  router.post('/demo-requests/:requestId/reject', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const requestId = Number(req.params.requestId);
+    if (!Number.isSafeInteger(requestId) || requestId < 1) return res.status(400).json({ error: 'Choose a valid demo request.' });
+    const controlDb = await getDatabase();
+    const result = await controlDb.execute({
+      sql: `UPDATE demo_requests SET status = 'rejected', approved_by = ?, updated_at = datetime('now')
+        WHERE id = ? AND status IN ('new', 'approved') AND company_id IS NULL`,
+      args: [admin.id, requestId]
+    });
+    if (Number(result.rowsAffected || 0) !== 1) return res.status(409).json({ error: 'Unconverted demo request not found.' });
+    await writeAudit(controlDb, admin, null, 'Demo request rejected', `Demo request ${requestId} rejected.`);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ id: requestId, status: 'rejected' });
+  }));
+
   router.post('/companies', handle(async (req, res) => {
     const admin = await getAuthenticatedAdmin(req);
     if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
 
+    const demoRequestId = req.body?.demoRequestId == null ? null : Number(req.body.demoRequestId);
+    if (demoRequestId !== null && (!Number.isSafeInteger(demoRequestId) || demoRequestId < 1)) {
+      return res.status(400).json({ error: 'Choose a valid approved demo request.' });
+    }
+    if (demoRequestId !== null && demoRequestsInProvisioning.has(demoRequestId)) {
+      return res.status(409).json({ error: 'This demo request is already being converted to a trial.' });
+    }
+
     try {
+      const controlDb = demoRequestId === null ? null : await getDatabase();
+      if (demoRequestId !== null) {
+        const requestResult = await controlDb.execute({
+          sql: "SELECT id FROM demo_requests WHERE id = ? AND status = 'approved' AND company_id IS NULL LIMIT 1",
+          args: [demoRequestId]
+        });
+        if (!requestResult.rows?.[0]) return res.status(409).json({ error: 'Only an approved, unconverted request can create a trial.' });
+        demoRequestsInProvisioning.add(demoRequestId);
+      }
       const result = await provisionCompany(req.body, admin);
+      if (demoRequestId !== null) {
+        const updated = await controlDb.execute({
+          sql: `UPDATE demo_requests SET status = 'converted', company_id = ?, updated_at = datetime('now')
+            WHERE id = ? AND status = 'approved' AND company_id IS NULL`,
+          args: [Number(result.company.id), demoRequestId]
+        });
+        if (Number(updated.rowsAffected || 0) !== 1) {
+          throw new Error('The company was provisioned, but its demo request could not be linked. Contact support before retrying.');
+        }
+        await writeAudit(controlDb, admin, Number(result.company.id), 'Demo request converted',
+          `Approved demo request ${demoRequestId} converted to a trial company.`);
+      }
       res.set('Cache-Control', 'no-store');
       return res.status(201).json(result);
     } catch (error) {
@@ -638,6 +718,8 @@ function createSuperAdminRouter({
         return res.status(error.statusCode).json({ error: error.message });
       }
       throw error;
+    } finally {
+      if (demoRequestId !== null) demoRequestsInProvisioning.delete(demoRequestId);
     }
   }));
 

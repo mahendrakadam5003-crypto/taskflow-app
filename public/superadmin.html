@@ -57,6 +57,14 @@
         <p id="user-error-load-error" class="message error hidden" role="alert"></p>
         <div id="user-error-list" class="record-list user-error-list" aria-live="polite"></div>
       </section>
+      <section id="demo-request-inbox" class="companies-panel" aria-labelledby="demo-request-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">ONBOARDING</p><h2 id="demo-request-heading">Demo &amp; trial requests <span id="demo-request-count" class="total-pill">0 new</span></h2></div>
+          <button id="demo-request-refresh" type="button" class="button button-quiet">Refresh</button>
+        </div>
+        <p id="demo-request-load-error" class="message error hidden" role="alert"></p>
+        <div id="demo-request-list" class="record-list" aria-live="polite"></div>
+      </section>
       <nav class="control-nav" aria-label="Super-admin pages">
         <button type="button" class="control-nav-button active" data-admin-page="overview">Overview &amp; companies</button>
         <button type="button" class="control-nav-button" data-admin-page="plans">Plans</button>
@@ -71,6 +79,7 @@
           </div>
         </div>
         <form id="company-form" class="provision-form">
+          <input id="demo-request-id" type="hidden">
           <div class="form-field">
             <label for="new-company-name">Company name</label>
             <input id="new-company-name" name="name" maxlength="160" required>
@@ -183,7 +192,7 @@
               <label for="pricing-storage-per-seat">Default storage per seat (MB)<span class="optional-label">Blank disables</span><input id="pricing-storage-per-seat" name="defaultStoragePerSeatMb" type="number" min="0" step="1"></label>
               <label for="pricing-seat-billing">Mid-cycle seat additions<select id="pricing-seat-billing" name="seatAdditionBilling"><option value="immediate">Bill immediately</option><option value="next_invoice">Add to next invoice</option></select></label>
               <label for="pricing-price-scope">Price changes apply to<select id="pricing-price-scope" name="priceChangeScope"><option value="new_customers">New customers only</option><option value="existing_next_renewal">Existing customers at next renewal</option></select></label>
-              <label for="pricing-trial-approval">Trial approval<select id="pricing-trial-approval" name="trialApprovalMode"><option value="manual">Manual approval</option><option value="auto">Automatic after verification</option></select></label>
+              <label for="pricing-trial-approval">Trial approval<select id="pricing-trial-approval" name="trialApprovalMode"><option value="manual">Manual approval</option></select></label>
               <label for="pricing-effective-date">Effective date<span class="optional-label">Blank means now</span><input id="pricing-effective-date" name="effectiveFrom" type="date"></label>
               <label for="pricing-note">Version note<input id="pricing-note" name="note" maxlength="500"></label>
               <label class="pricing-check"><input id="pricing-prorate" name="prorateSeats" type="checkbox"> Pro-rate mid-cycle seat additions</label>
