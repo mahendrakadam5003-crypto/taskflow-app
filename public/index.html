@@ -49,16 +49,26 @@
 <div id="login-screen" class="login-screen hidden">
   <div class="login-card">
     <div class="login-mark"><svg class="icon" aria-hidden="true"><use href="#icon-flow"></use></svg><span>TaskFlow</span></div>
-    <p class="login-sub">Sign in with your verified work email or Google account.</p>
+    <p class="login-sub">Sign in with your username and password, email code, or Google account.</p>
     <label>Company code <span class="login-optional">(optional for the existing workspace)</span>
         <input type="text" id="login-company-code" autocomplete="organization" maxlength="63" autocapitalize="none" spellcheck="false">
     </label>
-    <form id="email-login-request-form">
+    <form id="login-form">
+      <label>Username
+        <input type="text" id="login-username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      </label>
+      <label>Password
+        <input type="password" id="login-password" autocomplete="current-password" required>
+      </label>
+      <div id="login-error" class="form-error"></div>
+      <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+    </form>
+    <form id="email-login-request-form" class="hidden">
       <label>Work email address
         <input type="email" id="email-login-address" autocomplete="email" maxlength="254" required>
       </label>
       <p id="email-login-request-status" class="login-status" role="status" aria-live="polite"></p>
-      <button type="submit" class="btn btn-primary btn-block">Send sign-in code</button>
+      <button type="submit" class="btn btn-secondary btn-block">Send sign-in code</button>
     </form>
     <form id="email-login-verify-form" class="hidden">
       <label>Six-digit code
@@ -69,32 +79,8 @@
     </form>
     <div class="login-provider-actions">
       <button type="button" class="btn btn-secondary btn-block" id="google-login-button">Continue with Google</button>
-      <button type="button" class="link-btn" id="legacy-login-toggle">Existing account email setup</button>
+      <button type="button" class="link-btn" id="email-login-toggle">Use email code instead</button>
     </div>
-    <form id="login-form" class="hidden">
-      <label>Existing username
-        <input type="text" id="login-username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
-      </label>
-      <label>Password
-        <input type="password" id="login-password" autocomplete="current-password" required>
-      </label>
-      <div id="login-error" class="form-error"></div>
-      <button type="submit" class="btn btn-secondary btn-block">Continue account setup</button>
-    </form>
-    <form id="email-enrollment-form" class="hidden">
-      <p class="login-sub">Your existing account needs a verified email before you can continue.</p>
-      <label>Email address
-        <input type="email" id="email-enrollment-address" autocomplete="email" maxlength="254" required>
-      </label>
-      <p id="email-enrollment-status" class="login-status" role="status" aria-live="polite"></p>
-      <button type="submit" class="btn btn-primary btn-block" id="email-enrollment-send">Send verification code</button>
-      <div id="email-enrollment-code-section" class="hidden">
-        <label>Six-digit verification code
-          <input type="text" id="email-enrollment-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6">
-        </label>
-        <button type="button" class="btn btn-secondary btn-block" id="email-enrollment-verify">Verify email and continue</button>
-      </div>
-    </form>
   </div>
 </div>
 
@@ -416,6 +402,6 @@
   <div class="modal" id="modal" role="dialog" aria-modal="true" tabindex="-1"></div>
 </div>
 
-<script src="/js/app.js?v=20261006-2"></script>
+<script src="/js/app.js?v=20261006-3"></script>
 </body>
 </html>

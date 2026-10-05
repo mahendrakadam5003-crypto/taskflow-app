@@ -638,17 +638,6 @@ function stopTaskListPolling() {
 }
 
 // ---------- boot backend authentication initialization ----------
-function showEmailEnrollment() {
-  $('#startup-screen')?.classList.add('hidden');
-  $('#app')?.classList.add('hidden');
-  $('#login-screen')?.classList.remove('hidden');
-  $('#login-form')?.classList.add('hidden');
-  $('#email-login-request-form')?.classList.add('hidden');
-  $('#email-login-verify-form')?.classList.add('hidden');
-  $('.login-provider-actions')?.classList.add('hidden');
-  $('#email-enrollment-form')?.classList.remove('hidden');
-}
-
 function setLoginStatus(element, message, state = '') {
   if (!element) return;
   element.textContent = message;
@@ -665,10 +654,6 @@ function setLoginStatus(element, message, state = '') {
     ME = Array.isArray(rawMe) ? rawMe[0] : rawMe;
     if (ME.must_change_password) {
       showSelfPasswordModal(true);
-      return;
-    }
-    if (ME.requires_email_enrollment) {
-      showEmailEnrollment();
       return;
     }
     enterApp();
@@ -737,42 +722,14 @@ if (loginForm) {
       setLoginStatus(status, error.message, 'error');
     }
   });
-  $('#legacy-login-toggle')?.addEventListener('click', () => {
-    loginForm?.classList.toggle('hidden');
-  });
-  const enrollmentForm = $('#email-enrollment-form');
-  enrollmentForm?.addEventListener('submit', async event => {
-    event.preventDefault();
-    const status = $('#email-enrollment-status');
-    setLoginStatus(status, '');
-    try {
-      const result = await api('/auth/email/enroll', {
-        method: 'POST',
-        body: { email: $('#email-enrollment-address').value.trim() }
-      });
-      setLoginStatus(status, result.message, 'success');
-      $('#email-enrollment-code-section')?.classList.remove('hidden');
-      $('#email-enrollment-code')?.focus();
-    } catch (error) {
-      setLoginStatus(status, error.message, 'error');
-    }
-  });
-  $('#email-enrollment-verify')?.addEventListener('click', async () => {
-    const status = $('#email-enrollment-status');
-    setLoginStatus(status, '');
-    try {
-      await api('/auth/email/enroll/verify', {
-        method: 'POST',
-        body: {
-          email: $('#email-enrollment-address').value.trim(),
-          code: $('#email-enrollment-code').value.trim()
-        }
-      });
-      ME = await api('/auth/me');
-      enterApp();
-    } catch (error) {
-      setLoginStatus(status, error.message, 'error');
-    }
+  $('#email-login-toggle')?.addEventListener('click', () => {
+    const emailLoginVisible = !emailLoginRequestForm?.classList.contains('hidden');
+    emailLoginRequestForm?.classList.toggle('hidden', emailLoginVisible);
+    emailLoginVerifyForm?.classList.add('hidden');
+    loginForm.classList.toggle('hidden', !emailLoginVisible);
+    $('#email-login-toggle').textContent = emailLoginVisible
+      ? 'Use username and password instead'
+      : 'Use email code instead';
   });
   const authReason = new URLSearchParams(location.hash.slice(1)).get('auth');
   const authMessages = {
@@ -810,7 +767,6 @@ if (loginForm) {
       });
       ME = Array.isArray(rawLogin) ? rawLogin[0] : rawLogin;
       if (ME.must_change_password) showSelfPasswordModal(true);
-      else if (ME.requires_email_enrollment) showEmailEnrollment();
       else enterApp();
     } catch (err) {
       if (errorEl) errorEl.textContent = err.message;
@@ -3429,9 +3385,11 @@ async function renderAdmin() {
 
       <div class="admin-block">
         <h3>Team members &amp; admin access</h3>
-        <p class="hint">New accounts require a work email, date of birth, phone number, and department. TaskFlow sends an invitation; after verifying it, the person signs in with an email code or Google.</p>
+        <p class="hint">Create a username and temporary password so the new member can sign in without email delivery. Email verification and Google sign-in remain optional.</p>
         <div class="admin-form-row" style="margin-bottom: 20px;">
           <input id="u-name" placeholder="Full name">
+          <input id="u-username" placeholder="Username" autocomplete="username" required>
+          <input id="u-password" type="password" placeholder="Temporary password (10+ characters)" autocomplete="new-password" required>
           <input id="u-email" type="email" placeholder="Work email (required)" autocomplete="email" required>
           <input id="u-date-of-birth" type="date" aria-label="Date of birth" required>
           <input id="u-phone" type="tel" placeholder="Phone number (required)" autocomplete="tel" required>
@@ -3929,7 +3887,7 @@ async function renderAdmin() {
         const actionsHtml = `<button class="btn btn-secondary btn-sm admin-edit-user" type="button">Edit</button>`;
         tr.innerHTML = `
           <td style="padding:10px;"><b>${escapeHtml(u.name || u.NAME)}</b></td>
-          <td style="padding:10px;">${escapeHtml(u.email || 'Email required')}<br><small>${u.email ? (Number(u.email_verified) === 1 ? 'Verified · email code / Google' : 'Unverified') : 'Email enrollment required'}</small>${u.email && Number(u.email_verified) !== 1 ? '<br><button class="btn btn-secondary btn-sm admin-send-email-verification" type="button">Resend invitation</button>' : ''}</td>
+          <td style="padding:10px;">${escapeHtml(u.email || 'No email')}<br><small>${u.email ? (Number(u.email_verified) === 1 ? 'Verified · email code / Google available' : 'Unverified · password login available') : 'Password login available'}</small>${u.email && Number(u.email_verified) !== 1 ? '<br><button class="btn btn-secondary btn-sm admin-send-email-verification" type="button">Resend invitation</button>' : ''}</td>
           <td style="padding:10px;">${escapeHtml(u.date_of_birth || '—')}<br><small>${escapeHtml(u.phone || 'No phone')}</small></td>
           <td style="padding:10px;">${escapeHtml(u.department || u.DEPARTMENT || 'No department')}</td>
           <td style="padding:10px;">${escapeHtml(u.role || u.ROLE)}</td>
@@ -4230,20 +4188,27 @@ async function renderAdmin() {
 
     $('#u-add').onclick = async () => {
       const name = $('#u-name').value.trim();
+      const username = $('#u-username').value.trim();
+      const password = $('#u-password').value;
       const date_of_birth = $('#u-date-of-birth').value;
       const phone = $('#u-phone').value.trim();
       const department = $('#u-department').value.trim();
       const email = $('#u-email').value.trim();
       const role = $('#u-role').value;
 
-      if (!name || !date_of_birth || !phone || !department || !email) return showAppNotification('Name, date of birth, phone, email, and department are required.');
+      if (!name || !username || !password || !date_of_birth || !phone || !department || !email) {
+        return showAppNotification('Name, username, temporary password, date of birth, phone, email, and department are required.');
+      }
 
       try {
-        const result = await api('/auth/users', { method: 'POST', body: { name, date_of_birth, phone, department, role, email } });
+        const result = await api('/auth/users', {
+          method: 'POST',
+          body: { name, username, password, date_of_birth, phone, department, role, email }
+        });
         const notice = result.invitationSent
-          ? ' Invitation sent; they must verify email, then use a sign-in code or Google.'
-          : ` Employee saved, but invitation was not sent: ${result.invitationError || 'check SMTP settings and resend it.'}`;
-        reloadWithActionMessage('admin', `Employee added successfully.${notice}`);
+          ? ' Optional email verification invitation sent.'
+          : ` Email verification invitation not sent (${result.invitationError || 'check SMTP settings'}); username/password login is ready.`;
+        reloadWithActionMessage('admin', `Employee added. Share the username and temporary password securely; they must change the password at first sign-in.${notice}`);
       } catch (err) { showAppNotification(err.message); }
     };
 
@@ -4381,8 +4346,7 @@ function showSelfPasswordModal(forced = false) {
       if (forced) {
         ME = await api('/auth/me');
         closeModal();
-        if (ME.requires_email_enrollment) showEmailEnrollment();
-        else enterApp();
+        enterApp();
       } else {
         closeModal();
         reloadWithActionMessage(currentViewName(), 'Password changed successfully.');
@@ -4515,7 +4479,7 @@ async function adminRemoveUser(userId, userName) {
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
     try {
-      const registration = await navigator.serviceWorker.register('/service-worker.js?v=20261005-2');
+      const registration = await navigator.serviceWorker.register('/service-worker.js?v=20261006-1');
       await registration.update();
     } catch (error) {
       console.warn('Service worker update failed:', error);

@@ -119,8 +119,8 @@ const mockDb = {
     const id = Math.max(...users.keys()) + 1;
     users.set(id, {
       id, name, username, password_hash: passwordHash, department, role, active: 1,
-      email, date_of_birth: dateOfBirth, phone, email_verified: 0, google_sub: null, auth_provider: 'email',
-      must_change_password: 0, token_version: 0
+      email, date_of_birth: dateOfBirth, phone, email_verified: 0, google_sub: null, auth_provider: 'password',
+      must_change_password: 1, token_version: 0
     });
     return [{ rowsAffected: 1 }, { rows: [{ id }] }];
   }
@@ -293,8 +293,8 @@ test('password change invalidates the other browser session', async () => {
     method: 'POST',
     body: { username: 'employee', password: 'replacement-password-456' }
   });
-  assert.equal(replacementLogin.status, 403);
-  assert.equal((await replacementLogin.json()).email_login_required, true);
+  assert.equal(replacementLogin.status, 200);
+  assert.equal((await replacementLogin.json()).username, 'employee');
 });
 
 test('inactive company status blocks authenticated requests', async () => {
@@ -400,6 +400,8 @@ test('user seats are enforced for creation and reactivation, and deactivation fr
       method: 'POST',
       cookie: adminCookie,
       body: {
+        username: 'over-limit',
+        password: 'temporary-password-123',
         name: 'Over limit', date_of_birth: '1990-01-01', phone: '+1 555 010 2030',
         email: 'over-limit@example.test', department: 'Testing'
       }
@@ -413,6 +415,8 @@ test('user seats are enforced for creation and reactivation, and deactivation fr
       method: 'POST',
       cookie: adminCookie,
       body: {
+        username: 'new-seat',
+        password: 'temporary-password-123',
         name: 'New seat', date_of_birth: '1990-01-01', phone: '+1 555 010 2031',
         email: 'new-seat@example.test', department: 'Testing'
       }
@@ -421,9 +425,19 @@ test('user seats are enforced for creation and reactivation, and deactivation fr
     const createdUser = await created.json();
     const { id: newUserId } = createdUser;
     assert.equal(createdUser.invitationSent, false);
+    assert.equal(createdUser.username, 'new-seat');
     assert.equal(users.get(newUserId).email, 'new-seat@example.test');
     assert.equal(users.get(newUserId).date_of_birth, '1990-01-01');
     assert.equal(users.get(newUserId).phone, '+1 555 010 2031');
+    assert.equal(users.get(newUserId).auth_provider, 'password');
+    assert.equal(users.get(newUserId).must_change_password, 1);
+
+    const newMemberLogin = await request('/login', {
+      method: 'POST',
+      body: { username: 'new-seat', password: 'temporary-password-123' }
+    });
+    assert.equal(newMemberLogin.status, 200);
+    assert.equal((await newMemberLogin.json()).must_change_password, true);
 
     const deniedReactivation = await request('/users/2', { method: 'PUT', cookie: adminCookie, body: { active: true } });
     assert.equal(deniedReactivation.status, 403);
@@ -441,7 +455,7 @@ test('user seats are enforced for creation and reactivation, and deactivation fr
   }
 });
 
-test('email password sign-in is disabled for verified accounts while unverified aliases are rejected', async () => {
+test('username and password sign-in remains available regardless of email verification status', async () => {
   const originalPasswordHash = user.password_hash;
   const originalEmail = user.email;
   const originalVerified = user.email_verified;
@@ -460,8 +474,8 @@ test('email password sign-in is disabled for verified accounts while unverified 
       method: 'POST',
       body: { username: user.email, password: 'email-login-password-123' }
     });
-    assert.equal(verified.status, 403);
-    assert.equal((await verified.json()).email_login_required, true);
+    assert.equal(verified.status, 200);
+    assert.equal((await verified.json()).username, user.username);
   } finally {
     user.password_hash = originalPasswordHash;
     user.email = originalEmail;
@@ -469,7 +483,7 @@ test('email password sign-in is disabled for verified accounts while unverified 
   }
 });
 
-test('existing accounts without a verified email are restricted to email enrollment', async () => {
+test('existing accounts without a verified email can use all workspace features after password sign-in', async () => {
   const snapshot = { ...user };
   try {
     user.email = null;
@@ -480,19 +494,15 @@ test('existing accounts without a verified email are restricted to email enrollm
       body: { username: user.username, password: 'legacy-account-password' }
     });
     assert.equal(loginResponse.status, 200);
-    assert.equal((await loginResponse.json()).requires_email_enrollment, true);
+    assert.equal((await loginResponse.json()).requires_email_enrollment, undefined);
     const cookie = loginResponse.headers.get('set-cookie').split(';', 1)[0];
 
     const profile = await request('/me', { cookie });
     assert.equal(profile.status, 200);
-    assert.equal((await profile.json()).requires_email_enrollment, true);
+    assert.equal((await profile.json()).requires_email_enrollment, undefined);
 
-    const blocked = await request('/activity', { cookie });
-    assert.equal(blocked.status, 403);
-    assert.deepEqual(await blocked.json(), {
-      error: 'Add and verify your email before continuing.',
-      requires_email_enrollment: true
-    });
+    const activity = await request('/activity', { cookie });
+    assert.equal(activity.status, 200);
   } finally {
     Object.assign(user, snapshot);
   }
