@@ -105,6 +105,14 @@ app.get('/api/company-status-probe', (req, res, next) => {
   req.companyStatus = 'suspended';
   next();
 }, requireAuth, (req, res) => res.json({ ok: true }));
+app.get('/api/suspended-read-only-probe', (req, res, next) => {
+  req.companyStatus = 'suspended';
+  next();
+}, requireAuth, (req, res) => res.json({ readOnly: true }));
+app.post('/api/suspended-read-only-probe', (req, res, next) => {
+  req.companyStatus = 'suspended';
+  next();
+}, requireAuth, (req, res) => res.json({ changed: true }));
 app.use('/api/auth', router);
 app.use((error, req, res, next) => {
   const status = Number(error.statusCode || error.status);
@@ -176,6 +184,22 @@ test('malformed login bodies fail quickly without server errors', async () => {
   }
 });
 
+test('failed login attempts are rate-limited per company despite rotating IPs and usernames', async () => {
+  const responses = [];
+  for (let index = 0; index < 11; index++) {
+    responses.push(await request('/login', {
+      method: 'POST',
+      body: {
+        username: `rate-user-${index}`,
+        password: 'incorrect-password',
+        company_code: 'company-limit-test'
+      }
+    }));
+  }
+  assert.ok(responses.slice(0, 10).every(response => response.status === 401));
+  assert.equal(responses[10].status, 429);
+});
+
 test('password change invalidates the other browser session', async () => {
   deletedSessionUsers.length = 0;
   const browserOne = await login();
@@ -211,7 +235,37 @@ test('inactive company status blocks authenticated requests', async () => {
     headers: { Cookie: cookie, 'X-Forwarded-For': nextIp() }
   });
   assert.equal(response.status, 403);
-  assert.deepEqual(await response.json(), { error: 'This company workspace is not active.' });
+  assert.deepEqual(await response.json(), {
+    error: 'Account suspended, contact support.',
+    suspended: true,
+    read_only: true
+  });
+});
+
+test('suspended company admins can read but cannot change workspace data', async () => {
+  const originalRole = user.role;
+  user.role = 'admin';
+  try {
+    const cookie = await login('replacement-password-456');
+    const read = await fetch(`${baseUrl}/api/suspended-read-only-probe`, {
+      headers: { Cookie: cookie, 'X-Forwarded-For': nextIp() }
+    });
+    assert.equal(read.status, 200);
+    assert.deepEqual(await read.json(), { readOnly: true });
+
+    const write = await fetch(`${baseUrl}/api/suspended-read-only-probe`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'X-Forwarded-For': nextIp() }
+    });
+    assert.equal(write.status, 403);
+    assert.deepEqual(await write.json(), {
+      error: 'Account suspended, contact support.',
+      suspended: true,
+      read_only: true
+    });
+  } finally {
+    user.role = originalRole;
+  }
 });
 
 test('employee sessions receive 403 from every admin-only auth route', async () => {

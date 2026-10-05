@@ -640,6 +640,8 @@ $('#startup-retry').onclick = () => location.reload();
 
 const loginForm = $('#login-form');
 if (loginForm) {
+  const companyField = $('#login-company-code');
+  if (companyField) companyField.value = localStorage.getItem('taskflow.companyCode') || '';
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const errorEl = $('#login-error');
@@ -647,8 +649,9 @@ if (loginForm) {
     
     const userField = $('#login-username');
     const passField = $('#login-password');
-    const companyField = $('#login-company-code');
     if (!userField || !passField) return;
+    if (companyField?.value.trim()) localStorage.setItem('taskflow.companyCode', companyField.value.trim());
+    else localStorage.removeItem('taskflow.companyCode');
 
     try {
       const rawLogin = await api('/auth/login', {
@@ -950,6 +953,13 @@ async function enterApp() {
   if (appEl) {
     appEl.classList.remove('hidden');
     appEl.classList.add('booting');
+  }
+  const companyStatusBanner = $('#company-status-banner');
+  if (companyStatusBanner) {
+    companyStatusBanner.textContent = ME.company_status === 'suspended'
+      ? 'Account suspended, contact support. This workspace is read-only.'
+      : '';
+    companyStatusBanner.classList.toggle('hidden', ME.company_status !== 'suspended');
   }
   
   const meBadge = $('#me-badge');

@@ -32,16 +32,6 @@ function verifyCompanyCode(value, secret = process.env.SESSION_SECRET) {
   }
 }
 
-function readCookie(cookieHeader, cookieName) {
-  for (const entry of String(cookieHeader || '').split(';')) {
-    const separator = entry.indexOf('=');
-    if (separator >= 0 && entry.slice(0, separator).trim() === cookieName) {
-      return entry.slice(separator + 1).trim();
-    }
-  }
-  return null;
-}
-
 function setCompanyContextCookie(res, companyCode, { secure = false, secret } = {}) {
   res.cookie(COMPANY_CONTEXT_COOKIE, signCompanyCode(companyCode, secret), {
     httpOnly: true,
@@ -64,8 +54,6 @@ function clearCompanyContextCookie(res, { secure = false } = {}) {
 function createCompanyContextMiddleware({
   runWithTenant,
   getDatabase = getControlDatabase,
-  secret = process.env.SESSION_SECRET,
-  cookieName = COMPANY_CONTEXT_COOKIE,
   legacyCompanyCode = process.env.LEGACY_COMPANY_CODE || 'existing-company',
   environment = process.env
 }) {
@@ -81,7 +69,19 @@ function createCompanyContextMiddleware({
       sql: 'SELECT id, code, name, status FROM companies WHERE code = ? LIMIT 1',
       args: [companyCode]
     });
-    const company = result.rows?.[0];
+    return normalizeCompany(result.rows?.[0]);
+  }
+
+  async function resolveCompanyById(companyId) {
+    const controlDb = await getDatabase();
+    const result = await controlDb.execute({
+      sql: 'SELECT id, code, name, status FROM companies WHERE id = ? LIMIT 1',
+      args: [companyId]
+    });
+    return normalizeCompany(result.rows?.[0]);
+  }
+
+  function normalizeCompany(company) {
     return company ? {
       id: Number(company.id),
       code: company.code,
@@ -90,72 +90,89 @@ function createCompanyContextMiddleware({
     } : null;
   }
 
+  function destroySession(req) {
+    if (!req.session || typeof req.session.destroy !== 'function') return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      req.session.destroy(error => error ? reject(error) : resolve());
+    });
+  }
+
+  function runCompanyContext(company, next, req) {
+    req.companyTenantId = company.id;
+    req.companyCode = company.code;
+    req.companyName = company.name;
+    req.companyStatus = company.status;
+    return runWithTenant(company.id, next);
+  }
+
+  function runLegacyContext(req, next, companyStatus = null) {
+    req.companyTenantId = LEGACY_TENANT_ID;
+    req.companyCode = null;
+    req.companyName = null;
+    req.companyStatus = companyStatus;
+    return runWithTenant(LEGACY_TENANT_ID, next);
+  }
+
   return (req, res, next) => {
+    if (req.path === '/api/superadmin' || req.path.startsWith('/api/superadmin/')) {
+      return runLegacyContext(req, next);
+    }
+
     const isLogin = req.method === 'POST' && req.path === '/api/auth/login';
     const hasExplicitLoginCode = isLogin && Object.prototype.hasOwnProperty.call(req.body || {}, 'company_code');
     const explicitCompanyCode = hasExplicitLoginCode
       ? (typeof req.body.company_code === 'string' ? req.body.company_code.trim().toLowerCase() : null)
       : null;
-    const cookieValue = readCookie(req.get('Cookie'), cookieName);
-    const cookieCompanyCode = verifyCompanyCode(cookieValue, secret);
-    const companyCode = hasExplicitLoginCode ? explicitCompanyCode : cookieCompanyCode;
     const isDefaultCompanyLogin = isLogin && (!hasExplicitLoginCode || explicitCompanyCode === '');
 
-    const runLegacyContext = (companyStatus = null) => {
-      req.companyTenantId = LEGACY_TENANT_ID;
-      req.companyCode = null;
-      req.companyStatus = companyStatus;
-      return runWithTenant(LEGACY_TENANT_ID, next);
-    };
-
-    if (isDefaultCompanyLogin) {
-      if (!hasControlDatabaseConfiguration(environment)) return runLegacyContext();
-      return resolveCompany(defaultCompanyCode).then(company => {
-        if (!company) return runLegacyContext();
-        if (!['trial', 'active'].includes(company.status)) {
-          return res.status(403).json({ error: 'This company workspace is not active.' });
+    if (!isLogin && req.session?.companyId != null) {
+      if (String(req.session.companyId) === LEGACY_TENANT_ID) return runLegacyContext(req, next);
+      const companyId = Number(req.session.companyId);
+      if (!Number.isSafeInteger(companyId) || companyId < 1) {
+        return destroySession(req).then(() => {
+          res.clearCookie('taskflow.sid.v2', { path: '/' });
+          return res.status(401).json({ error: 'Your session is no longer valid. Please sign in again.' });
+        }).catch(next);
+      }
+      return resolveCompanyById(companyId).then(company => {
+        if (!company || ['cancelled', 'deleted'].includes(company.status)) {
+          return destroySession(req).then(() => {
+            res.clearCookie('taskflow.sid.v2', { path: '/' });
+            return res.status(403).json({ error: 'This company workspace is no longer available.' });
+          });
         }
-        req.companyTenantId = company.id;
-        req.companyCode = company.code;
-        req.companyName = company.name;
-        req.companyStatus = company.status;
-        return runWithTenant(company.id, next);
+        return runCompanyContext(company, next, req);
       }).catch(next);
     }
 
-    if (!companyCode) {
-      if (cookieValue && !cookieCompanyCode) clearCompanyContextCookie(res, { secure: req.secure });
-      if (hasExplicitLoginCode && explicitCompanyCode !== '') {
-        return res.status(401).json({ error: 'Company code or login credentials are incorrect.' });
-      }
-      if (!hasControlDatabaseConfiguration(environment)
-        || !req.path.startsWith('/api/')
-        || req.path.startsWith('/api/superadmin')) {
-        return runLegacyContext();
-      }
-      return resolveCompany(defaultCompanyCode).then(company => runLegacyContext(company?.status || null)).catch(next);
+    if (isDefaultCompanyLogin) {
+      if (!hasControlDatabaseConfiguration(environment)) return runLegacyContext(req, next);
+      return resolveCompany(defaultCompanyCode).then(company => {
+        if (!company) return runLegacyContext(req, next);
+        if (!['trial', 'active', 'suspended'].includes(company.status)) {
+          return res.status(401).json({ error: 'Company code or login credentials are incorrect.' });
+        }
+        return runCompanyContext(company, next, req);
+      }).catch(next);
     }
 
-    if (!COMPANY_CODE_PATTERN.test(companyCode)) {
+    if (hasExplicitLoginCode && explicitCompanyCode === null) {
       return res.status(401).json({ error: 'Company code or login credentials are incorrect.' });
     }
 
-    resolveCompany(companyCode).then(company => {
-      if (!company) {
-        if (isLogin) return res.status(401).json({ error: 'Company code or login credentials are incorrect.' });
-        clearCompanyContextCookie(res, { secure: req.secure });
-        return runLegacyContext();
+    if (!isLogin || !explicitCompanyCode) {
+      return runLegacyContext(req, next);
+    }
+
+    if (!COMPANY_CODE_PATTERN.test(explicitCompanyCode)) {
+      return res.status(401).json({ error: 'Company code or login credentials are incorrect.' });
+    }
+
+    return resolveCompany(explicitCompanyCode).then(company => {
+      if (!company || !['trial', 'active', 'suspended'].includes(company.status)) {
+        return res.status(401).json({ error: 'Company code or login credentials are incorrect.' });
       }
-      if (!['trial', 'active'].includes(company.status)) {
-        if (isLogin) return res.status(401).json({ error: 'Company code or login credentials are incorrect.' });
-        clearCompanyContextCookie(res, { secure: req.secure });
-        return runLegacyContext(company.status);
-      }
-      req.companyTenantId = company.id;
-      req.companyCode = company.code;
-      req.companyName = company.name;
-      req.companyStatus = company.status;
-      return runWithTenant(company.id, next);
+      return runCompanyContext(company, next, req);
     }).catch(next);
   };
 }

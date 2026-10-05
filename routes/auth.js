@@ -3,8 +3,9 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { rateLimit } = require('express-rate-limit');
 const db = require('../db');
-const { LEGACY_TENANT_ID } = require('../tenant-manager');
-const { clearCompanyContextCookie, setCompanyContextCookie } = require('../company-context');
+const { getControlDatabase } = require('../control-db');
+const { hasControlDatabaseConfiguration, LEGACY_TENANT_ID } = require('../tenant-manager');
+const { clearCompanyContextCookie } = require('../company-context');
 const { logActivity } = require('../audit');
 const { asyncHandler, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 
@@ -34,6 +35,11 @@ const loginIpLimiter = rateLimit(loginLimitOptions);
 const loginUsernameLimiter = rateLimit({
   ...loginLimitOptions,
   keyGenerator: req => `username:${String(req.body?.username || '').trim().toLowerCase().slice(0, 128) || 'missing'}`
+});
+const loginCompanyLimiter = rateLimit({
+  ...loginLimitOptions,
+  keyGenerator: req => `company:${String(req.body?.company_code || process.env.LEGACY_COMPANY_CODE || 'existing-company')
+    .trim().toLowerCase().slice(0, 63) || 'existing-company'}`
 });
 
 function logFailedLogin(req, username) {
@@ -73,7 +79,6 @@ async function setAuthenticatedSession(req, user) {
   req.session.name = user.name;
   req.session.tokenVersion = Number(user.token_version);
   req.session.companyId = req.companyTenantId ?? LEGACY_TENANT_ID;
-  req.session.companyCode = req.companyCode || null;
   await saveSession(req);
 }
 
@@ -83,7 +88,15 @@ async function rejectInvalidSession(req, res) {
   return res.status(401).json({ error: 'Your session is no longer valid. Please sign in again.' });
 }
 
-async function deleteUserSessions(userId) {
+async function deleteUserSessions(userId, companyId) {
+  if (hasControlDatabaseConfiguration()) {
+    const controlDatabase = await getControlDatabase();
+    await controlDatabase.execute({
+      sql: 'DELETE FROM web_sessions WHERE user_id = ? AND company_id = ?',
+      args: [userId, String(companyId ?? LEGACY_TENANT_ID)]
+    });
+    return;
+  }
   await db.prepare('DELETE FROM web_sessions WHERE user_id = ?').run(userId);
 }
 
@@ -91,20 +104,39 @@ async function requireAuth(req, res, next) {
   if (!req.session || !req.session.userId) {
     return res.status(401).json({ error: 'Not logged in' });
   }
-  if (req.companyStatus && !['trial', 'active'].includes(req.companyStatus)) {
-    return res.status(403).json({ error: 'This company workspace is not active.' });
-  }
   if (req.companyTenantId !== undefined
     && String(req.session.companyId ?? LEGACY_TENANT_ID) !== String(req.companyTenantId)) {
     return rejectInvalidSession(req, res);
+  }
+  if (req.authenticatedUser) {
+    if (req.companyStatus === 'suspended'
+      && (req.authenticatedUser.role !== 'admin' || !['GET', 'HEAD'].includes(req.method))) {
+      return res.status(403).json({
+        error: 'Account suspended, contact support.',
+        suspended: true,
+        read_only: true
+      });
+    }
+    if (mustChangePassword(req.authenticatedUser)
+      && !isPasswordFlowAllowed(req)) return rejectUntilPasswordChanged(res);
+    return next();
   }
   try {
     const user = await db.prepare('SELECT role, name, active, must_change_password, token_version FROM users WHERE id = ?').get(req.session.userId);
     if (!user || Number(user.active) !== 1) return rejectInvalidSession(req, res);
     if (Number(req.session.tokenVersion) !== Number(user.token_version)) return rejectInvalidSession(req, res);
-    if (mustChangePassword(user) && !isPasswordFlowAllowed(req)) return rejectUntilPasswordChanged(res);
     req.session.role = user.role;
     req.session.name = user.name;
+    if (req.companyStatus === 'suspended'
+      && (user.role !== 'admin' || !['GET', 'HEAD'].includes(req.method))) {
+      return res.status(403).json({
+        error: 'Account suspended, contact support.',
+        suspended: true,
+        read_only: true
+      });
+    }
+    if (mustChangePassword(user) && !isPasswordFlowAllowed(req)) return rejectUntilPasswordChanged(res);
+    req.authenticatedUser = user;
     next();
   } catch (error) {
     next(error);
@@ -118,7 +150,7 @@ function requireAdmin(req, res, next) {
   });
 }
 
-router.post('/login', loginIpLimiter, loginUsernameLimiter, async (req, res) => {
+router.post('/login', loginIpLimiter, loginUsernameLimiter, loginCompanyLimiter, async (req, res) => {
   try {
     const { username, password } = req.body || {};
     if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password) {
@@ -134,14 +166,23 @@ router.post('/login', loginIpLimiter, loginUsernameLimiter, async (req, res) => 
       logFailedLogin(req, username);
       return res.status(401).json({ error: 'Invalid username or password' });
     }
+    if (req.companyStatus === 'suspended' && user.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Account suspended, contact support.',
+        suspended: true,
+        read_only: true
+      });
+    }
 
     await setAuthenticatedSession(req, user);
-    if (req.companyCode) {
-      setCompanyContextCookie(res, req.companyCode, { secure: req.secure });
-    } else if (req.clearCompanyContextCookie) {
-      clearCompanyContextCookie(res, { secure: req.secure });
-    }
-    res.json({ id: user.id, name: user.name, username: user.username, role: user.role, must_change_password: mustChangePassword(user) });
+    res.json({
+      id: user.id,
+      name: user.name,
+      username: user.username,
+      role: user.role,
+      must_change_password: mustChangePassword(user),
+      company_status: req.companyStatus
+    });
   } catch (error) {
     logFailedLogin(req, req.body?.username);
     sendInternalError(res, error, 'Login failed');
@@ -175,7 +216,7 @@ router.post('/change-password', requireAuth, async (req, res) => {
     await db.prepare('UPDATE users SET password_hash=?, must_change_password=0, token_version=token_version+1 WHERE id=?')
       .run(passwordHashNext, req.session.userId);
     await logActivity(req, 'Password changed', 'user', req.session.userId, 'Your password was changed', req.session.userId);
-    await deleteUserSessions(req.session.userId);
+    await deleteUserSessions(req.session.userId, req.session.companyId);
     const updatedUser = await db.prepare('SELECT id, name, role, token_version FROM users WHERE id=?').get(req.session.userId);
     await setAuthenticatedSession(req, updatedUser);
     res.json({ ok: true });
@@ -194,7 +235,8 @@ router.get('/me', requireAuth, async (req, res) => {
       username: user.username,
       department: user.department,
       role: user.role,
-      must_change_password: mustChangePassword(user)
+      must_change_password: mustChangePassword(user),
+      company_status: req.companyStatus
     });
   } catch (err) {
     sendInternalError(res, err, 'Current user lookup failed');
@@ -309,7 +351,7 @@ router.put('/users/:id/reset-password', requireAdmin, async (req, res) => {
     if (Number(target.active) !== 1) return res.status(400).json({ error: 'Cannot reset a deactivated user account.' });
     const hash = await bcrypt.hash(password, 10);
     await db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1, token_version = token_version + 1 WHERE id = ?').run(hash, id);
-    await deleteUserSessions(id);
+    await deleteUserSessions(id, req.session.companyId);
     await logActivity(req, 'Employee password changed', 'user', id, target.name, id);
     res.json({ ok: true });
   } catch (error) {
@@ -369,7 +411,7 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
     } else if (roleChanged || activeChanged) {
       await db.prepare('UPDATE users SET token_version = token_version + 1 WHERE id = ?').run(id);
     }
-    if (password || roleChanged || activeChanged) await deleteUserSessions(id);
+    if (password || roleChanged || activeChanged) await deleteUserSessions(id, req.session.companyId);
     if ((password || roleChanged || activeChanged) && id === Number(req.session.userId) && nextActive !== false) {
       const updatedUser = await db.prepare('SELECT id, name, role, token_version FROM users WHERE id = ?').get(id);
       await setAuthenticatedSession(req, updatedUser);
@@ -387,7 +429,7 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
     if (!target) return res.status(404).json({ error: 'User not found.' });
     await db.prepare('UPDATE users SET active = 0 WHERE id = ?').run(req.params.id);
     await db.prepare('UPDATE users SET token_version = token_version + 1 WHERE id = ?').run(req.params.id);
-    await deleteUserSessions(req.params.id);
+    await deleteUserSessions(req.params.id, req.session.companyId);
     await logActivity(req, 'Employee access removed', 'user', req.params.id, target.name, Number(req.params.id));
     res.json({ ok: true, archived: true });
   } catch (error) {

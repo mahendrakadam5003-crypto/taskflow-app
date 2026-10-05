@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -120,6 +120,18 @@ const CONTROL_MIGRATIONS = [{
     'ALTER TABLE super_admins RENAME COLUMN email TO username',
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [3] }
   ]
+}, {
+  version: 4,
+  statements: [
+    `CREATE TABLE IF NOT EXISTS web_sessions (
+      sid TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      user_id INTEGER,
+      company_id TEXT,
+      expires_at INTEGER NOT NULL
+    )`,
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [4] }
+  ]
 }];
 
 function getControlDatabaseConfig(environment = process.env) {
@@ -157,7 +169,18 @@ async function migrateControlDatabase(client) {
   let version = Number(versionRow.rows?.[0]?.version || 0);
   for (const migration of CONTROL_MIGRATIONS) {
     if (version >= migration.version) continue;
-    await client.batch(migration.statements, 'write');
+    if (migration.version === 4) {
+      await client.execute(migration.statements[0]);
+      const columns = await client.execute('PRAGMA table_info(web_sessions)');
+      if (!columns.rows.some(column => column.name === 'company_id')) {
+        await client.execute('ALTER TABLE web_sessions ADD COLUMN company_id TEXT');
+      }
+      await client.execute('CREATE INDEX IF NOT EXISTS web_sessions_company_user_idx ON web_sessions(company_id, user_id)');
+      await client.execute('CREATE INDEX IF NOT EXISTS web_sessions_expires_at_idx ON web_sessions(expires_at)');
+      await client.execute(migration.statements[1]);
+    } else {
+      await client.batch(migration.statements, 'write');
+    }
     version = migration.version;
   }
 

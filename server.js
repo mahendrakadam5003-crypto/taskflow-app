@@ -12,6 +12,9 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const { createCompanyContextMiddleware } = require('./company-context');
+const { ControlDatabaseSessionStore } = require('./control-session-store');
+const { getControlDatabase } = require('./control-db');
+const { hasControlDatabaseConfiguration } = require('./tenant-manager');
 const { collectUsageSnapshots } = require('./usage-snapshots');
 
 const app = express();
@@ -41,47 +44,15 @@ function verifyUnsafeRequestOrigin(req, res, next) {
 
 const db = require('./db');
 
-class TursoSessionStore extends session.Store {
-  get(sid, callback) {
-    db.prepare('SELECT data, expires_at FROM web_sessions WHERE sid = ?').get(sid)
-      .then(row => {
-        if (!row || Number(row.expires_at) <= Date.now()) {
-          if (row) db.prepare('DELETE FROM web_sessions WHERE sid = ?').run(sid).catch(() => {});
-          return callback(null, null);
-        }
-        callback(null, JSON.parse(row.data));
-      }, callback);
-  }
-
-  set(sid, sessionData, callback) {
-    const expiresAt = sessionData.cookie?.expires
-      ? new Date(sessionData.cookie.expires).getTime()
-      : Date.now() + Number(sessionData.cookie?.maxAge || 86400000);
-    db.prepare(`INSERT INTO web_sessions (sid, data, user_id, expires_at) VALUES (?, ?, ?, ?)
-      ON CONFLICT(sid) DO UPDATE SET data = excluded.data, user_id = excluded.user_id, expires_at = excluded.expires_at`)
-      .run(sid, JSON.stringify(sessionData), sessionData.userId || null, expiresAt)
-      .then(() => callback?.(null))
-      .catch(callback);
-  }
-
-  destroy(sid, callback) {
-    db.prepare('DELETE FROM web_sessions WHERE sid = ?').run(sid)
-      .then(() => callback?.(null))
-      .catch(callback);
-  }
-
-  touch(sid, sessionData, callback) {
-    const expiresAt = sessionData.cookie?.expires
-      ? new Date(sessionData.cookie.expires).getTime()
-      : Date.now() + Number(sessionData.cookie?.maxAge || 86400000);
-    db.prepare('UPDATE web_sessions SET expires_at = ? WHERE sid = ?').run(expiresAt, sid)
-      .then(() => callback?.(null))
-      .catch(callback);
-  }
-}
-
 async function cleanupExpiredSessions() {
   await db.ready;
+  if (hasControlDatabaseConfiguration()) {
+    const controlDatabase = await getControlDatabase();
+    await controlDatabase.execute({
+      sql: 'DELETE FROM web_sessions WHERE expires_at <= ?',
+      args: [Date.now()]
+    });
+  }
   await db.runForEachTenant(() => db.deleteExpiredSessions(Date.now()));
 }
 
@@ -91,7 +62,7 @@ async function cleanupExpiredSessions() {
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 
-const { router: authRouter } = require('./routes/auth');
+const { router: authRouter, requireAuth } = require('./routes/auth');
 const { createSuperAdminRouter } = require('./routes/superadmin');
 const { bootstrapConfiguredSuperAdmin } = require('./scripts/create-superadmin');
 const { registerLegacyCompany } = require('./scripts/register-legacy-company');
@@ -348,11 +319,6 @@ app.use(helmet({
 }));
 app.use(express.json({ limit: '2mb' }));
 app.use(verifyUnsafeRequestOrigin);
-app.use(createCompanyContextMiddleware({ runWithTenant: db.runWithTenant }));
-app.use((req, res, next) => {
-  res.set('Accept-CH', 'Sec-CH-UA-Model, Sec-CH-UA-Platform-Version');
-  next();
-});
 const sessionOptions = {
   name: 'taskflow.sid.v2',
   secret: sessionSecret,
@@ -366,12 +332,24 @@ const sessionOptions = {
     sameSite: 'lax'
   }
 };
-if (!isRender) {
-  sessionOptions.store = new FileStore({ path: path.join(__dirname, 'sessions'), retries: 5, retryDelay: 100, ttl: sessionMaxAgeMs / 1000 });
+if (hasControlDatabaseConfiguration()) {
+  sessionOptions.store = new ControlDatabaseSessionStore();
 } else {
-  sessionOptions.store = new TursoSessionStore();
+  sessionOptions.store = new FileStore({ path: path.join(__dirname, 'sessions'), retries: 5, retryDelay: 100, ttl: sessionMaxAgeMs / 1000 });
 }
 app.use(session(sessionOptions));
+app.use(createCompanyContextMiddleware({ runWithTenant: db.runWithTenant }));
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')
+    || req.path === '/api/superadmin'
+    || req.path.startsWith('/api/superadmin/')) return next();
+  if (req.method === 'POST' && ['/api/auth/login', '/api/auth/logout'].includes(req.path)) return next();
+  return requireAuth(req, res, next);
+});
+app.use((req, res, next) => {
+  res.set('Accept-CH', 'Sec-CH-UA-Model, Sec-CH-UA-Platform-Version');
+  next();
+});
 
 app.get('/superadmin', (req, res) => {
   res.set('Cache-Control', 'no-store');

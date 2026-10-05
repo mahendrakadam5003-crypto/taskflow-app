@@ -40,18 +40,20 @@ test('legacy and registered-company sign-in preserve existing credentials and is
   ]);
   const app = express();
   app.use(express.json());
+  app.use(session({ secret: sessionSecret, resave: false, saveUninitialized: false }));
   app.use(createCompanyContextMiddleware({
     runWithTenant: manager.runWithTenant,
     secret: sessionSecret,
     getDatabase: async () => ({
       execute: async ({ args }) => {
-        const company = companies.get(args[0]);
+        const company = typeof args[0] === 'number'
+          ? [...companies.values()].find(candidate => candidate.id === args[0])
+          : companies.get(args[0]);
         return { rows: company ? [company] : [] };
       }
     }),
     environment: { TURSO_DATABASE_URL: 'libsql://test.turso.io', TURSO_AUTH_TOKEN: 'test-token' }
   }));
-  app.use(session({ secret: sessionSecret, resave: false, saveUninitialized: false }));
   app.post('/api/auth/login', (req, res) => {
     const workspace = tenantWorkspaces.get(manager.getCurrentTenantId());
     const user = workspace?.get(req.body.username);
@@ -62,6 +64,9 @@ test('legacy and registered-company sign-in preserve existing credentials and is
     return res.json({ user: req.body.username, marker: user.marker });
   });
   app.get('/api/context', (req, res) => {
+    res.json({ tenantId: manager.getCurrentTenantId(), companyStatus: req.companyStatus || null });
+  });
+  app.post('/api/context', (req, res) => {
     res.json({ tenantId: manager.getCurrentTenantId(), companyStatus: req.companyStatus || null });
   });
   app.get('/api/probe', (req, res) => {
@@ -128,7 +133,7 @@ test('legacy and registered-company sign-in preserve existing credentials and is
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: 'old-user', password: 'old-password', company_code: '' })
     });
-    assert.equal(suspendedDefaultLogin.status, 403);
+    assert.equal(suspendedDefaultLogin.status, 200);
     companies.get('existing-company').status = 'active';
 
     const wrongCompanyLogin = await fetch(`${baseUrl}/api/auth/login`, {
@@ -155,17 +160,33 @@ test('legacy and registered-company sign-in preserve existing credentials and is
     assert.deepEqual(await secondLogin.json(), { user: 'new-user', marker: 'second workspace data' });
     const secondCookies = getCookies(secondLogin);
     const secondSessionCookie = secondCookies.find(cookie => cookie.startsWith('connect.sid='));
+    const secondCompanyCookie = secondCookies.find(cookie => cookie.startsWith(`${COMPANY_CONTEXT_COOKIE}=`));
     const crossTenantProbe = await fetch(`${baseUrl}/api/probe`, {
       headers: { Cookie: `${secondSessionCookie}; ${companyCookie}` }
     });
-    assert.equal(crossTenantProbe.status, 401);
+    assert.equal(crossTenantProbe.status, 200);
+    assert.deepEqual(await crossTenantProbe.json(), { marker: 'second workspace data' });
+    const mismatchedCompanyCookieProbe = await fetch(`${baseUrl}/api/probe`, {
+      headers: { Cookie: `${existingSessionCookie}; ${secondCompanyCookie}` }
+    });
+    assert.equal(mismatchedCompanyCookieProbe.status, 200);
+    assert.deepEqual(await mismatchedCompanyCookieProbe.json(), { marker: 'existing workspace data' });
+    const ignoredClientCompanyCode = await fetch(`${baseUrl}/api/context`, {
+      method: 'POST',
+      headers: {
+        Cookie: `${secondSessionCookie}; ${companyCookie}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ company_code: 'existing-company' })
+    });
+    assert.deepEqual(await ignoredClientCompanyCode.json(), { tenantId: 202, companyStatus: 'trial' });
 
     const tamperedCookie = companyCookie.replace(/.$/, companyCookie.endsWith('a') ? 'b' : 'a');
     const tamperedContext = await fetch(`${baseUrl}/api/context`, {
       headers: { Cookie: tamperedCookie }
     });
-    assert.deepEqual(await tamperedContext.json(), { tenantId: 'legacy', companyStatus: 'active' });
-    assert.match(tamperedContext.headers.get('set-cookie') || '', new RegExp(`^${COMPANY_CONTEXT_COOKIE}=`));
+    assert.deepEqual(await tamperedContext.json(), { tenantId: 'legacy', companyStatus: null });
+    assert.equal(tamperedContext.headers.get('set-cookie'), null);
 
     const unknownCompanyLogin = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',
@@ -192,8 +213,14 @@ test('legacy and registered-company sign-in preserve existing credentials and is
     const suspendedContext = await fetch(`${baseUrl}/api/context`, {
       headers: { Cookie: `${COMPANY_CONTEXT_COOKIE}=${signCompanyCode('suspended-company', sessionSecret)}` }
     });
-    assert.deepEqual(await suspendedContext.json(), { tenantId: 'legacy', companyStatus: 'suspended' });
-    assert.match(suspendedContext.headers.get('set-cookie') || '', new RegExp(`^${COMPANY_CONTEXT_COOKIE}=`));
+    assert.deepEqual(await suspendedContext.json(), { tenantId: 'legacy', companyStatus: null });
+    assert.equal(suspendedContext.headers.get('set-cookie'), null);
+
+    companies.get('second-company').status = 'cancelled';
+    const cancelledSessionRequest = await fetch(`${baseUrl}/api/context`, {
+      headers: { Cookie: secondSessionCookie }
+    });
+    assert.equal(cancelledSessionRequest.status, 403);
   } finally {
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }

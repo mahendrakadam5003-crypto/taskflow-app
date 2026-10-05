@@ -55,6 +55,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
     const tablesResult = await client.execute("SELECT name FROM sqlite_master WHERE type = 'table'");
     const tables = new Set(tablesResult.rows.map(row => row.name));
     const expectedColumns = {
+      web_sessions: ['sid', 'data', 'user_id', 'company_id', 'expires_at'],
       companies: ['id', 'code', 'name', 'owner_name', 'owner_email', 'owner_phone', 'status', 'plan_id', 'trial_ends_at', 'tenant_db_url', 'tenant_db_token_encrypted', 'notes', 'created_at'],
       plans: ['id', 'name', 'max_users', 'storage_limit_mb', 'features_json', 'price_note', 'is_active'],
       super_admins: ['id', 'name', 'username', 'password_hash', 'token_version', 'created_at'],
@@ -71,7 +72,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       assert.deepEqual(columnResult.rows.map(column => column.name), columns, `expected columns on ${table}`);
     }
     const migrations = await client.execute('SELECT version FROM control_schema_migrations');
-    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, CURRENT_SCHEMA_VERSION]);
+    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, 3, CURRENT_SCHEMA_VERSION]);
   } finally {
     await client.close();
   }
@@ -101,6 +102,35 @@ test('control database accepts explicit remote configuration', async () => {
   });
   assert.equal(typeof client.execute, 'function');
   await client.close();
+});
+
+test('control database migration adds company ownership to an existing tenant session table', async () => {
+  const client = createClient({ url: 'file::memory:' });
+  try {
+    await client.execute(`CREATE TABLE web_sessions (
+      sid TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      user_id INTEGER,
+      expires_at INTEGER NOT NULL
+    )`);
+    await client.execute({
+      sql: 'INSERT INTO web_sessions (sid, data, user_id, expires_at) VALUES (?, ?, ?, ?)',
+      args: ['preexisting-session', '{"userId":7}', 7, Date.now() + 60_000]
+    });
+
+    await migrateControlDatabase(client);
+    const columns = await client.execute('PRAGMA table_info(web_sessions)');
+    assert.ok(columns.rows.some(column => column.name === 'company_id'));
+    const sessionRow = await client.execute({
+      sql: 'SELECT sid, data, user_id FROM web_sessions WHERE sid = ?',
+      args: ['preexisting-session']
+    });
+    assert.equal(sessionRow.rows[0].sid, 'preexisting-session');
+    assert.equal(sessionRow.rows[0].data, '{"userId":7}');
+    assert.equal(Number(sessionRow.rows[0].user_id), 7);
+  } finally {
+    await client.close();
+  }
 });
 
 test('control database reuses company Turso credentials by default', async () => {
