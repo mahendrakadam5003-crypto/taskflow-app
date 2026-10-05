@@ -15,6 +15,10 @@ const versions = [{
   id: 1, monthly_price_paise: 19900, yearly_discount_pct: 10, yearly_price_paise: 214920,
   tax_pct: 18, currency: 'INR', effective_from: '2026-10-01T00:00:00.000Z', is_current: 1
 }];
+const versionTiers = new Map([[1, [{
+  tier_key: 'standard', name: 'Standard', tagline: '', highlights: '[]', min_seats: 1,
+  max_seats: null, monthly_price_paise: 19900, yearly_price_paise: 214920, sort_order: 0
+}]]]);
 const settings = {
   id: 1, currency: 'INR', currency_symbol: 'Rs.', tax_pct: 18, tax_inclusive: 0,
   trial_days: 7, trial_max_users: 3, trial_storage_limit_mb: 1024, grace_period_days: 3,
@@ -45,6 +49,7 @@ const controlDb = {
       const effective = versions.filter(version => version.effective_from <= args[0]).sort((a, b) => b.effective_from.localeCompare(a.effective_from));
       return { rows: effective.slice(0, 1).map(version => ({ ...version })) };
     }
+    if (sql.includes('FROM pricing_tiers')) return { rows: (versionTiers.get(Number(args[0])) || []).map(tier => ({ ...tier })) };
     if (sql.includes('COUNT(*) AS count FROM subscriptions')) return { rows: [{ count: 0 }] };
     throw new Error(`Unexpected control database query: ${sql}`);
   },
@@ -59,7 +64,14 @@ const controlDb = {
           const [monthly, discount, yearly, tax, currency, effective, createdBy, note, current] = args;
           const version = { id: versions.length + 1, monthly_price_paise: monthly, yearly_discount_pct: discount, yearly_price_paise: yearly, tax_pct: tax, currency, effective_from: effective, created_by: createdBy, note, is_current: current };
           versions.push(version);
+          versionTiers.set(version.id, []);
           return { lastInsertRowid: version.id };
+        } else if (sql.startsWith('INSERT INTO pricing_tiers')) {
+          const [versionId, tierKey, name, tagline, highlights, minSeats, maxSeats, monthlyPrice, yearlyPrice, sortOrder] = args;
+          versionTiers.get(Number(versionId)).push({
+            tier_key: tierKey, name, tagline, highlights, min_seats: minSeats, max_seats: maxSeats,
+            monthly_price_paise: monthlyPrice, yearly_price_paise: yearlyPrice, sort_order: sortOrder
+          });
         } else if (sql.startsWith('UPDATE pricing_settings')) {
           const [currency, symbol, tax, inclusive, trialDays, trialUsers, trialStorage, grace, readOnly, minSeats, maxSeats, storagePerSeat, prorate, seatBilling, priceScope, approval] = args;
           Object.assign(settings, { currency, currency_symbol: symbol, tax_pct: tax, tax_inclusive: inclusive, trial_days: trialDays, trial_max_users: trialUsers, trial_storage_limit_mb: trialStorage, grace_period_days: grace, read_only_period_days: readOnly, min_seats: minSeats, max_seats: maxSeats, default_storage_per_seat_mb: storagePerSeat, prorate_seats: prorate, seat_addition_billing: seatBilling, price_change_scope: priceScope, trial_approval_mode: approval });

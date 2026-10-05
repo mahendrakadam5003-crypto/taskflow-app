@@ -58,6 +58,7 @@ const controlDb = {
         tax_pct: 18, currency: 'INR', effective_from: '2026-10-01T00:00:00.000Z'
       }] };
     }
+    if (sql.includes('FROM pricing_tiers')) return { rows: [] };
     throw new Error(`Unexpected billing query: ${sql}`);
   }
 };

@@ -1,7 +1,7 @@
 'use strict';
 
 const { getPricing } = require('./pricing-service');
-const { calculateInvoiceAmounts } = require('./lib/pricing');
+const { calculateInvoiceAmounts, resolveTierForSeats } = require('./lib/pricing');
 
 function periodEnd(start, billingCycle) {
   const nextMonth = new Date(start.getTime());
@@ -73,7 +73,10 @@ async function createManualSubscriptionInvoice(controlDb, admin, { companyId, bi
   }
 
   const pricing = await getPricing(controlDb, now);
-  const unitPricePaise = billingCycle === 'yearly' ? pricing.yearlyPricePaise : pricing.monthlyPricePaise;
+  const tier = pricing.tiers.length ? resolveTierForSeats(pricing.tiers, seats) : null;
+  const unitPricePaise = tier
+    ? (billingCycle === 'yearly' ? tier.yearlyPricePaise : tier.monthlyPricePaise)
+    : (billingCycle === 'yearly' ? pricing.yearlyPricePaise : pricing.monthlyPricePaise);
   const discountPctTenths = billingCycle === 'yearly' ? Math.round(pricing.yearlyDiscountPct * 10) : 0;
   const amounts = calculateInvoiceAmounts({
     unitPricePaise,
@@ -110,7 +113,8 @@ async function createManualSubscriptionInvoice(controlDb, admin, { companyId, bi
     await markBillingRequestInvoiced(transaction, admin, requestId, Number(invoice.lastInsertRowid));
     await transaction.execute({
       sql: 'INSERT INTO subscription_events (company_id, subscription_id, actor_super_admin_id, event, details) VALUES (?, ?, ?, ?, ?)',
-      args: [normalizedCompanyId, subscriptionId, admin.id, 'manual_subscription_created', `Created ${billingCycle} subscription for ${seats} seats at ${unitPricePaise} paise per seat.`]
+      args: [normalizedCompanyId, subscriptionId, admin.id, 'manual_subscription_created',
+        `Created ${billingCycle} subscription for ${seats} seats at ${unitPricePaise} paise per seat${tier ? ` on the ${tier.name} tier` : ''}.`]
     });
     await transaction.execute({
       sql: 'INSERT INTO super_admin_audit (super_admin_id, company_id, action, details) VALUES (?, ?, ?, ?)',
@@ -176,6 +180,7 @@ async function createManualSubscriptionChangeInvoice(controlDb, admin, { company
     let discountPct = 0;
     let taxPct = 18;
     let currency = 'INR';
+    let tier = null;
     if (current.pricing_version_id != null) {
       const versionResult = await transaction.execute({
         sql: 'SELECT monthly_price_paise, yearly_price_paise, yearly_discount_pct, tax_pct, currency FROM pricing_versions WHERE id = ? LIMIT 1',
@@ -183,7 +188,27 @@ async function createManualSubscriptionChangeInvoice(controlDb, admin, { company
       });
       const version = versionResult.rows?.[0];
       if (!version) throw new Error('Locked subscription pricing version was not found.');
-      unitPricePaise = Number(requestedCycle === 'yearly' ? version.yearly_price_paise : version.monthly_price_paise);
+      const tierResult = await transaction.execute({
+        sql: `SELECT tier_key, name, tagline, highlights, min_seats, max_seats,
+          monthly_price_paise, yearly_price_paise, sort_order
+          FROM pricing_tiers WHERE pricing_version_id = ? ORDER BY sort_order, id`,
+        args: [Number(current.pricing_version_id)]
+      });
+      const tiers = (tierResult.rows || []).map(row => ({
+        key: row.tier_key,
+        name: row.name,
+        tagline: row.tagline,
+        highlights: JSON.parse(row.highlights),
+        minSeats: Number(row.min_seats),
+        maxSeats: row.max_seats == null ? null : Number(row.max_seats),
+        monthlyPricePaise: Number(row.monthly_price_paise),
+        yearlyPricePaise: Number(row.yearly_price_paise),
+        sortOrder: Number(row.sort_order)
+      }));
+      tier = tiers.length ? resolveTierForSeats(tiers, seats) : null;
+      unitPricePaise = tier
+        ? (requestedCycle === 'yearly' ? tier.yearlyPricePaise : tier.monthlyPricePaise)
+        : Number(requestedCycle === 'yearly' ? version.yearly_price_paise : version.monthly_price_paise);
       discountPct = requestedCycle === 'yearly' ? Number(version.yearly_discount_pct) : 0;
       taxPct = Number(version.tax_pct);
       currency = version.currency;
@@ -231,7 +256,7 @@ async function createManualSubscriptionChangeInvoice(controlDb, admin, { company
     await transaction.execute({
       sql: 'INSERT INTO subscription_events (company_id, subscription_id, actor_super_admin_id, event, details) VALUES (?, ?, ?, ?, ?)',
       args: [normalizedCompanyId, subscriptionId, admin.id, 'manual_subscription_change_invoiced',
-        `Issued ${requestedCycle} invoice ${number} for ${seats} seats at the subscription's locked price.`]
+        `Issued ${requestedCycle} invoice ${number} for ${seats} seats at the subscription's locked price${tier ? ` on the ${tier.name} tier` : ''}.`]
     });
     await transaction.execute({
       sql: 'INSERT INTO super_admin_audit (super_admin_id, company_id, action, details) VALUES (?, ?, ?, ?)',

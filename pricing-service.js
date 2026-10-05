@@ -1,6 +1,6 @@
 'use strict';
 
-const { calculateYearlyPricePaise, parsePercentageTenths } = require('./lib/pricing');
+const { calculateYearlyPricePaise, parsePercentageTenths, validateTiers } = require('./lib/pricing');
 
 function parseRupeesToPaise(value, { allowBlank = false } = {}) {
   if (allowBlank && (value === null || value === undefined || value === '')) return null;
@@ -29,10 +29,63 @@ function parseEffectiveDate(value, now = new Date()) {
   return date.toISOString();
 }
 
+function parsePricingTiers(body, yearlyDiscountTenths) {
+  const sourceTiers = Object.hasOwn(body, 'tiers')
+    ? body.tiers
+    : [{
+        key: 'standard',
+        name: 'Standard',
+        minSeats: 1,
+        maxSeats: null,
+        monthlyPrice: body.monthlyPrice,
+        yearlyPriceOverride: body.yearlyPriceOverride
+      }];
+  if (!Array.isArray(sourceTiers) || sourceTiers.length < 1 || sourceTiers.length > 5) return null;
+  const tiers = [];
+  for (const [index, source] of sourceTiers.entries()) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+    const key = typeof source.key === 'string' ? source.key.trim().toLowerCase() : '';
+    const name = typeof source.name === 'string' ? source.name.trim() : '';
+    const tagline = source.tagline === undefined ? '' : source.tagline;
+    const highlights = source.highlights === undefined ? [] : source.highlights;
+    const minSeats = parseInteger(source.minSeats, { min: 1 });
+    const maxSeats = parseInteger(source.maxSeats, { min: 1, allowBlank: true });
+    const monthlyPricePaise = parseRupeesToPaise(source.monthlyPrice);
+    const yearlyPriceOverridePaise = parseRupeesToPaise(source.yearlyPriceOverride, { allowBlank: true });
+    if (!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(key)
+      || !name || name.length > 60
+      || typeof tagline !== 'string' || tagline.length > 160
+      || !Array.isArray(highlights) || highlights.length > 8
+      || highlights.some(item => typeof item !== 'string' || !item.trim() || item.trim().length > 90 || /<\/?[a-z][^>]*>/i.test(item))
+      || minSeats === null
+      || (source.maxSeats !== '' && source.maxSeats !== null && source.maxSeats !== undefined && maxSeats === null)
+      || monthlyPricePaise === null
+      || (source.yearlyPriceOverride !== '' && source.yearlyPriceOverride !== null
+        && source.yearlyPriceOverride !== undefined && yearlyPriceOverridePaise === null)) return null;
+    tiers.push({
+      key,
+      name,
+      tagline: tagline.trim(),
+      highlights: highlights.map(item => item.trim()),
+      minSeats,
+      maxSeats,
+      monthlyPricePaise,
+      yearlyPricePaise: yearlyPriceOverridePaise
+        ?? calculateYearlyPricePaise(monthlyPricePaise, yearlyDiscountTenths),
+      sortOrder: index
+    });
+  }
+  try {
+    validateTiers(tiers);
+  } catch {
+    return null;
+  }
+  if (new Set(tiers.map(tier => tier.key)).size !== tiers.length) return null;
+  return tiers;
+}
+
 function validatePricingInput(body, now = new Date()) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
-  const monthlyPricePaise = parseRupeesToPaise(body.monthlyPrice);
-  const yearlyPriceOverridePaise = parseRupeesToPaise(body.yearlyPriceOverride, { allowBlank: true });
   const yearlyDiscountTenths = parsePercentageTenths(body.yearlyDiscountPct);
   const taxTenths = parsePercentageTenths(body.taxPct);
   const trialDays = parseInteger(body.trialDays, { min: 1, max: 60 });
@@ -50,7 +103,7 @@ function validatePricingInput(body, now = new Date()) {
   const trialApprovalMode = body.trialApprovalMode;
   const effectiveFrom = parseEffectiveDate(body.effectiveFrom, now);
 
-  if (monthlyPricePaise === null || yearlyDiscountTenths === null || taxTenths === null
+  if (yearlyDiscountTenths === null || taxTenths === null
     || trialDays === null || trialMaxUsers === null || trialStorageLimitMb === null
     || gracePeriodDays === null || readOnlyPeriodDays === null || minSeats === null
     || (body.maxSeats !== '' && body.maxSeats !== null && body.maxSeats !== undefined && maxSeats === null)
@@ -62,10 +115,14 @@ function validatePricingInput(body, now = new Date()) {
     || !['new_customers', 'existing_next_renewal'].includes(priceChangeScope)
     || trialApprovalMode !== 'manual' || !effectiveFrom) return null;
 
-  const yearlyPricePaise = yearlyPriceOverridePaise ?? calculateYearlyPricePaise(monthlyPricePaise, yearlyDiscountTenths);
+  const tiers = parsePricingTiers(body, yearlyDiscountTenths);
+  if (!tiers) return null;
+  const monthlyPricePaise = tiers[0].monthlyPricePaise;
+  const yearlyPricePaise = tiers[0].yearlyPricePaise;
   return {
     monthlyPricePaise,
     yearlyPricePaise,
+    tiers,
     yearlyDiscountTenths,
     taxTenths,
     trialDays,
@@ -101,6 +158,29 @@ async function getPricing(controlDb, now = new Date()) {
   const settings = settingsResult.rows?.[0];
   const version = versionResult.rows?.[0];
   if (!settings || !version) throw new Error('Pricing settings are not initialized. Run the control database migration.');
+  const tierResult = await controlDb.execute({
+    sql: `SELECT tier_key, name, tagline, highlights, min_seats, max_seats,
+      monthly_price_paise, yearly_price_paise, sort_order
+      FROM pricing_tiers WHERE pricing_version_id = ? ORDER BY sort_order, id`,
+    args: [Number(version.id)]
+  });
+  const tiers = (tierResult.rows || []).map(row => {
+    const highlights = JSON.parse(row.highlights);
+    if (!Array.isArray(highlights) || highlights.some(item => typeof item !== 'string')) {
+      throw new Error(`Pricing tier "${row.tier_key}" has invalid highlights data.`);
+    }
+    return {
+      key: row.tier_key,
+      name: row.name,
+      tagline: row.tagline,
+      highlights,
+      minSeats: Number(row.min_seats),
+      maxSeats: row.max_seats == null ? null : Number(row.max_seats),
+      monthlyPricePaise: Number(row.monthly_price_paise),
+      yearlyPricePaise: Number(row.yearly_price_paise),
+      sortOrder: Number(row.sort_order)
+    };
+  });
   return {
     versionId: Number(version.id),
     monthlyPricePaise: Number(version.monthly_price_paise),
@@ -122,7 +202,8 @@ async function getPricing(controlDb, now = new Date()) {
     seatAdditionBilling: settings.seat_addition_billing,
     priceChangeScope: settings.price_change_scope,
     trialApprovalMode: settings.trial_approval_mode,
-    effectiveFrom: version.effective_from
+    effectiveFrom: version.effective_from,
+    tiers
   };
 }
 
@@ -140,6 +221,17 @@ async function savePricing(controlDb, admin, input, now = new Date()) {
       args: [input.monthlyPricePaise, input.yearlyDiscountTenths / 10, input.yearlyPricePaise,
         input.taxTenths / 10, input.currency, input.effectiveFrom, admin.id, input.note, isEffective ? 1 : 0]
     });
+    const versionId = Number(inserted.lastInsertRowid);
+    for (const tier of input.tiers) {
+      await transaction.execute({
+        sql: `INSERT INTO pricing_tiers (
+          pricing_version_id, tier_key, name, tagline, highlights, min_seats, max_seats,
+          monthly_price_paise, yearly_price_paise, sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [versionId, tier.key, tier.name, tier.tagline, JSON.stringify(tier.highlights),
+          tier.minSeats, tier.maxSeats, tier.monthlyPricePaise, tier.yearlyPricePaise, tier.sortOrder]
+      });
+    }
     await transaction.execute({
       sql: `UPDATE pricing_settings SET currency = ?, currency_symbol = ?, tax_pct = ?, tax_inclusive = ?,
         trial_days = ?, trial_max_users = ?, trial_storage_limit_mb = ?, grace_period_days = ?,
@@ -152,8 +244,18 @@ async function savePricing(controlDb, admin, input, now = new Date()) {
         input.prorateSeats, input.seatAdditionBilling, input.priceChangeScope, input.trialApprovalMode]
     });
     const auditDetails = JSON.stringify({
-      old: { monthlyPricePaise: existing.monthlyPricePaise, yearlyPricePaise: existing.yearlyPricePaise, taxPct: existing.taxPct },
-      new: { monthlyPricePaise: input.monthlyPricePaise, yearlyPricePaise: input.yearlyPricePaise, taxPct: input.taxTenths / 10 },
+      old: {
+        tiers: existing.tiers.map(({ key, name, monthlyPricePaise, yearlyPricePaise }) => ({
+          key, name, monthlyPricePaise, yearlyPricePaise
+        })),
+        taxPct: existing.taxPct
+      },
+      new: {
+        tiers: input.tiers.map(({ key, name, monthlyPricePaise, yearlyPricePaise }) => ({
+          key, name, monthlyPricePaise, yearlyPricePaise
+        })),
+        taxPct: input.taxTenths / 10
+      },
       appliesTo: input.priceChangeScope,
       effectiveFrom: input.effectiveFrom
     });
@@ -162,7 +264,7 @@ async function savePricing(controlDb, admin, input, now = new Date()) {
       args: [admin.id, 'Pricing version created', auditDetails]
     });
     await transaction.commit();
-    return { versionId: Number(inserted.lastInsertRowid), ...input };
+    return { versionId, ...input };
   } catch (error) {
     await transaction.rollback();
     throw error;

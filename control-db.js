@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 13;
+const CURRENT_SCHEMA_VERSION = 14;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -428,6 +428,36 @@ const CONTROL_MIGRATIONS = [{
   statements: [
     "UPDATE pricing_settings SET trial_approval_mode = 'manual' WHERE trial_approval_mode <> 'manual'",
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [13] }
+  ]
+}, {
+  version: 14,
+  statements: [
+    `CREATE TABLE IF NOT EXISTS pricing_tiers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pricing_version_id INTEGER NOT NULL REFERENCES pricing_versions(id) ON DELETE CASCADE,
+      tier_key TEXT NOT NULL,
+      name TEXT NOT NULL,
+      tagline TEXT NOT NULL DEFAULT '',
+      highlights TEXT NOT NULL DEFAULT '[]',
+      min_seats INTEGER NOT NULL CHECK (min_seats >= 1),
+      max_seats INTEGER,
+      monthly_price_paise INTEGER NOT NULL CHECK (monthly_price_paise >= 0),
+      yearly_price_paise INTEGER NOT NULL CHECK (yearly_price_paise >= 0),
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (pricing_version_id, tier_key)
+    )`,
+    'CREATE INDEX IF NOT EXISTS pricing_tiers_version_order_idx ON pricing_tiers(pricing_version_id, sort_order, id)',
+    `INSERT INTO pricing_tiers (
+      pricing_version_id, tier_key, name, tagline, highlights, min_seats, max_seats,
+      monthly_price_paise, yearly_price_paise, sort_order
+    )
+    SELECT version.id, 'standard', 'Standard', '', '[]', 1, NULL,
+      version.monthly_price_paise, version.yearly_price_paise, 0
+    FROM pricing_versions AS version
+    WHERE NOT EXISTS (
+      SELECT 1 FROM pricing_tiers AS tier WHERE tier.pricing_version_id = version.id
+    )`,
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [14] }
   ]
 }];
 

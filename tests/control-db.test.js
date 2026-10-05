@@ -82,6 +82,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       user_error_reports: ['id', 'company_id', 'company_code', 'actor_user_id', 'request_id', 'event', 'method', 'route', 'status_code', 'created_at', 'resolved_at', 'resolved_by'],
       pricing_settings: ['id', 'currency', 'currency_symbol', 'tax_pct', 'tax_inclusive', 'trial_days', 'trial_max_users', 'trial_storage_limit_mb', 'grace_period_days', 'read_only_period_days', 'min_seats', 'max_seats', 'default_storage_per_seat_mb', 'prorate_seats', 'seat_addition_billing', 'price_change_scope', 'trial_approval_mode', 'updated_at'],
       pricing_versions: ['id', 'monthly_price_paise', 'yearly_discount_pct', 'yearly_price_paise', 'tax_pct', 'currency', 'effective_from', 'created_by', 'note', 'is_current', 'created_at'],
+      pricing_tiers: ['id', 'pricing_version_id', 'tier_key', 'name', 'tagline', 'highlights', 'min_seats', 'max_seats', 'monthly_price_paise', 'yearly_price_paise', 'sort_order'],
       subscriptions: ['id', 'company_id', 'billing_cycle', 'seats', 'unit_price_paise', 'discount_pct', 'pricing_version_id', 'status', 'current_period_start', 'current_period_end', 'cancel_at_period_end', 'provider', 'provider_subscription_id', 'created_at'],
       invoices: ['id', 'company_id', 'subscription_id', 'number', 'period_start', 'period_end', 'seats', 'unit_price_paise', 'subtotal_paise', 'discount_paise', 'tax_paise', 'total_paise', 'currency', 'tax_pct', 'status', 'paid_at', 'provider_payment_id', 'created_at'],
       payments: ['id', 'invoice_id', 'amount_paise', 'method', 'provider_ref', 'provider_event_id', 'raw_payload_hash', 'created_at'],
@@ -102,10 +103,15 @@ test('control database migration is versioned, repeatable, and seeds sample plan
     }
     const migrations = await client.execute('SELECT version FROM control_schema_migrations');
     assert.deepEqual(migrations.rows.map(row => Number(row.version)), [
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, CURRENT_SCHEMA_VERSION
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, CURRENT_SCHEMA_VERSION
     ]);
     const pricing = await client.execute('SELECT monthly_price_paise, yearly_discount_pct, yearly_price_paise, tax_pct, currency, is_current FROM pricing_versions');
     assert.deepEqual(pricing.rows.map(row => [Number(row.monthly_price_paise), Number(row.yearly_discount_pct), Number(row.yearly_price_paise), Number(row.tax_pct), row.currency, Number(row.is_current)]), [[19900, 10, 214920, 18, 'INR', 1]]);
+    const pricingTiers = await client.execute('SELECT tier_key, name, min_seats, max_seats, monthly_price_paise, yearly_price_paise FROM pricing_tiers ORDER BY pricing_version_id, sort_order');
+    assert.deepEqual(pricingTiers.rows.map(row => [
+      row.tier_key, row.name, Number(row.min_seats), row.max_seats,
+      Number(row.monthly_price_paise), Number(row.yearly_price_paise)
+    ]), [['standard', 'Standard', 1, null, 19900, 214920]]);
     const pricingSettings = await client.execute('SELECT trial_days, trial_max_users, trial_storage_limit_mb, grace_period_days, read_only_period_days, trial_approval_mode, seat_addition_billing FROM pricing_settings WHERE id = 1');
     assert.deepEqual(pricingSettings.rows.map(row => [Number(row.trial_days), Number(row.trial_max_users), Number(row.trial_storage_limit_mb), Number(row.grace_period_days), Number(row.read_only_period_days), row.trial_approval_mode, row.seat_addition_billing]), [[7, 3, 1024, 3, 7, 'manual', 'immediate']]);
   } finally {
@@ -118,12 +124,35 @@ test('control migration enforces manually approved trials without touching tenan
   try {
     await migrateControlDatabase(client);
     await client.execute("UPDATE pricing_settings SET trial_approval_mode = 'auto' WHERE id = 1");
-    await client.execute('DELETE FROM control_schema_migrations WHERE version = 13');
+    await client.execute('DELETE FROM control_schema_migrations WHERE version IN (13, 14)');
     assert.equal(await migrateControlDatabase(client), CURRENT_SCHEMA_VERSION);
     const result = await client.execute('SELECT trial_approval_mode FROM pricing_settings WHERE id = 1');
     assert.equal(result.rows[0].trial_approval_mode, 'manual');
     const migration = await client.execute('SELECT version FROM control_schema_migrations WHERE version = 13');
     assert.equal(migration.rows.length, 1);
+  } finally {
+    await client.close();
+  }
+});
+
+test('pricing tier migration backfills every version without overwriting custom prices or duplicating rows', async () => {
+  const client = createClient({ url: 'file::memory:' });
+  try {
+    await migrateControlDatabase(client);
+    await client.execute('UPDATE pricing_versions SET monthly_price_paise = 30100, yearly_price_paise = 325080');
+    await client.execute('DELETE FROM pricing_tiers');
+    await client.execute('DELETE FROM control_schema_migrations WHERE version = 14');
+    await migrateControlDatabase(client);
+    await migrateControlDatabase(client);
+
+    const backfilled = await client.execute(`SELECT tier_key, name, min_seats, max_seats,
+      monthly_price_paise, yearly_price_paise FROM pricing_tiers`);
+    assert.deepEqual(backfilled.rows.map(row => [
+      row.tier_key, row.name, Number(row.min_seats), row.max_seats,
+      Number(row.monthly_price_paise), Number(row.yearly_price_paise)
+    ]), [['standard', 'Standard', 1, null, 30100, 325080]]);
+    const count = await client.execute('SELECT COUNT(*) AS count FROM pricing_tiers');
+    assert.equal(Number(count.rows[0].count), 1);
   } finally {
     await client.close();
   }
