@@ -455,10 +455,26 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
       WHERE COALESCE(t.status, 'open') <> 'done'
         AND (? = 'admin' OR p.created_by = ? OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = ?) OR t.assignee_id = ?)`)
       .all(req.session.role, req.session.userId, req.session.userId, req.session.userId);
+    const projectTaskCounts = await db.prepare(`SELECT t.project_id, COUNT(*) AS total_tasks,
+        SUM(CASE WHEN COALESCE(t.status, 'open') = 'done' THEN 1 ELSE 0 END) AS completed_tasks
+      FROM tasks t JOIN projects p ON p.id = t.project_id
+      WHERE ? = 'admin' OR p.created_by = ?
+        OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = ?)
+        OR t.assignee_id = ?
+      GROUP BY t.project_id`)
+      .all(req.session.role, req.session.userId, req.session.userId, req.session.userId);
+    const projectTaskCountsById = new Map(projectTaskCounts.map(project => [Number(project.project_id), project]));
     const today = businessDate();
     const projects = projectRows.map(project => {
       const projectTasks = taskRows.filter(task => Number(task.project_id) === Number(project.id));
-      return { ...project, open_tasks: projectTasks.length, overdue_tasks: projectTasks.filter(task => task.due_date && task.due_date < today).length };
+      const counts = projectTaskCountsById.get(Number(project.id)) || { total_tasks: 0, completed_tasks: 0 };
+      return {
+        ...project,
+        open_tasks: projectTasks.length,
+        overdue_tasks: projectTasks.filter(task => task.due_date && task.due_date < today).length,
+        total_tasks: Number(counts.total_tasks) || 0,
+        completed_tasks: Number(counts.completed_tasks) || 0
+      };
     });
     const reimbursementWhere = req.session.role === 'admin' ? '' : ' AND user_id = ?';
     const reimbursementParams = reimbursementWhere ? [req.session.userId] : [];

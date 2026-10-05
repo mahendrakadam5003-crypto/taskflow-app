@@ -7,6 +7,9 @@ TaskFlow runs on your PC. Depending on configuration, it can also use Turso for 
 - **Attendance** — employees punch in/punch out from their phone or PC. GPS coordinates are recorded as an indicative reference only; they can be spoofed and do not prove physical presence. Admins get a live "who's on the clock right now" view, full history, and CSV export.
 - **Real logins** — every person gets their own username + password (not just a name field). Roles: `admin` (sees attendance for everyone, manages people) and `employee` (sees their own).
 
+## Interface and accessibility
+The responsive interface includes a live attendance clock and shift timer, mobile-friendly attendance history, keyboard-accessible administrator tabs and dialogs, and a mobile bottom navigation bar. Inter Variable is bundled locally for consistent, offline-capable typography; its SIL Open Font License is included at `public/fonts/OFL.txt`.
+
 ## 1. Install Node.js (one-time)
 Download and install Node.js **20.18.0 or newer** from https://nodejs.org. The deployed service is pinned to Node 20.18.0; newer compatible releases are supported.
 

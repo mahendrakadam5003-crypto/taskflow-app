@@ -1,8 +1,10 @@
-const CACHE_NAME = 'taskflow-shell-v25';
+const CACHE_NAME = 'taskflow-shell-v31';
 const APP_SHELL = [
   '/',
   '/index.html',
   '/css/style.css',
+  '/css/theme.css',
+  '/fonts/InterVariable.woff2',
   '/js/app.js',
   '/manifest.webmanifest',
   '/icons/taskflow.svg',
@@ -28,6 +30,7 @@ self.addEventListener('fetch', event => {
     || ['/index.html', '/manifest.webmanifest'].includes(url.pathname)
     || url.pathname.startsWith('/css/')
     || url.pathname.startsWith('/js/')
+    || url.pathname.startsWith('/fonts/')
     || url.pathname.startsWith('/icons/');
   if (request.method !== 'GET' || url.origin !== self.location.origin || !isAppShell) return;
 

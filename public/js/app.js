@@ -6,6 +6,8 @@ let taskListRequestId = 0;
 let activeTaskListController = null;
 let dashboardSummaryRequestId = 0;
 let forcedPasswordModalOpen = false;
+let modalReturnFocus = null;
+let modalCloseHandler = null;
 
 async function api(path, opts = {}) {
   const res = await fetch('/api' + path, {
@@ -71,15 +73,30 @@ function todayISO() {
 }
 
 function getDueState(dateValue) {
-  if (!dateValue) return { className: '', label: '—' };
-  const due = new Date(`${dateValue}T00:00:00`);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(today.getDate() + 1);
-  if (due < today) return { className: 'due-overdue', label: `${dateValue} · overdue` };
-  if (due.getTime() === tomorrow.getTime()) return { className: 'due-tomorrow', label: `${dateValue} · tomorrow` };
-  return { className: 'due-upcoming', label: dateValue };
+  if (!dateValue) return { className: 'chip-neutral', label: 'No due date' };
+  const date = new Date(`${dateValue}T12:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const today = todayISO();
+  if (dateValue < today) return { className: 'chip-danger', label: `Overdue · ${date}` };
+  if (dateValue === today) return { className: 'chip-warning', label: 'Due today' };
+  return { className: 'chip-neutral', label: date };
+}
+
+function getInitials(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '—';
+  return (parts.length > 1 ? `${parts[0][0]}${parts[parts.length - 1][0]}` : parts[0].slice(0, 2)).toUpperCase();
+}
+
+const reimbursementStatuses = {
+  submitted: { label: 'Submitted', className: 'chip-neutral', step: 0 },
+  approved_level_1: { label: 'Level 1 approved', className: 'chip-warning', step: 1 },
+  approved: { label: 'Approved', className: 'chip-info', step: 2 },
+  paid: { label: 'Paid', className: 'chip-success', step: 3 },
+  rejected: { label: 'Rejected', className: 'chip-danger', step: 0 }
+};
+
+function reimbursementStatus(status) {
+  return reimbursementStatuses[status] || { label: String(status || 'Unknown'), className: 'chip-neutral', step: -1 };
 }
 
 function showAppNotification(message) {
@@ -87,7 +104,7 @@ function showAppNotification(message) {
   if (!bar) return;
   bar.textContent = message;
   bar.classList.remove('hidden');
-  setTimeout(() => bar.classList.add('hidden'), 5000);
+  setTimeout(() => bar.classList.add('hidden'), 4000);
 }
 
 function reloadWithActionMessage(view, message, projectId = null) {
@@ -106,8 +123,8 @@ function currentViewName() {
 function markNotificationsAvailable() {
   const button = document.querySelector('[data-view="notifications"]');
   if (!button) return;
-  if (!button.dataset.originalLabel) button.dataset.originalLabel = button.textContent;
-  button.textContent = '🔔 Notifications (new)';
+  const label = button.querySelector('.nav-label');
+  if (label) label.textContent = 'Notifications (new)';
 }
 
 async function refreshNotificationsAfterAction() {
@@ -118,6 +135,10 @@ async function refreshNotificationsAfterAction() {
 function escapeHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+function icon(name, className = 'icon') {
+  return `<svg class="${className}" aria-hidden="true" focusable="false"><use href="#icon-${name}"></use></svg>`;
 }
 
 function attachmentTypeLabel(type, name) {
@@ -137,16 +158,35 @@ function renderCommentAttachment(entry) {
   if (String(entry.attachment_type || '').toLowerCase().startsWith('image/')) {
     return `<a class="comment-attachment" href="${entry.image_path}" target="_blank" rel="noopener"><img class="comment-image" src="${entry.image_path}" loading="lazy" decoding="async" alt="${escapeHtml(name)}"><span>${escapeHtml(name)}</span></a>`;
   }
-  return `<a class="comment-file-card" href="${entry.image_path}" target="_blank" rel="noopener"><span class="comment-file-icon">▦</span><span><b>${escapeHtml(name)}</b><small>${escapeHtml(type)} · Download</small></span></a>`;
+  return `<a class="comment-file-card" href="${entry.image_path}" target="_blank" rel="noopener"><span class="comment-file-icon">${icon('folder')}</span><span><b>${escapeHtml(name)}</b><small>${escapeHtml(type)} · Download</small></span></a>`;
 }
 
 function showModal(html) {
   const modalEl = $('#modal');
   const backdropEl = $('#modal-backdrop');
   if (modalEl && backdropEl) {
+    if (!backdropEl.classList.contains('hidden') && modalCloseHandler) {
+      const cancelPendingModal = modalCloseHandler;
+      modalCloseHandler = null;
+      cancelPendingModal();
+    }
+    if (backdropEl.classList.contains('hidden')) modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     modalEl.innerHTML = html;
     modalEl.classList.toggle('user-edit-modal', html.includes('user-edit-dialog'));
+    const title = modalEl.querySelector('h3');
+    if (title) {
+      title.id = 'modal-title';
+      modalEl.setAttribute('aria-labelledby', title.id);
+      modalEl.removeAttribute('aria-label');
+    } else {
+      modalEl.setAttribute('aria-label', 'TaskFlow dialog');
+      modalEl.removeAttribute('aria-labelledby');
+    }
     backdropEl.classList.remove('hidden');
+    requestAnimationFrame(() => {
+      const firstControl = modalEl.querySelector('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]');
+      (firstControl || modalEl).focus();
+    });
   }
 }
 function closeModal() { 
@@ -157,6 +197,11 @@ function closeModal() {
     modalEl.innerHTML = ''; 
     modalEl.classList.remove('user-edit-modal');
   }
+  const onClose = modalCloseHandler;
+  modalCloseHandler = null;
+  onClose?.();
+  if (modalReturnFocus?.isConnected) modalReturnFocus.focus();
+  modalReturnFocus = null;
   forcedPasswordModalOpen = false;
 }
 
@@ -165,8 +210,49 @@ if (backdrop) {
   backdrop.addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop' && !forcedPasswordModalOpen) closeModal(); });
 }
 
+document.addEventListener('keydown', event => {
+  const modalEl = $('#modal');
+  const backdropEl = $('#modal-backdrop');
+  if (!modalEl || !backdropEl || backdropEl.classList.contains('hidden')) return;
+  if (event.key === 'Escape') {
+    if (!forcedPasswordModalOpen) {
+      event.preventDefault();
+      closeModal();
+    }
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const focusable = Array.from(modalEl.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])'))
+    .filter(element => element.getClientRects().length);
+  if (!focusable.length) {
+    event.preventDefault();
+    modalEl.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (!modalEl.contains(document.activeElement)) {
+    event.preventDefault();
+    first.focus();
+  } else if (event.shiftKey && (document.activeElement === first || document.activeElement === modalEl)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+
 function confirmModal(title, body, confirmLabel = 'Delete', danger = true) {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      modalCloseHandler = null;
+      closeModal();
+      resolve(value);
+    };
     showModal(`
       <h3>${title}</h3>
       <p class="hint">${body}</p>
@@ -176,13 +262,63 @@ function confirmModal(title, body, confirmLabel = 'Delete', danger = true) {
       </div>`);
     const cancelBtn = $('#m-cancel');
     const okBtn = $('#m-ok');
-    if (cancelBtn) cancelBtn.onclick = () => { closeModal(); resolve(false); };
-    if (okBtn) okBtn.onclick = () => { closeModal(); resolve(true); };
+    if (cancelBtn) cancelBtn.onclick = () => finish(false);
+    if (okBtn) okBtn.onclick = () => finish(true);
+    modalCloseHandler = () => {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    };
+  });
+}
+
+function inputModal(title, label, initialValue = '', type = 'text') {
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      modalCloseHandler = null;
+      closeModal();
+      resolve(value);
+    };
+    showModal(`
+      <h3>${escapeHtml(title)}</h3>
+      <label class="field-block" for="modal-input">${escapeHtml(label)}
+        <input id="modal-input" type="${type}" value="${escapeHtml(initialValue)}" autocomplete="off">
+      </label>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="modal-input-cancel" type="button">Cancel</button>
+        <button class="btn btn-primary" id="modal-input-submit" type="button">Continue</button>
+      </div>`);
+    const input = $('#modal-input');
+    const submit = () => finish(input.value);
+    $('#modal-input-submit').onclick = submit;
+    $('#modal-input-cancel').onclick = closeModal;
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        submit();
+      }
+    });
+    modalCloseHandler = () => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+    };
   });
 }
 
 function rejectionModal() {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      modalCloseHandler = null;
+      closeModal();
+      resolve(value);
+    };
     showModal(`
       <h3>Reject reimbursement?</h3>
       <p class="hint">Are you sure you want to reject this reimbursement?</p>
@@ -193,11 +329,15 @@ function rejectionModal() {
         <button class="btn btn-secondary" id="rejection-cancel">Cancel</button>
         <button class="btn btn-danger" id="rejection-confirm">Reject</button>
       </div>`);
-    $('#rejection-cancel').onclick = () => { closeModal(); resolve(null); };
+    $('#rejection-cancel').onclick = () => finish(null);
     $('#rejection-confirm').onclick = () => {
       const reason = $('#rejection-reason').value.trim();
-      closeModal();
-      resolve(reason);
+      finish(reason);
+    };
+    modalCloseHandler = () => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
     };
   });
 }
@@ -205,6 +345,7 @@ function rejectionModal() {
 function closeDrawer() {
   activeTaskDrawerController?.abort();
   activeTaskDrawerController = null;
+  $$('.task-row.is-selected').forEach(row => row.classList.remove('is-selected'));
   const drawer = $('#task-drawer');
   if (drawer) drawer.classList.add('hidden');
   const reimbursementDrawer = $('#reimbursement-drawer');
@@ -226,7 +367,14 @@ function openReimbursementDrawer(row) {
   $('#reimbursement-detail-category').textContent = row.category || '—';
   $('#reimbursement-detail-amount').textContent = `${row.currency || ''} ${Number(row.amount || 0).toFixed(2)}`;
   $('#reimbursement-detail-description').textContent = row.description || '—';
-  $('#reimbursement-detail-status').textContent = row.status || '—';
+  const status = reimbursementStatus(row.status);
+  const statusElement = $('#reimbursement-detail-status');
+  statusElement.textContent = status.label;
+  statusElement.className = `chip ${status.className}`;
+  const stepElement = $('#reimbursement-detail-steps');
+  const stepLabels = ['Submitted', 'Level 1', 'Level 2', 'Paid'];
+  stepElement.classList.toggle('is-rejected', row.status === 'rejected');
+  stepElement.innerHTML = stepLabels.map((label, index) => `<div class="reimbursement-step ${index < status.step ? 'complete' : ''} ${index === status.step ? 'current' : ''}"><span>${index < status.step ? '✓' : index + 1}</span><small>${label}</small></div>`).join('');
   $('#reimbursement-detail-note').textContent = row.admin_note || 'No note';
   const receiptItems = (row.receipt_items || []).filter(item => item.url);
   const imageReceiptItems = receiptItems.filter(item => String(item.mime_type || '').startsWith('image/'));
@@ -326,6 +474,7 @@ setInterval(() => {
 }, 60000);
 
 let attendancePollTimer = null;
+let attendanceClockTimer = null;
 let notificationsPollTimer = null;
 let notificationsPollBusy = false;
 let taskListPollTimer = null;
@@ -354,6 +503,13 @@ function stopAttendancePolling() {
   if (attendancePollTimer) {
     clearInterval(attendancePollTimer);
     attendancePollTimer = null;
+  }
+}
+
+function stopAttendanceClock() {
+  if (attendanceClockTimer) {
+    clearInterval(attendanceClockTimer);
+    attendanceClockTimer = null;
   }
 }
 
@@ -605,6 +761,8 @@ async function renderDashboard() {
   let trackingAllowed = ME?.role === 'admin';
   try { trackingAllowed = trackingAllowed || (await api('/attendance/tracking-access/me')).allowed; } catch (error) { trackingAllowed = false; }
   if (trackingCard) trackingCard.style.display = trackingAllowed ? '' : 'none';
+  const dashboardProjectsLink = $('#dashboard-projects-link');
+  if (dashboardProjectsLink) dashboardProjectsLink.onclick = () => showView('projects');
   const storageCard = $('#dashboard-storage-card');
   if (storageCard) storageCard.style.display = ME?.role === 'admin' ? '' : 'none';
   $$('.dashboard-card[data-dashboard-view]').forEach(card => { card.onclick = () => showView(card.dataset.dashboardView); });
@@ -626,7 +784,7 @@ async function renderDashboard() {
       summaryPanel.innerHTML = `
         ${summary.active_task ? `<button type="button" class="dashboard-metric dashboard-active-task" id="dashboard-active-task-card"><small>Currently working on</small><b>${escapeHtml(summary.active_task.title)}</b><span>${escapeHtml(summary.active_task.customer_name || summary.active_task.project_name || 'Task')}</span><span class="dashboard-active-task-hint">Click to open task</span></button>` : ''}
         <div class="dashboard-metric"><small>Open tasks</small><b>${summary.open_tasks}</b></div>
-        <div class="dashboard-metric alert"><small>Overdue tasks</small><b>${summary.overdue_tasks}</b></div>
+        <div class="dashboard-metric alert ${Number(summary.overdue_tasks) > 0 ? 'has-alert' : ''}"><small>Overdue tasks</small><b>${summary.overdue_tasks}</b></div>
         <div class="dashboard-metric money"><small>Pending reimbursements</small><b>${summary.pending_reimbursements} · INR ${Number(summary.pending_reimbursement_amount).toFixed(2)}</b></div>
         ${summary.payment_alerts?.length ? `<div class="dashboard-metric alert dashboard-payment-alert"><small>Overdue invoices</small><b>${summary.payment_alerts.length}</b>${summary.payment_alerts.slice(0, 3).map(invoice => `<span>${escapeHtml(invoice.invoice_number)} · ${escapeHtml(invoice.customer_name || 'No customer')} · pending ${Number(invoice.pending_amount || 0).toFixed(2)}</span>`).join('')}</div>` : ''}
         ${storageMetric}`;
@@ -653,10 +811,19 @@ async function renderDashboard() {
     const projects = $('#dashboard-projects');
     if (projects) {
       projects.innerHTML = PROJECTS.length ? PROJECTS.map(project => {
-        const stats = projectSummary.get(Number(project.id)) || { open_tasks: 0, overdue_tasks: 0 };
-        return `<button class="dashboard-project" data-dashboard-project="${project.id}"><b>${project.locked ? '🔒 ' : ''}${escapeHtml(project.name)}</b><span>${stats.open_tasks} open task${stats.open_tasks === 1 ? '' : 's'} · ${stats.overdue_tasks} overdue</span></button>`;
-      }).join('') : '<div class="hint">No projects yet.</div>';
+        const stats = projectSummary.get(Number(project.id)) || { open_tasks: 0, overdue_tasks: 0, total_tasks: 0, completed_tasks: 0 };
+        const totalTasks = Number(stats.total_tasks) || 0;
+        const completedTasks = Number(stats.completed_tasks) || 0;
+        const percentComplete = totalTasks ? Math.round((completedTasks / totalTasks) * 100) : 0;
+        return `<button class="dashboard-project" data-dashboard-project="${project.id}">
+          <b>${project.locked ? `${icon('lock', 'icon project-lock-icon')} ` : ''}${escapeHtml(project.name)}</b>
+          <span>${stats.open_tasks} open task${stats.open_tasks === 1 ? '' : 's'} · ${stats.overdue_tasks} overdue</span>
+          <div class="dashboard-project-progress" role="progressbar" aria-label="${escapeHtml(project.name)} complete" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percentComplete}"><span style="width:${percentComplete}%"></span></div>
+          <small>${completedTasks} of ${totalTasks} tasks complete · ${percentComplete}%</small>
+        </button>`;
+      }).join('') : `<div class="empty-state">${icon('folder')}<b>No projects yet</b><p>Create a project to organize your team's tasks.</p>${PROJECT_ACTION_ACCESS.create_project ? '<button class="btn btn-primary" type="button" id="dashboard-create-project">Create project</button>' : ''}</div>`;
       $$('.dashboard-project').forEach(button => button.onclick = () => openProject(Number(button.dataset.dashboardProject)));
+      $('#dashboard-create-project')?.addEventListener('click', () => $('#btn-new-project')?.click());
     }
     const paymentHint = $('#dashboard-payment-history-hint');
     if (paymentHint && Number(summary.payment_alert_count || 0)) paymentHint.textContent = `${summary.payment_alert_count} invoice${summary.payment_alert_count === 1 ? '' : 's'} overdue`;
@@ -761,8 +928,9 @@ async function renderPaymentHistory() {
 function renderProjectsDirectory() {
   const directory = $('#projects-directory');
   if (!directory) return;
-  directory.innerHTML = PROJECTS.length ? PROJECTS.map(project => `<button class="dashboard-project projects-directory-card" data-directory-project="${project.id}"><b>${project.locked ? '🔒 ' : ''}${escapeHtml(project.name)}</b><span>Open project workspace</span></button>`).join('') : '<div class="hint">No projects yet.</div>';
+  directory.innerHTML = PROJECTS.length ? PROJECTS.map(project => `<button class="dashboard-project projects-directory-card" data-directory-project="${project.id}"><b>${project.locked ? `${icon('lock', 'icon project-lock-icon')} ` : ''}${escapeHtml(project.name)}</b><span>Open project workspace</span></button>`).join('') : `<div class="empty-state">${icon('folder')}<b>No projects yet</b><p>Create a project to organize work.</p>${PROJECT_ACTION_ACCESS.create_project ? '<button class="btn btn-primary" type="button" id="projects-directory-create">Create project</button>' : ''}</div>`;
   $$('.dashboard-project[data-directory-project]').forEach(button => button.onclick = () => openProject(Number(button.dataset.directoryProject)));
+  $('#projects-directory-create')?.addEventListener('click', () => $('#btn-new-project')?.click());
   const newProject = $('#projects-new-project');
    if (newProject) {
   newProject.style.display = PROJECT_ACTION_ACCESS.create_project ? '' : 'none';
@@ -839,8 +1007,13 @@ async function enterApp() {
 $$('.nav-item').forEach((btn) => {
   btn.addEventListener('click', () => { closeMobileNav(); showView(btn.dataset.view); });
 });
+$$('.mobile-tab[data-view]').forEach((btn) => {
+  btn.addEventListener('click', () => { closeMobileNav(); showView(btn.dataset.view); });
+});
+$('#btn-mobile-more')?.addEventListener('click', () => $('#btn-mobile-nav')?.click());
 
 function showView(view) {
+  if (view !== 'attendance') stopAttendanceClock();
   if (mobilePageTitle) mobilePageTitle.textContent = view === 'dashboard' ? 'TaskFlow' : (mobileViewTitles[view] || 'TaskFlow');
   const compactSidebarViews = new Set(['dashboard', 'attendance', 'reimbursements', 'mytasks', 'payment-history', 'notifications', 'admin', 'tracking']);
   const projectSidebarViews = new Set(['projects', 'project']);
@@ -857,6 +1030,7 @@ function showView(view) {
   const projectSwitcherBar = $('#project-switcher-bar');
   if (projectSwitcherBar) projectSwitcherBar.style.display = view === 'project' ? 'none' : '';
   $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+  $$('.mobile-tab[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   $$('.project-item').forEach((b) => b.classList.remove('active'));
   sessionStorage.setItem('taskflow_last_view', view);
   if (view === 'project' && CURRENT_PROJECT) sessionStorage.setItem('taskflow_last_project_id', String(CURRENT_PROJECT.id));
@@ -908,7 +1082,8 @@ function showView(view) {
     const viewNotifications = $('#view-notifications');
     if (viewNotifications) viewNotifications.classList.remove('hidden');
     const notificationButton = document.querySelector('[data-view="notifications"]');
-    if (notificationButton && notificationButton.dataset.originalLabel) notificationButton.textContent = notificationButton.dataset.originalLabel;
+    const notificationLabel = notificationButton?.querySelector('.nav-label');
+    if (notificationLabel) notificationLabel.textContent = 'Notifications';
     renderNotifications();
   } else if (view === 'project') {
     const viewProject = $('#view-project');
@@ -938,12 +1113,35 @@ async function renderNotifications() {
       return;
     }
     latestNotificationId = Math.max(latestNotificationId || 0, ...activity.map(entry => Number(entry.id) || 0));
-    list.innerHTML = activity.map((entry) => `
-      <div style="padding:12px 0; border-bottom:1px solid #eee;">
-        <b>${escapeHtml(entry.action)}</b>
-        <span class="hint"> by ${escapeHtml(entry.actor_name || 'Unknown user')} on ${escapeHtml(fmtDateTime(entry.created_at))}</span>
-        ${entry.details ? `<div>${escapeHtml(entry.details)}</div>` : ''}
-      </div>`).join('');
+    const today = todayISO();
+    const yesterdayDate = new Date(`${today}T12:00:00+05:30`);
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterday = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(yesterdayDate);
+    const groups = new Map([['Today', []], ['Yesterday', []], ['Earlier', []]]);
+    activity.forEach(entry => {
+      const date = parseTaskFlowTimestamp(entry.created_at);
+      const day = Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+      }).format(date) : '';
+      groups.get(day === today ? 'Today' : day === yesterday ? 'Yesterday' : 'Earlier').push(entry);
+    });
+    list.innerHTML = Array.from(groups, ([label, entries]) => entries.length ? `
+      <section class="notification-group" aria-label="${label}">
+        <h2>${label}</h2>
+        ${entries.map(entry => {
+          const action = String(entry.action || '').toLowerCase();
+          const iconName = /attendance|punch|location/.test(action) ? 'clock'
+            : /reimburse|expense|receipt/.test(action) ? 'receipt'
+              : /project/.test(action) ? 'folder'
+                : /setting|access|user|permission/.test(action) ? 'settings' : 'check';
+          return `<article class="notification-item">
+            <span class="notification-icon">${icon(iconName)}</span>
+            <div><b>${escapeHtml(entry.action)}</b><p>By ${escapeHtml(entry.actor_name || 'Unknown user')} · ${escapeHtml(fmtDateTime(entry.created_at))}</p>${entry.details ? `<small>${escapeHtml(entry.details)}</small>` : ''}</div>
+          </article>`;
+        }).join('')}
+      </section>` : '').join('');
   } catch (error) {
     const message = error.name === 'AbortError' ? 'The activity request timed out after 60 seconds.' : error.message;
     list.innerHTML = `<p class="form-error" role="alert">Unable to load recent activity: ${escapeHtml(message)}</p><button class="btn btn-secondary" id="notifications-retry" type="button">Retry</button>`;
@@ -1002,8 +1200,8 @@ async function renderReimbursements() {
         <button class="btn btn-secondary" id="reimbursement-export">Export CSV</button>
         ${canReview ? '<button class="btn btn-primary" id="reimbursement-bulk-approve" style="display:none;">Approve selected</button>' : ''}
       </div>
-      <div class="task-table-wrap" style="overflow-x:auto; margin-top:14px;">
-        <table class="attn-table" style="min-width:850px;"><thead><tr>
+      <div class="task-table-wrap reimbursement-table-wrap" style="overflow-x:auto; margin-top:14px;">
+        <table class="attn-table reimbursement-table"><thead><tr>
           ${canReview ? '<th><input type="checkbox" id="reimbursement-select-all" title="Select approvable expenses"></th>' : ''}
           ${canReview ? '<th>Employee</th><th>Department</th>' : ''}
           <th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Receipt</th><th>Status</th><th>Action</th>
@@ -1106,16 +1304,16 @@ async function renderReimbursements() {
         const receiptItems = Array.isArray(row.receipt_items) ? row.receipt_items : (row.receipt_url ? [{ url: row.receipt_url, original_name: 'View receipt' }] : []);
         const receiptCell = receiptItems.length
           ? `<div class="reimbursement-receipt-links">${receiptItems.map((item, index) => item.url
-            ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.original_name || `View receipt ${index + 1}`)}</a>`
+            ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${String(item.mime_type || '').startsWith('image/') ? `<img class="receipt-table-thumbnail" src="${escapeHtml(item.url)}" alt="">` : icon('folder')}<span>${escapeHtml(item.original_name || `View receipt ${index + 1}`)}</span></a>`
             : `<span class="hint">${escapeHtml(item.original_name || `Receipt ${index + 1}`)} (expired)</span>`).join('')}</div>`
           : (row.receipt_expired ? '<span class="hint">Attachment expired</span>' : '—');
         return `<tr class="reimbursement-row" data-reimbursement-id="${row.id}">
-        ${canReview ? `<td><input type="checkbox" class="reimbursement-select" data-id="${row.id}" ${canApprove ? '' : 'disabled'}></td><td>${escapeHtml(row.user_name)}</td><td>${escapeHtml(row.department || '—')}</td>` : ''}
-        <td>${escapeHtml(row.expense_date)}</td><td>${escapeHtml(row.category)}</td><td>${escapeHtml(row.description)}</td>
-        <td>${escapeHtml(row.currency)} ${Number(row.amount).toFixed(2)}</td>
-        <td>${receiptCell}</td>
-        <td><span class="tag">${escapeHtml(row.status)}</span>${canReview && row.edited_at ? `<small class="hint">Edited after submission · ${escapeHtml(fmtDateTime(row.edited_at))}</small>` : ''}${row.admin_note ? `<small class="hint">${escapeHtml(row.admin_note)}</small>` : ''}</td>
-        <td>${canReview ? (canApprove ? `<button class="btn btn-primary btn-sm reimbursement-action" data-id="${row.id}" data-status="approved">Approve</button> <button class="btn btn-danger btn-sm reimbursement-action" data-id="${row.id}" data-status="rejected">Reject</button>` : row.status === 'approved' && canPay ? `<button class="btn btn-secondary btn-sm reimbursement-action" data-id="${row.id}" data-status="paid">Mark paid</button>` : '—') : ''}${canEdit ? ` <button class="btn btn-secondary btn-sm reimbursement-edit" data-id="${row.id}" type="button">Edit</button>` : ''}${isAdmin ? ` <button class="btn btn-danger btn-sm reimbursement-delete" data-id="${row.id}">Delete</button>` : ''}</td>
+        ${canReview ? `<td data-label="Select"><input type="checkbox" class="reimbursement-select" data-id="${row.id}" ${canApprove ? '' : 'disabled'}></td><td data-label="Employee">${escapeHtml(row.user_name)}</td><td data-label="Department">${escapeHtml(row.department || '—')}</td>` : ''}
+        <td data-label="Date">${escapeHtml(row.expense_date)}</td><td data-label="Category">${escapeHtml(row.category)}</td><td data-label="Description">${escapeHtml(row.description)}</td>
+        <td data-label="Amount">${escapeHtml(row.currency)} ${Number(row.amount).toFixed(2)}</td>
+        <td data-label="Receipt">${receiptCell}</td>
+        <td data-label="Status"><span class="chip ${reimbursementStatus(row.status).className}">${escapeHtml(reimbursementStatus(row.status).label)}</span>${canReview && row.edited_at ? `<small class="hint">Edited after submission · ${escapeHtml(fmtDateTime(row.edited_at))}</small>` : ''}${row.admin_note ? `<small class="hint">${escapeHtml(row.admin_note)}</small>` : ''}</td>
+        <td data-label="Action">${canReview ? (canApprove ? `<button class="btn btn-primary btn-sm reimbursement-action" data-id="${row.id}" data-status="approved">Approve</button> <button class="btn btn-danger btn-sm reimbursement-action" data-id="${row.id}" data-status="rejected">Reject</button>` : row.status === 'approved' && canPay ? `<button class="btn btn-secondary btn-sm reimbursement-action" data-id="${row.id}" data-status="paid">Mark paid</button>` : '—') : ''}${canEdit ? ` <button class="btn btn-secondary btn-sm reimbursement-edit" data-id="${row.id}" type="button">Edit</button>` : ''}${isAdmin ? ` <button class="btn btn-danger btn-sm reimbursement-delete" data-id="${row.id}">Delete</button>` : ''}</td>
       </tr>`;
       }).join('') : `<tr><td colspan="${canReview ? 10 : 7}" class="hint" style="text-align:center; padding:15px;">No reimbursement claims found.</td></tr>`;
       if (canReview) {
@@ -1191,7 +1389,7 @@ async function renderReimbursements() {
       const bulkApprove = $('#reimbursement-bulk-approve');
       if (bulkApprove) bulkApprove.onclick = async () => {
         const ids = $$('.reimbursement-select:checked').map(input => Number(input.dataset.id));
-        if (!ids.length) return alert('Select at least one reimbursement to approve.');
+        if (!ids.length) return showAppNotification('Select at least one reimbursement to approve.');
         if (!await confirmModal('Approve selected reimbursements?', `Are you sure you want to approve ${ids.length} reimbursement${ids.length === 1 ? '' : 's'}?`, 'Approve all', false)) return;
         await api('/reimbursements/bulk-status', { method: 'PUT', body: { ids } });
         showAppNotification('Expenses have been approved successfully.');
@@ -1286,7 +1484,7 @@ function renderProjectList() {
     const row = document.createElement('div');
     row.className = 'project-item-row';
     row.innerHTML = `
-      <button class="project-item" data-id="${p.id}">${p.locked ? '<span class="lock">🔒</span> ' : ''}${escapeHtml(p.name)}</button>
+      <button class="project-item" data-id="${p.id}">${p.locked ? `${icon('lock', 'icon lock')} ` : ''}${escapeHtml(p.name)}</button>
       ${PROJECT_ACTION_ACCESS.delete_project ? `<button class="project-del" data-id="${p.id}" title="Delete project">✕</button>` : ''}`;
     list.appendChild(row);
   });
@@ -1357,7 +1555,7 @@ async function openProject(id) {
   if (!project) return;
   if (project.locked && !unlockedProjects.has(id)) {
     showModal(`
-      <h3>🔒 ${escapeHtml(project.name)}</h3>
+      <h3>${icon('lock')} ${escapeHtml(project.name)}</h3>
       <input id="pin-input" placeholder="Enter PIN" type="password" autofocus>
       <div id="pin-error" class="form-error"></div>
       <div class="modal-actions">
@@ -1395,17 +1593,17 @@ async function enterProjectView(project) {
   if (renameProjectButton) {
     renameProjectButton.style.display = PROJECT_ACTION_ACCESS.edit_project ? '' : 'none';
     renameProjectButton.onclick = async () => {
-      const name = prompt('New project name:', project.name);
+      const name = await inputModal('Rename project', 'Project name', project.name);
       if (name === null || !name.trim()) return;
-      const pinInput = prompt('New project PIN (4–12 digits). Leave blank to remove the PIN, or cancel to keep it unchanged:', '');
+      const pinInput = await inputModal('Project PIN', 'New PIN (4–12 digits); leave blank to remove the PIN', '');
       const body = { name: name.trim() };
       if (pinInput !== null) {
         const pin = pinInput.trim();
         if (pin && !/^\d{4,12}$/.test(pin)) {
-          alert('Project PIN must contain 4 to 12 digits.');
+          showAppNotification('Project PIN must contain 4 to 12 digits.');
           return;
         }
-        if (!pin && project.locked && !confirm('Remove the current project PIN?')) return;
+        if (!pin && project.locked && !await confirmModal('Remove project PIN?', 'Remove the current project PIN?', 'Remove PIN')) return;
         body.pin = pin || null;
       }
       if (name.trim() === project.name && pinInput === null) return;
@@ -1417,7 +1615,7 @@ async function enterProjectView(project) {
         renderProjectList();
         renderProjectsDirectory();
         showAppNotification('Project updated.');
-      } catch (error) { alert(error.message); }
+      } catch (error) { showAppNotification(error.message); }
     };
   }
   const searchInput = $('#task-search');
@@ -1460,7 +1658,7 @@ async function enterProjectView(project) {
 function renderFocusedProjectSwitcher() {
   const list = $('#focused-project-list');
   if (!list) return;
-  list.innerHTML = PROJECTS.map(project => `<button class="focused-project ${CURRENT_PROJECT && Number(CURRENT_PROJECT.id) === Number(project.id) ? 'active' : ''}" data-focused-project="${project.id}">${project.locked ? '🔒 ' : ''}${escapeHtml(project.name)}</button>`).join('');
+  list.innerHTML = PROJECTS.map(project => `<button class="focused-project ${CURRENT_PROJECT && Number(CURRENT_PROJECT.id) === Number(project.id) ? 'active' : ''}" data-focused-project="${project.id}">${project.locked ? `${icon('lock', 'icon project-lock-icon')} ` : ''}${escapeHtml(project.name)}</button>`).join('');
   $$('.focused-project').forEach(button => button.onclick = () => openProject(Number(button.dataset.focusedProject)));
 }
 
@@ -1559,7 +1757,7 @@ async function renderTasks() {
   const controller = new AbortController();
   activeTaskListController = controller;
   const loadTimeout = setTimeout(() => controller.abort(), 30_000);
-  list.innerHTML = '<tr><td colspan="4" class="hint" style="padding:15px;">Loading tasks...</td></tr>';
+  list.innerHTML = '<tr><td colspan="4"><div class="task-list-skeleton" role="status" aria-label="Loading tasks"><span></span><span></span><span></span></div></td></tr>';
   let tasks = [];
   try {
     const searchInput = $('#task-search');
@@ -1600,8 +1798,9 @@ async function renderTasks() {
         if (afterId === 0 && page.length === pageSize) {
           list.innerHTML = tasks.map(task => `
             <tr class="task-row ${task.status === 'done' ? 'done' : ''}" data-task-id="${task.id}">
-              <td></td><td class="task-title-cell"><b>${escapeHtml(task.title)}</b></td>
-              <td class="task-assignee-cell">${escapeHtml(task.assignee_name || 'Unassigned')}</td><td class="task-due-cell">${escapeHtml(getDueState(task.due_date).label)}</td>
+              <td data-label="Complete"></td><td class="task-title-cell" data-label="Task"><span class="task-mobile-label">Task</span><b>${escapeHtml(task.title)}</b></td>
+              <td class="task-assignee-cell" data-label="Assignee"><span class="task-mobile-label">Assignee</span><span class="assignee-cell"><span class="avatar" aria-hidden="true">${escapeHtml(getInitials(task.assignee_name || ''))}</span>${escapeHtml(task.assignee_name || 'Unassigned')}</span></td>
+              <td class="task-due-cell" data-label="Due"><span class="task-mobile-label">Due</span><span class="chip ${getDueState(task.due_date).className}">${escapeHtml(getDueState(task.due_date).label)}</span></td>
             </tr>`).join('') + '<tr id="task-list-loading-more"><td colspan="4" class="hint">Loading remaining tasks...</td></tr>';
           $$('.task-row').forEach(row => {
             row.onclick = () => openTaskDrawer(Number(row.dataset.taskId));
@@ -1624,25 +1823,36 @@ async function renderTasks() {
     if (sort === 'title') tasks.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
     if (sort === 'assignee') tasks.sort((a, b) => (a.assignee_name || 'Unassigned').localeCompare(b.assignee_name || 'Unassigned'));
     if (sort === 'due') tasks.sort((a, b) => (a.due_date || '9999-12-31').localeCompare(b.due_date || '9999-12-31'));
-    list.innerHTML = tasks.length ? tasks.map(task => `
-      <tr class="task-row ${search ? 'search-result ' : ''}${task.status === 'done' ? 'done' : ''}" data-task-id="${task.id}">
-        <td><button class="row-complete ${task.status === 'done' ? 'row-reopen' : ''}" data-task-id="${task.id}" title="${task.status === 'done' ? 'Reopen task' : 'Complete task'}">${task.status === 'done' ? '↻' : '✓'}</button></td>
-        <td class="task-title-cell"><b>${escapeHtml(task.title)}</b></td>
-        <td class="task-assignee-cell">${escapeHtml(task.assignee_name || 'Unassigned')}</td><td class="task-due-cell">${escapeHtml(getDueState(task.due_date).label)}</td>
-      </tr>`).join('') : '<tr><td colspan="4" class="hint" style="padding:15px;">No open tasks yet.</td></tr>';
+    list.innerHTML = tasks.length ? tasks.map(task => {
+      const due = getDueState(task.due_date);
+      return `
+      <tr class="task-row ${search ? 'search-result ' : ''}${task.status === 'done' ? 'done' : ''}" data-task-id="${task.id}" tabindex="0" aria-label="Open task: ${escapeHtml(task.title)}">
+        <td data-label="Complete"><button class="row-complete ${task.status === 'done' ? 'row-reopen' : ''}" data-task-id="${task.id}" title="${task.status === 'done' ? 'Reopen task' : 'Complete task'}" aria-label="${task.status === 'done' ? 'Reopen task' : 'Complete task'}">${icon('check')}</button></td>
+        <td class="task-title-cell" data-label="Task"><span class="task-mobile-label">Task</span><b>${escapeHtml(task.title)}</b></td>
+        <td class="task-assignee-cell" data-label="Assignee"><span class="task-mobile-label">Assignee</span><span class="assignee-cell"><span class="avatar" aria-hidden="true">${escapeHtml(getInitials(task.assignee_name || ''))}</span>${escapeHtml(task.assignee_name || 'Unassigned')}</span></td>
+        <td class="task-due-cell" data-label="Due"><span class="task-mobile-label">Due</span><span class="chip ${due.className}">${escapeHtml(due.label)}</span></td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="4"><div class="empty-state">${icon('check')}<b>${search ? 'No matching tasks' : 'No tasks yet'}</b><p>${search ? 'Try a different search or clear your filters.' : 'Add a task to get this project moving.'}</p>${PROJECT_ACTION_ACCESS.create_task ? '<button type="button" class="btn btn-primary" id="empty-add-task">Add task</button>' : ''}</div></td></tr>`;
+    $('#empty-add-task')?.addEventListener('click', () => $('#btn-new-task')?.click());
     $$('.row-complete').forEach(button => {
       button.onclick = async () => {
         const reopening = button.classList.contains('row-reopen');
         try {
           await api(`/tasks/${button.dataset.taskId}`, { method: 'PUT', body: { status: reopening ? 'open' : 'done' } });
           reloadWithActionMessage('project', reopening ? 'Task reopened successfully.' : 'Task completed successfully.', CURRENT_PROJECT.id);
-        } catch (error) { alert(error.message); }
+        } catch (error) { showAppNotification(error.message); }
       };
     });
     $$('.task-row').forEach(row => {
       row.onclick = (event) => {
         if (event.target.closest('.row-complete')) return;
         openTaskDrawer(Number(row.dataset.taskId));
+      };
+      row.onkeydown = event => {
+        if (event.target === row && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          openTaskDrawer(Number(row.dataset.taskId));
+        }
       };
     });
     if (pendingSearchTaskId) {
@@ -1766,7 +1976,7 @@ async function showNewTaskDrawer() {
         console.error('Task created, but the task view could not refresh:', refreshError);
         showAppNotification('Task created, but the task view could not refresh.');
       }
-    } catch (err) { alert(err.message); }
+    } catch (error) { showAppNotification(`Unable to load location timeline: ${error.message}`); }
   };
 }
 
@@ -1797,6 +2007,8 @@ function showTaskDrawerLoading() {
 async function openTaskDrawer(taskId) {
   const drawer = $('#task-drawer');
   if (!drawer) return;
+  $$('.task-row.is-selected').forEach(row => row.classList.remove('is-selected'));
+  document.querySelector(`.task-row[data-task-id="${CSS.escape(String(taskId))}"]`)?.classList.add('is-selected');
   activeTaskDrawerController?.abort();
   showTaskDrawerLoading();
   const controller = new AbortController();
@@ -1905,6 +2117,7 @@ async function openTaskDrawer(taskId) {
       };
     });
     const activityContainer = $('#drawer-comments');
+    const historyContainer = $('#drawer-history');
     const activityItems = [];
     let activityOffset = 0;
     let activityHasMore = false;
@@ -1912,7 +2125,7 @@ async function openTaskDrawer(taskId) {
     const bindActivityActions = () => {
       $$('.task-difference-toggle').forEach(button => {
         button.onclick = () => {
-          const panel = activityContainer.querySelector(`[data-history-panel="${button.dataset.historyIndex}"]`);
+          const panel = historyContainer.querySelector(`[data-history-panel="${button.dataset.historyIndex}"]`);
           if (!panel) return;
           const expanded = panel.classList.toggle('hidden');
           button.textContent = expanded ? 'Show difference' : 'Hide difference';
@@ -1949,34 +2162,38 @@ async function openTaskDrawer(taskId) {
       });
     };
     const renderActivity = () => {
-      const groupedActivity = new Map();
-      activityItems.forEach(entry => {
-        const timestamp = fmtDateTime(entry.created_at);
-        if (!groupedActivity.has(timestamp)) groupedActivity.set(timestamp, []);
-        groupedActivity.get(timestamp).push(entry);
-      });
-      const html = Array.from(groupedActivity.entries()).reverse().map(([timestamp, entries], groupIndex) => {
-        const contents = entries.map((entry, entryIndex) => {
-          const activityIndex = `${groupIndex}-${entryIndex}`;
-          if (entry.activity_type === 'comment') return `<div class="activity-group-entry comment" data-comment-id="${entry.id}">
-            <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b>${entryIndex === 0 ? ` <span class="activity-inline-time">· ${escapeHtml(timestamp)}</span>` : ''}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
-            <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
-            ${renderCommentAttachment(entry)}
-          </div>`;
-          const actor = escapeHtml(entry.actor_name || entry.author_name || (String(entry.field_name || '').startsWith('Asana:') ? 'Unknown Asana user' : 'Unknown user'));
-          const oldValue = escapeHtml(entry.old_value || '(empty)');
-          const newValue = escapeHtml(entry.new_value || '(empty)');
-          let message = entry.field_name === 'Task created' ? 'created this task' : `changed the ${String(entry.field_name || 'activity').toLowerCase()}`;
-          if (entry.field_name === 'Assignee') message = `reassigned this task from ${oldValue} to ${newValue}`;
-          if (entry.field_name === 'Due date') message = `changed the due date from ${oldValue} to ${newValue}`;
-          if (entry.field_name === 'Task check-in') message = 'checked in to this task';
-          if (entry.field_name === 'Task check-out') message = 'checked out of this task';
-          const difference = entry.field_name === 'Description' ? `<button type="button" class="link-btn task-difference-toggle" data-history-index="${activityIndex}">Show difference</button><div class="task-difference hidden" data-history-panel="${activityIndex}"><div class="task-history-old"><b>Old:</b> ${oldValue}</div><div class="task-history-new"><b>New:</b> ${newValue}</div></div>` : '';
-          return `<div class="activity-group-entry task-activity-change"><b>${actor}</b> ${message}${entryIndex === 0 ? ` <span class="activity-inline-time">· ${escapeHtml(timestamp)}</span>` : ''}${difference}</div>`;
+      const renderGroups = (entries, renderEntry) => {
+        const groupedActivity = new Map();
+        entries.forEach(entry => {
+          const timestamp = fmtDateTime(entry.created_at);
+          if (!groupedActivity.has(timestamp)) groupedActivity.set(timestamp, []);
+          groupedActivity.get(timestamp).push(entry);
+        });
+        return Array.from(groupedActivity.entries()).reverse().map(([timestamp, groupEntries], groupIndex) => {
+          const contents = groupEntries.map((entry, entryIndex) => renderEntry(entry, entryIndex, timestamp, `${groupIndex}-${entryIndex}`)).join('');
+          return `<div class="task-activity-group">${contents}</div>`;
         }).join('');
-        return `<div class="task-activity-group">${contents}</div>`;
-      }).join('');
-      activityContainer.innerHTML = `${activityHasMore ? '<button type="button" id="task-activity-load-more" class="link-btn">Load older activity</button>' : ''}${html || '<div class="hint">No activity yet.</div>'}<div id="task-activity-error" class="form-error"></div>`;
+      };
+      const commentsHtml = renderGroups(activityItems.filter(entry => entry.activity_type === 'comment'), (entry, entryIndex, timestamp) => `
+        <div class="activity-group-entry comment" data-comment-id="${entry.id}">
+          <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b>${entryIndex === 0 ? ` <span class="activity-inline-time">· ${escapeHtml(timestamp)}</span>` : ''}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
+          <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
+          ${renderCommentAttachment(entry)}
+        </div>`);
+      const historyHtml = renderGroups(activityItems.filter(entry => entry.activity_type !== 'comment'), (entry, entryIndex, timestamp, activityIndex) => {
+        const actor = escapeHtml(entry.actor_name || entry.author_name || (String(entry.field_name || '').startsWith('Asana:') ? 'Unknown Asana user' : 'Unknown user'));
+        const oldValue = escapeHtml(entry.old_value || '(empty)');
+        const newValue = escapeHtml(entry.new_value || '(empty)');
+        let message = entry.field_name === 'Task created' ? 'created this task' : `changed the ${String(entry.field_name || 'activity').toLowerCase()}`;
+        if (entry.field_name === 'Assignee') message = `reassigned this task from ${oldValue} to ${newValue}`;
+        if (entry.field_name === 'Due date') message = `changed the due date from ${oldValue} to ${newValue}`;
+        if (entry.field_name === 'Task check-in') message = 'checked in to this task';
+        if (entry.field_name === 'Task check-out') message = 'checked out of this task';
+        const difference = entry.field_name === 'Description' ? `<button type="button" class="link-btn task-difference-toggle" data-history-index="${activityIndex}">Show difference</button><div class="task-difference hidden" data-history-panel="${activityIndex}"><div class="task-history-old"><b>Old:</b> ${oldValue}</div><div class="task-history-new"><b>New:</b> ${newValue}</div></div>` : '';
+        return `<div class="activity-group-entry task-activity-change"><b>${actor}</b> ${message}${entryIndex === 0 ? ` <span class="activity-inline-time">· ${escapeHtml(timestamp)}</span>` : ''}${difference}</div>`;
+      });
+      activityContainer.innerHTML = commentsHtml || '<div class="hint">No comments yet.</div>';
+      historyContainer.innerHTML = `${activityHasMore ? '<button type="button" id="task-activity-load-more" class="link-btn">Load older activity</button>' : ''}${historyHtml || '<div class="hint">No task history yet.</div>'}<div id="task-activity-error" class="form-error"></div>`;
       bindActivityActions();
       const loadOlderButton = $('#task-activity-load-more');
       if (loadOlderButton) loadOlderButton.onclick = async () => {
@@ -2001,20 +2218,21 @@ async function openTaskDrawer(taskId) {
         }
       };
     };
-    activityContainer.innerHTML = '<div class="hint">Loading recent activity...</div>';
+    activityContainer.innerHTML = '<div class="hint">Loading comments...</div>';
+    historyContainer.innerHTML = '<div class="hint">Loading task history...</div>';
     activityPagePromise.then(page => {
       if (activeTaskDrawerController !== controller) return;
       if (page.error) {
-        activityContainer.innerHTML = `<div class="form-error">Unable to load activity: ${escapeHtml(page.error.message)}</div><button type="button" id="task-activity-retry" class="link-btn">Retry</button>`;
+        historyContainer.innerHTML = `<div class="form-error">Unable to load activity: ${escapeHtml(page.error.message)}</div><button type="button" id="task-activity-retry" class="link-btn">Retry</button>`;
         $('#task-activity-retry').onclick = () => {
-          activityContainer.innerHTML = '<div class="hint">Loading recent activity...</div>';
+          historyContainer.innerHTML = '<div class="hint">Loading task history...</div>';
           api(`/tasks/${taskId}/activity?limit=15&offset=0`, { signal: controller.signal }).then(nextPage => {
             if (activeTaskDrawerController !== controller) return;
             activityItems.push(...nextPage.items);
             activityOffset = nextPage.next_offset;
             activityHasMore = nextPage.has_more;
             renderActivity();
-          }).catch(error => { activityContainer.innerHTML = `<div class="form-error">Unable to load activity: ${escapeHtml(error.message)}</div>`; });
+          }).catch(error => { historyContainer.innerHTML = `<div class="form-error">Unable to load activity: ${escapeHtml(error.message)}</div>`; });
         };
         return;
       }
@@ -2144,9 +2362,9 @@ async function openTaskDrawer(taskId) {
       if (task.work_mode !== 'on_field' || !currentCheckin) {
         checkinControls.innerHTML = task.work_mode === 'on_field' ? '<div class="hint">You are not required to check in/out for this task.</div>' : '';
       } else if (!currentCheckin.check_in_at || currentCheckin.check_out_at) {
-        checkinControls.innerHTML = `<button class="btn btn-secondary btn-block" id="btn-task-check-in">📍 ${Number(task.assignee_id) === Number(ME?.id) ? 'Check in to task' : 'Take task & check in'}</button>`;
+        checkinControls.innerHTML = `<button class="btn btn-secondary btn-block" id="btn-task-check-in">${icon('pin')} ${Number(task.assignee_id) === Number(ME?.id) ? 'Check in to task' : 'Take task & check in'}</button>`;
       } else if (!currentCheckin.check_out_at) {
-        checkinControls.innerHTML = `<div class="hint">Checked in at ${escapeHtml(fmtDateTime(currentCheckin.check_in_at))}</div><button class="btn btn-secondary btn-block" id="btn-task-check-out">📍 Check out of task</button>`;
+        checkinControls.innerHTML = `<div class="hint">Checked in at ${escapeHtml(fmtDateTime(currentCheckin.check_in_at))}</div><button class="btn btn-secondary btn-block" id="btn-task-check-out">${icon('pin')} Check out of task</button>`;
       }
       if (taskActionsLocked) {
         checkinControls.insertAdjacentHTML('afterbegin', '<div class="hint">Check in to unlock task editing and comments. You may reassign this task before checking in.</div>');
@@ -2160,7 +2378,7 @@ async function openTaskDrawer(taskId) {
           await api(`/tasks/${taskId}/${path}`, { method: 'POST', body: coords });
           await renderTasks();
           await openTaskDrawer(taskId);
-        } catch (error) { alert(error.message); }
+        } catch (error) { showAppNotification(error.message); }
       };
       if (checkInButton) checkInButton.onclick = () => recordTaskLocation('check-in', 'Task check-in recorded.');
       if (checkOutButton) checkOutButton.onclick = () => recordTaskLocation('check-out', 'Task check-out recorded.');
@@ -2190,11 +2408,11 @@ async function openTaskDrawer(taskId) {
         if (!isCompleted && /billing details/i.test(error.message)) {
           const billingError = $('#drawer-billing-error');
           if (billingError) { billingError.textContent = error.message; billingError.classList.remove('hidden'); }
-        } else alert(error.message);
+        } else showAppNotification(error.message);
       }
     };
     $('#btn-delete-task').onclick = async () => {
-      if (!confirm('Delete this task permanently?')) return;
+      if (!await confirmModal('Delete task?', 'Delete this task permanently?')) return;
       await api(`/tasks/${taskId}`, { method: 'DELETE' });
       closeDrawer();
       renderTasks();
@@ -2345,7 +2563,7 @@ async function openTaskDrawer(taskId) {
           filePreview.classList.remove('hidden');
         }
         autoGrowComment();
-        alert(error.message);
+        showAppNotification(`Attendance update failed: ${error.message}`);
       } finally {
         if (postButton) postButton.disabled = false;
       }
@@ -2427,13 +2645,16 @@ async function renderMyTasks() {
   if (!list) return;
   try {
     const tasks = await api('/my-tasks');
-    list.innerHTML = tasks.length ? tasks.map(task => `
-      <tr class="my-task-row" data-task-id="${task.id}">
-        <td><button class="row-complete" data-task-id="${task.id}" title="Complete task">✓</button></td>
-        <td><b>${escapeHtml(task.title)}</b></td>
-        <td>${escapeHtml(task.project_name)}</td>
-        <td>${escapeHtml(task.due_date || '—')}</td>
-      </tr>`).join('') : '<tr><td colspan="4" class="hint" style="padding:15px;">No open tasks assigned to you.</td></tr>';
+    list.innerHTML = tasks.length ? tasks.map(task => {
+      const due = getDueState(task.due_date);
+      return `
+      <tr class="my-task-row" data-task-id="${task.id}" tabindex="0" aria-label="Open task: ${escapeHtml(task.title)}">
+        <td data-label="Complete"><button class="row-complete" data-task-id="${task.id}" title="Complete task" aria-label="Complete task">${icon('check')}</button></td>
+        <td data-label="Task"><span class="task-mobile-label">Task</span><b>${escapeHtml(task.title)}</b></td>
+        <td data-label="Project"><span class="task-mobile-label">Project</span>${escapeHtml(task.project_name)}</td>
+        <td data-label="Due"><span class="task-mobile-label">Due</span><span class="chip ${due.className}">${escapeHtml(due.label)}</span></td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="4"><div class="empty-state">${icon('check')}<b>All caught up</b><p>No open tasks are assigned to you.</p></div></td></tr>`;
     $$('.my-task-row .row-complete').forEach(button => {
       button.onclick = async (event) => {
         event.stopPropagation();
@@ -2444,6 +2665,12 @@ async function renderMyTasks() {
     $$('.my-task-row').forEach(row => {
       row.onclick = (event) => {
         if (!event.target.closest('.row-complete')) openTaskDrawer(Number(row.dataset.taskId));
+      };
+      row.onkeydown = event => {
+        if (event.target === row && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          openTaskDrawer(Number(row.dataset.taskId));
+        }
       };
     });
   } catch (err) {
@@ -2465,7 +2692,6 @@ function getLiveCoords() {
       { enableHighAccuracy: true, timeout: 10000 }
     );
     if (!navigator.permissions?.query) {
-      alert('TaskFlow needs your location to record attendance. Please allow location when your browser asks.');
       return requestLocation();
     }
     navigator.permissions.query({ name: 'geolocation' }).then(permission => {
@@ -2473,7 +2699,6 @@ function getLiveCoords() {
         reject(new Error('Location permission is blocked. Enable Location for this browser in phone settings, then try again.'));
         return;
       }
-      if (permission.state === 'prompt') alert('TaskFlow needs your location to record attendance. Tap Allow when your browser asks.');
       requestLocation();
     }).catch(requestLocation);
   });
@@ -2494,11 +2719,53 @@ async function verifyAttendanceIfRequired(action) {
       allowDeviceCredential: false,
       iosFallbackTitle: ''
     });
-    return true;
   } catch (error) {
     throw new Error('Biometric verification failed. Punch ' + action + ' was not recorded.');
   }
-  const password = prompt('Re-enter your TaskFlow password to verify this punch.');
+  const password = await new Promise(resolve => {
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      modalCloseHandler = null;
+      closeModal();
+      resolve(value);
+    };
+    showModal(`
+      <h3>Verify attendance</h3>
+      <p class="hint">Re-enter your TaskFlow password to verify this punch.</p>
+      <label class="field-block" for="attendance-verification-password">Password
+        <input id="attendance-verification-password" type="password" autocomplete="current-password" required>
+      </label>
+      <p id="attendance-verification-error" class="form-error" role="alert"></p>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="attendance-verification-cancel" type="button">Cancel</button>
+        <button class="btn btn-primary" id="attendance-verification-submit" type="button">Verify</button>
+      </div>`);
+    const input = $('#attendance-verification-password');
+    const submit = () => {
+      const value = input.value;
+      if (!value) {
+        $('#attendance-verification-error').textContent = 'Enter your password to continue.';
+        input.focus();
+        return;
+      }
+      finish(value);
+    };
+    $('#attendance-verification-submit').onclick = submit;
+    $('#attendance-verification-cancel').onclick = closeModal;
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        submit();
+      }
+    });
+    modalCloseHandler = () => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+    };
+  });
   if (!password) throw new Error('Password verification is required. Punch ' + action + ' was not recorded.');
   return password;
 }
@@ -2568,41 +2835,54 @@ async function renderPunchCard() {
       card.innerHTML = `<div class="admin-block attendance-phone-only"><b>This account is registered to ${escapeHtml(registration.device_name || 'another device')}</b><p class="hint">Punching from this browser is blocked. Ask an administrator to reset your registered device.</p></div>`;
       return;
     }
-    const registeredDeviceSummary = registration.registered
-      ? `<div class="attendance-registered-device"><span>Registered device</span><b>${escapeHtml(registration.device_name)}</b></div>`
-      : '<div class="attendance-registered-device"><span>Device reset by administrator.</span><b>This browser will be bound automatically when you punch.</b></div>';
-    card.innerHTML = registeredDeviceSummary;
-    card.insertAdjacentHTML('beforeend', '<p class="hint">GPS location is indicative only and can be spoofed; it is not proof of physical presence.</p>');
-    if (!status) {
-      card.insertAdjacentHTML('beforeend', `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`);
-      $('#btn-punch-in').onclick = async () => {
-        try {
-          const verificationPassword = await verifyAttendanceIfRequired('in');
-          const coords = await getLiveCoords();
-          const devicePayload = await getPunchDevicePayload();
-          await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload, verification_password: verificationPassword } });
-          reloadWithActionMessage('attendance', 'Punched in successfully.');
-        } catch (err) { alert(err.message); }
-      };
-    } else if (!status.punch_in) {
-      card.insertAdjacentHTML('beforeend', `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`);
-      $('#btn-punch-in').onclick = async () => {
-        try {
-          const verificationPassword = await verifyAttendanceIfRequired('in');
-          const coords = await getLiveCoords();
-          const devicePayload = await getPunchDevicePayload();
-          await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload, verification_password: verificationPassword } });
-          reloadWithActionMessage('attendance', 'Punched in successfully.');
-        } catch (err) { alert(err.message); }
-      };
-    } else if (status.punch_in && !status.punch_out) {
-      startLiveTracking();
-      card.insertAdjacentHTML('beforeend', `
-        <div class="status-alert" style="background:#e3f2fd; color:#0d47a1; padding:12px; border-radius:4px; margin-bottom:10px; font-weight:bold; text-align:center;">
-          ⚡ On-Duty Since: ${fmtTime(status.punch_in)}<br><small>📍 Live location active</small>
+    const onShift = Boolean(status?.punch_in && !status.punch_out);
+    const shiftComplete = Boolean(status?.punch_in && status.punch_out);
+    const shiftLabel = onShift ? 'On shift' : shiftComplete ? 'Done for today' : 'Not started';
+    const shiftClass = onShift ? 'chip-success' : shiftComplete ? 'chip-neutral' : 'chip-warning';
+    const deviceSummary = registration.registered
+      ? `<div><span>Registered device</span><b>${escapeHtml(registration.device_name)}</b></div>`
+      : '<div><span>Device</span><b>Will be registered when you punch in</b></div>';
+    const todayLabel = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date());
+    const startTime = status?.punch_in ? fmtTime(status.punch_in) : '—';
+    const endTime = status?.punch_out ? fmtTime(status.punch_out) : '—';
+    card.innerHTML = `
+      <section class="attendance-shift-card ${onShift ? 'is-on-shift' : ''}">
+        <div class="attendance-shift-heading">
+          <div><span class="eyebrow">${escapeHtml(todayLabel)}</span><time id="attendance-live-clock"></time></div>
+          <span class="chip ${shiftClass}"><span class="attendance-status-dot"></span>${shiftLabel}</span>
         </div>
-        <button class="btn btn-danger btn-lg" id="btn-punch-out" style="width:100%; padding:15px; font-size:18px;">🏁 Punch Out Field Shift</button>`);
+        <div class="attendance-shift-action">
+          <p>${onShift ? 'Your shift is in progress.' : shiftComplete ? 'Your shift is complete for today.' : 'Ready when you are.'}</p>
+          <div id="attendance-action-region"></div>
+        </div>
+        <div class="attendance-shift-details">
+          <div><span>Shift started</span><b>${escapeHtml(startTime)}</b></div>
+          <div><span>Shift ended</span><b>${escapeHtml(endTime)}</b></div>
+          <div><span>Time on shift</span><b id="attendance-shift-duration">${onShift ? 'Calculating…' : shiftComplete ? `${startTime} – ${endTime}` : '—'}</b></div>
+          ${deviceSummary}
+        </div>
+        <p class="attendance-location-note">${icon('pin')} GPS location is an indicative reference only and can be spoofed; it does not prove physical presence.</p>
+      </section>`;
+    const updateClock = () => {
+      const clock = $('#attendance-live-clock');
+      if (clock) clock.textContent = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date());
+      const duration = $('#attendance-shift-duration');
+      if (duration && onShift) {
+        const startedAt = parseTaskFlowTimestamp(status.punch_in).getTime();
+        const elapsedMinutes = Number.isFinite(startedAt) ? Math.max(0, Math.floor((Date.now() - startedAt) / 60000)) : 0;
+        duration.textContent = `${Math.floor(elapsedMinutes / 60)}h ${String(elapsedMinutes % 60).padStart(2, '0')}m`;
+      }
+    };
+    stopAttendanceClock();
+    updateClock();
+    attendanceClockTimer = setInterval(updateClock, 1000);
+    const actionRegion = $('#attendance-action-region');
+    if (onShift) {
+      startLiveTracking();
+      actionRegion.innerHTML = `<button class="btn btn-danger attendance-punch-action" id="btn-punch-out" type="button">${icon('clock')} Punch out</button>`;
       $('#btn-punch-out').onclick = async () => {
+        const button = $('#btn-punch-out');
+        button.disabled = true;
         try {
           const verificationPassword = await verifyAttendanceIfRequired('out');
           const coords = await getLiveCoords();
@@ -2610,17 +2890,35 @@ async function renderPunchCard() {
           await api('/attendance/punch-out', { method: 'POST', body: { ...coords, ...devicePayload, verification_password: verificationPassword } });
           stopLiveTracking();
           reloadWithActionMessage('attendance', 'Punched out successfully.');
-        } catch (err) { alert(err.message); }
+        } catch (error) {
+          showAppNotification(`Punch out failed: ${error.message}`);
+          button.disabled = false;
+        }
+      };
+    } else if (!shiftComplete) {
+      stopLiveTracking();
+      actionRegion.innerHTML = `<button class="btn btn-primary attendance-punch-action" id="btn-punch-in" type="button">${icon('clock')} Punch in</button>`;
+      $('#btn-punch-in').onclick = async () => {
+        const button = $('#btn-punch-in');
+        button.disabled = true;
+        try {
+          const verificationPassword = await verifyAttendanceIfRequired('in');
+          const coords = await getLiveCoords();
+          const devicePayload = await getPunchDevicePayload();
+          await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload, verification_password: verificationPassword } });
+          reloadWithActionMessage('attendance', 'Punched in successfully.');
+        } catch (error) {
+          showAppNotification(`Punch in failed: ${error.message}`);
+          button.disabled = false;
+        }
       };
     } else {
       stopLiveTracking();
-      card.insertAdjacentHTML('beforeend', `
-        <div class="status-complete" style="background:#e8f5e9; color:#1b5e20; padding:15px; border-radius:4px; font-weight:bold; text-align:center;">
-          ✅ Today's Shift Completed (${fmtTime(status.punch_in)} - ${fmtTime(status.punch_out)})
-        </div>`);
+      actionRegion.innerHTML = `<div class="attendance-complete-note">${icon('check')} Shift complete · ${escapeHtml(startTime)} – ${escapeHtml(endTime)}</div>`;
     }
   } catch (err) {
-    card.innerHTML = `<div class="form-error">Failed to sync tracker parameters: ${err.message}</div>`;
+    stopAttendanceClock();
+    card.innerHTML = `<div class="form-error" role="alert">Unable to load attendance: ${escapeHtml(err.message)}</div>`;
   }
 }
 
@@ -2635,10 +2933,10 @@ async function renderLiveList() {
       return;
     }
     list.innerHTML = rows.map(r => `
-      <tr style="border-bottom: 1px solid #eee;">
-        <td style="padding:10px;"><b>${escapeHtml(r.user_name || r.USER_NAME)}</b></td>
-        <td style="padding:10px;">${fmtTime(r.punch_in || r.PUNCH_IN)}</td>
-        <td style="padding:10px;"><a href="https://www.google.com/maps?q=${r.in_lat || r.IN_LAT},${r.in_lng || r.IN_LNG}" target="_blank" class="map-link" style="color:#007bff; text-decoration:none; font-weight:bold;">🗺️ View Live Site</a><button class="link-btn live-timeline-btn" data-user-id="${r.user_id || r.USER_ID}" data-user-name="${escapeHtml(r.user_name || r.USER_NAME)}" style="display:block; margin-top:6px;">View timeline</button></td>
+      <tr>
+        <td data-label="Employee"><b>${escapeHtml(r.user_name || r.USER_NAME)}</b></td>
+        <td data-label="Punch in">${fmtTime(r.punch_in || r.PUNCH_IN)}</td>
+        <td data-label="Location"><a href="https://www.google.com/maps?q=${r.in_lat || r.IN_LAT},${r.in_lng || r.IN_LNG}" target="_blank" rel="noopener" class="map-link">${icon('pin')} View live site</a><button class="link-btn live-timeline-btn" data-user-id="${r.user_id || r.USER_ID}" data-user-name="${escapeHtml(r.user_name || r.USER_NAME)}">View timeline</button></td>
       </tr>
     `).join('');
     $$('.live-timeline-btn').forEach(button => {
@@ -2647,10 +2945,12 @@ async function renderLiveList() {
           const timeline = await api(`/attendance/live/${button.dataset.userId}/timeline`);
           showModal(`<h3>Location timeline: ${escapeHtml(button.dataset.userName)}</h3>${timeline.length ? `<div class="location-timeline">${timeline.map((point, index) => `<div class="location-timeline-item"><b>${index + 1}. ${escapeHtml(fmtDateTime(point.recorded_at))}</b><span>${Number(point.latitude).toFixed(6)}, ${Number(point.longitude).toFixed(6)}</span><a href="https://www.google.com/maps?q=${point.latitude},${point.longitude}" target="_blank" rel="noopener">Open map</a></div>`).join('')}</div>` : '<p class="hint">No live location points recorded yet.</p>'}<div class="modal-actions"><button class="btn btn-primary" id="location-timeline-close">Close</button></div>`);
           $('#location-timeline-close')?.addEventListener('click', closeModal);
-        } catch (error) { alert(error.message); }
+        } catch (error) { showAppNotification(error.message); }
       };
     });
-  } catch (err) { console.error(err); }
+  } catch (error) {
+    list.innerHTML = `<tr><td colspan="3" class="form-error" role="alert">Live attendance unavailable: ${escapeHtml(error.message)}</td></tr>`;
+  }
 }
 
 async function renderHistory() {
@@ -2673,25 +2973,27 @@ async function renderHistory() {
       const inMapUrl = inLat ? `https://www.google.com/maps?q=${inLat},${inLng}` : null;
       const outMapUrl = outLat ? `https://www.google.com/maps?q=${outLat},${outLng}` : null;
       return `
-      <tr style="border-bottom: 1px solid #eee;">
-        <td style="padding:10px;">${fmtDate(r.date || r.DATE)}</td>
-        <td style="padding:10px;"><span class="tag ${present ? 'attendance-present' : 'attendance-absent'}">${present ? 'Present' : 'Not present'}</span></td>
-        <td style="padding:10px; color:green;">${fmtTime(r.punch_in || r.PUNCH_IN) || '--'}</td>
-        <td style="padding:10px;">${escapeHtml(r.in_device_info || r.in_device_type || '--')}</td>
-        <td style="padding:10px; color:red;">${fmtTime(r.punch_out || r.PUNCH_OUT) || '--'}</td>
-        <td style="padding:10px;">${escapeHtml(r.out_device_info || r.out_device_type || '--')}</td>
-        <td style="padding:10px;">
+      <tr>
+        <td data-label="Date">${fmtDate(r.date || r.DATE)}</td>
+        <td data-label="Status"><span class="chip ${present ? 'chip-success' : 'chip-neutral'}">${present ? 'Present' : 'Not present'}</span></td>
+        <td data-label="Punch in">${fmtTime(r.punch_in || r.PUNCH_IN) || '--'}</td>
+        <td data-label="In device">${escapeHtml(r.in_device_info || r.in_device_type || '--')}</td>
+        <td data-label="Punch out">${fmtTime(r.punch_out || r.PUNCH_OUT) || '--'}</td>
+        <td data-label="Out device">${escapeHtml(r.out_device_info || r.out_device_type || '--')}</td>
+        <td data-label="Location">
           <small style="display:block; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#555;" title="${escapeHtml(r.location_status || r.LOCATION_STATUS || '')}">
             ${escapeHtml(r.location_status || r.LOCATION_STATUS || '')}
           </small>
           <div class="row-actions" style="margin-top:6px;">
-            ${inMapUrl ? `<a href="${inMapUrl}" target="_blank" style="font-size:12px; margin-right:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 In Pin</a>` : ''}
-            ${outMapUrl ? `<a href="${outMapUrl}" target="_blank" style="font-size:12px; color:#007bff; text-decoration:none; font-weight:bold;">📍 Out Pin</a>` : ''}
+            ${inMapUrl ? `<a href="${inMapUrl}" target="_blank" rel="noopener" class="map-link">${icon('pin')} In</a>` : ''}
+            ${outMapUrl ? `<a href="${outMapUrl}" target="_blank" rel="noopener" class="map-link">${icon('pin')} Out</a>` : ''}
           </div>
         </td>
       </tr>`;
     }).join('');
-  } catch (err) { console.error(err); }
+  } catch (error) {
+    table.innerHTML = `<tr><td colspan="7" class="form-error" role="alert">Attendance history unavailable: ${escapeHtml(error.message)}</td></tr>`;
+  }
 }
 
 async function renderTracking() {
@@ -2923,6 +3225,65 @@ async function renderAdmin() {
           <tbody id="admin-employees-table-body"></tbody>
         </table>
       </div>`;
+
+    const adminBlocks = Array.from(wrap.querySelectorAll(':scope > .admin-block'));
+    const adminTabDefinitions = [
+      { id: 'people', label: 'People & access', matches: /Departments|Reimbursement approval|Live tracking|Task check-in|Task work location|Payment History|Team members/i },
+      { id: 'attendance', label: 'Attendance', matches: /Office location|Data retention|Attendance device/i },
+      { id: 'workspace', label: 'Workspace', matches: /Project data|Project and task permissions|Activity log/i }
+    ];
+    const adminTabs = document.createElement('div');
+    adminTabs.className = 'admin-tabs';
+    adminTabs.setAttribute('role', 'tablist');
+    adminTabs.setAttribute('aria-label', 'Administrator settings');
+    adminTabs.innerHTML = adminTabDefinitions.map((tab, index) => `
+      <button class="admin-tab" id="admin-tab-${tab.id}" type="button" role="tab"
+        aria-controls="admin-panel-${tab.id}" aria-selected="${index === 0}" tabindex="${index === 0 ? '0' : '-1'}">${tab.label}</button>`).join('');
+    const adminPanels = adminTabDefinitions.map((tab, index) => {
+      const panel = document.createElement('section');
+      panel.className = 'admin-tab-panel';
+      panel.id = `admin-panel-${tab.id}`;
+      panel.setAttribute('role', 'tabpanel');
+      panel.setAttribute('aria-labelledby', `admin-tab-${tab.id}`);
+      panel.tabIndex = 0;
+      panel.hidden = index !== 0;
+      return panel;
+    });
+    const adminFirstBlock = adminBlocks[0];
+    if (adminFirstBlock) {
+      wrap.insertBefore(adminTabs, adminFirstBlock);
+      adminPanels.forEach(panel => wrap.insertBefore(panel, adminFirstBlock));
+    }
+    adminBlocks.forEach(block => {
+      const title = block.querySelector('h3')?.textContent || '';
+      const matchingTab = adminTabDefinitions.find(tab => tab.matches.test(title));
+      const panel = adminPanels.find(candidate => candidate.id === `admin-panel-${matchingTab?.id}`);
+      if (panel) panel.appendChild(block);
+    });
+    const activateAdminTab = selected => {
+      adminTabDefinitions.forEach(tab => {
+        const button = $(`#admin-tab-${tab.id}`);
+        const panel = $(`#admin-panel-${tab.id}`);
+        const active = tab.id === selected;
+        button.setAttribute('aria-selected', String(active));
+        button.tabIndex = active ? 0 : -1;
+        panel.hidden = !active;
+      });
+    };
+    adminTabDefinitions.forEach((tab, index) => {
+      const button = $(`#admin-tab-${tab.id}`);
+      button.addEventListener('click', () => activateAdminTab(tab.id));
+      button.addEventListener('keydown', event => {
+        const nextIndex = event.key === 'ArrowRight' ? (index + 1) % adminTabDefinitions.length
+          : event.key === 'ArrowLeft' ? (index + adminTabDefinitions.length - 1) % adminTabDefinitions.length
+            : event.key === 'Home' ? 0 : event.key === 'End' ? adminTabDefinitions.length - 1 : -1;
+        if (nextIndex < 0) return;
+        event.preventDefault();
+        const next = adminTabDefinitions[nextIndex];
+        activateAdminTab(next.id);
+        $(`#admin-tab-${next.id}`).focus();
+      });
+    });
 
     const dataToolsStatus = $('#project-data-tools-status');
     const dataToolsProgress = $('#project-data-tools-progress');
@@ -3346,7 +3707,7 @@ async function renderAdmin() {
         try {
           await api(`/task-checkin-access/${checkbox.dataset.taskCheckinUser}`, { method: 'PUT', body: { enabled: checkbox.checked } });
           showAppNotification('Task check-in access updated.');
-        } catch (error) { checkbox.checked = !checkbox.checked; alert(error.message); }
+        } catch (error) { checkbox.checked = !checkbox.checked; showAppNotification(error.message); }
       };
     });
     const taskWorkModeAccessList = $('#task-work-mode-access-list');
@@ -3361,7 +3722,7 @@ async function renderAdmin() {
         try {
           await api(`/task-work-mode-access/${checkbox.dataset.taskWorkModeUser}`, { method: 'PUT', body: { enabled: checkbox.checked } });
           showAppNotification('Task work location access updated.');
-        } catch (error) { checkbox.checked = !checkbox.checked; alert(error.message); }
+        } catch (error) { checkbox.checked = !checkbox.checked; showAppNotification(error.message); }
       };
     });
     const projectActionList = $('#project-action-access-list');
@@ -3382,7 +3743,7 @@ async function renderAdmin() {
         try {
           await api(`/project-action-access/${userId}`, { method: 'PUT', body });
           showAppNotification('Project and task permissions updated.');
-        } catch (error) { alert(error.message); }
+        } catch (error) { showAppNotification(error.message); }
       };
     });
     const deviceAccessList = $('#attendance-device-access-list');
@@ -3414,7 +3775,7 @@ async function renderAdmin() {
         try {
           await api(`/attendance/device-access/${userId}`, { method: 'PUT', body: { allow_phone: phone.checked, allow_laptop: laptop.checked } });
           showAppNotification('Attendance device access updated.');
-        } catch (error) { alert(error.message); }
+        } catch (error) { showAppNotification(error.message); }
       };
     });
     $$('.reset-attendance-device').forEach(button => {
@@ -3425,7 +3786,7 @@ async function renderAdmin() {
           await api(`/attendance/device-registration/${button.dataset.deviceUser}`, { method: 'DELETE' });
           showAppNotification('Device reset successfully.');
           await renderAdmin();
-        } catch (error) { alert(error.message); }
+        } catch (error) { showAppNotification(error.message); }
       };
     });
     $$('[data-payment-access-user]').forEach((checkbox) => {
@@ -3436,7 +3797,7 @@ async function renderAdmin() {
           const status = row?.querySelector('.tracking-access-status');
           if (status) { status.textContent = checkbox.checked ? 'Allowed' : 'Denied'; status.classList.toggle('allowed', checkbox.checked); status.classList.toggle('denied', !checkbox.checked); }
           showAppNotification(checkbox.checked ? 'Payment History access granted.' : 'Payment History access removed.');
-        } catch (error) { checkbox.checked = !checkbox.checked; alert(error.message); }
+        } catch (error) { checkbox.checked = !checkbox.checked; showAppNotification(error.message); }
       };
     });
     $$('[data-tracking-access-user]').forEach((checkbox) => {
@@ -3451,7 +3812,7 @@ async function renderAdmin() {
             status.classList.toggle('denied', !checkbox.checked);
           }
           showAppNotification(checkbox.checked ? 'Tracking access granted.' : 'Tracking access removed.');
-        } catch (error) { checkbox.checked = !checkbox.checked; alert(error.message); }
+        } catch (error) { checkbox.checked = !checkbox.checked; showAppNotification(error.message); }
       };
     });
 
@@ -3519,17 +3880,17 @@ async function renderAdmin() {
       try {
         await api('/auth/departments', { method: 'POST', body: { name } });
         reloadWithActionMessage('admin', 'Department added successfully.');
-      } catch (err) { alert(err.message); }
+      } catch (err) { showAppNotification(err.message); }
     };
 
     $$('[data-delete-department]').forEach((button) => {
       button.onclick = async () => {
-        if (!confirm('Delete this department? Existing employee records will keep their current text.')) return;
+        if (!await confirmModal('Delete department?', 'Existing employee records will keep their current text.')) return;
         try {
           await api(`/auth/departments/${button.dataset.deleteDepartment}`, { method: 'DELETE' });
           refreshNotificationsAfterAction();
           renderAdmin();
-        } catch (err) { alert(err.message); }
+        } catch (err) { showAppNotification(err.message); }
       };
     });
 
@@ -3539,8 +3900,8 @@ async function renderAdmin() {
       const radius = parseInt($('#admin-radius').value);
       try {
         await api('/auth/settings', { method: 'PUT', body: { office_lat: lat, office_lng: lng, office_radius_m: radius } });
-        alert('Tracking center settings saved successfully.');
-      } catch (err) { alert(err.message); }
+        showAppNotification('Tracking center settings saved successfully.');
+      } catch (err) { showAppNotification(err.message); }
     };
 
     $('#admin-retention-save').onclick = async () => {
@@ -3548,7 +3909,7 @@ async function renderAdmin() {
       const locationDays = Number($('#attendance-retention-days').value);
       if (!Number.isInteger(attachmentDays) || attachmentDays < 0 || attachmentDays > 36500
         || !Number.isInteger(locationDays) || locationDays < 1 || locationDays > 36500) {
-        return alert('Retention periods must be whole days from 0 to 36500; GPS/device retention must be at least 1 day.');
+        return showAppNotification('Retention periods must be whole days from 0 to 36500; GPS/device retention must be at least 1 day.');
       }
       try {
         await api('/auth/settings', { method: 'PUT', body: {
@@ -3556,7 +3917,7 @@ async function renderAdmin() {
           attendance_location_retention_days: locationDays
         }});
         showAppNotification('Data retention settings saved.');
-      } catch (err) { alert(err.message); }
+      } catch (err) { showAppNotification(err.message); }
     };
 
     $$('[data-verification-user]').forEach((checkbox) => {
@@ -3567,7 +3928,7 @@ async function renderAdmin() {
           showAppNotification(checkbox.checked ? 'Biometric and password verification enabled.' : 'Attendance verification disabled.');
         } catch (error) {
           checkbox.checked = !checkbox.checked;
-          alert(error.message);
+          showAppNotification(error.message);
         }
       };
     });
@@ -3579,13 +3940,13 @@ async function renderAdmin() {
       const password = $('#u-password').value.trim();
       const role = $('#u-role').value;
 
-      if (!name || !username || !password) return alert('Please complete all form fields.');
-      if (password.length < 10) return alert('Password must be at least 10 characters long.');
+      if (!name || !username || !password) return showAppNotification('Please complete all form fields.');
+      if (password.length < 10) return showAppNotification('Password must be at least 10 characters long.');
 
       try {
         await api('/auth/users', { method: 'POST', body: { name, username, password, department, role } });
         reloadWithActionMessage('admin', 'Employee added successfully.');
-      } catch (err) { alert(err.message); }
+      } catch (err) { showAppNotification(err.message); }
     };
 
 
@@ -3614,8 +3975,8 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
       <button class="btn btn-primary" id="admin-att-apply">Filter</button>
       <button class="btn btn-secondary" id="admin-att-export">Export CSV</button>
     </div>
-    <div class="task-table-wrap" style="margin-top:14px; overflow-x:auto;">
-      <table class="attn-table" style="min-width:1380px;">
+    <div class="attendance-table-wrap admin-attendance-table-wrap">
+      <table class="attn-table">
         <thead><tr><th>Employee</th><th>Department</th><th>Registered device</th><th>Date</th><th>Punch in</th><th>In device</th><th>Punch-in location (indicative)</th><th>Punch out</th><th>Out device</th><th>Punch-out location (indicative)</th><th>Action</th></tr></thead>
         <tbody id="admin-attendance-table"></tbody>
       </table>
@@ -3651,17 +4012,17 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
           ? (canAdminPunch ? `<button class="btn btn-danger btn-sm admin-punch" data-action="out" data-user-id="${row.user_id}">Punch out</button>` : '<span class="hint">Device not allowed</span>')
           : !row.punch_in ? (canAdminPunch ? `<button class="btn btn-primary btn-sm admin-punch" data-action="in" data-user-id="${row.user_id}">Punch in</button>` : '<span class="hint">Device not allowed</span>') : '<span class="hint">Complete</span>') : '<span class="hint">—</span>';
         return `<tr>
-          <td><b>${escapeHtml(name)}</b></td>
-          <td>${escapeHtml(departmentName)}</td>
-          <td>${escapeHtml(row.registered_device_name || '--')}</td>
-          <td>${escapeHtml(row.date || from)}</td>
-          <td>${fmtTime(row.punch_in) || '--'}</td>
-          <td>${escapeHtml(row.in_device_info || row.in_device_type || '--')}</td>
-          <td>${escapeHtml(row.in_location_text || (row.punch_in ? 'Location unavailable' : '--'))}</td>
-          <td>${fmtTime(row.punch_out) || '--'}</td>
-          <td>${escapeHtml(row.out_device_info || row.out_device_type || '--')}</td>
-          <td>${escapeHtml(row.out_location_text || (row.punch_out ? 'Location unavailable' : '--'))}</td>
-          <td>${action}</td>
+          <td data-label="Employee"><b>${escapeHtml(name)}</b></td>
+          <td data-label="Department">${escapeHtml(departmentName)}</td>
+          <td data-label="Registered device">${escapeHtml(row.registered_device_name || '--')}</td>
+          <td data-label="Date">${escapeHtml(row.date || from)}</td>
+          <td data-label="Punch in">${fmtTime(row.punch_in) || '--'}</td>
+          <td data-label="In device">${escapeHtml(row.in_device_info || row.in_device_type || '--')}</td>
+          <td data-label="Punch-in location">${escapeHtml(row.in_location_text || (row.punch_in ? 'Location unavailable' : '--'))}</td>
+          <td data-label="Punch out">${fmtTime(row.punch_out) || '--'}</td>
+          <td data-label="Out device">${escapeHtml(row.out_device_info || row.out_device_type || '--')}</td>
+          <td data-label="Punch-out location">${escapeHtml(row.out_location_text || (row.punch_out ? 'Location unavailable' : '--'))}</td>
+          <td data-label="Action">${action}</td>
         </tr>`;
       }).join('');
       $$('.admin-punch').forEach(button => {
@@ -3673,7 +4034,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
             });
             await renderRows();
           } catch (err) {
-            alert(err.message);
+            showAppNotification(err.message);
             button.disabled = false;
           }
         };
@@ -3838,14 +4199,14 @@ async function adminRemoveUser(userId, userName) {
     showAppNotification('User access removed; historical records were preserved.');
     await renderAdmin();
   } catch (err) {
-    alert(err.message);
+    showAppNotification(err.message);
   }
 }
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
     try {
-      const registration = await navigator.serviceWorker.register('/service-worker.js?v=20261002-4');
+      const registration = await navigator.serviceWorker.register('/service-worker.js?v=20261005-2');
       await registration.update();
     } catch (error) {
       console.warn('Service worker update failed:', error);
