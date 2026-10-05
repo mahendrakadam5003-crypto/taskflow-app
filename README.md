@@ -34,11 +34,10 @@ The admin dashboard's Turso storage quota also requires `TURSO_PLATFORM_TOKEN`. 
 ### Super-admin control panel (Phase 3)
 The separate control database stores company registry, plans, super-admin accounts and sessions, usage snapshots, backup records, billing notes, and audit entries. Configure `CONTROL_DATABASE_URL` and `CONTROL_AUTH_TOKEN` with a separate Turso database and token, then run `npm run migrate:control`. This migration is repeatable and does not move or change the existing company's database.
 
-Create the first personal super-admin account from a trusted terminal with `SUPERADMIN_NAME`, `SUPERADMIN_EMAIL`, and `SUPERADMIN_PASSWORD` set in the environment, then run `npm run superadmin:create`. Use a unique password of at least 12 characters (72 UTF-8 bytes maximum). For example, in PowerShell:
+Create the first personal super-admin account from a trusted terminal with `SUPERADMIN_USERNAME` and `SUPERADMIN_PASSWORD` set in the environment, then run `npm run superadmin:create`. `SUPERADMIN_NAME` is optional and defaults to the username. Usernames are case-insensitive. Use a unique password of at least 10 characters (72 UTF-8 bytes maximum); a longer, randomly generated password is recommended, and passwords already shared in messages should be changed. For example, in PowerShell:
 
 ```powershell
-$env:SUPERADMIN_NAME = 'Your Name'
-$env:SUPERADMIN_EMAIL = 'you@example.com'
+$env:SUPERADMIN_USERNAME = 'super admin'
 $password = Read-Host 'Choose a unique super-admin password' -AsSecureString
 $env:SUPERADMIN_PASSWORD = [System.Net.NetworkCredential]::new('', $password).Password
 npm run superadmin:create

@@ -53,7 +53,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
     const expectedColumns = {
       companies: ['id', 'code', 'name', 'owner_name', 'owner_email', 'owner_phone', 'status', 'plan_id', 'trial_ends_at', 'tenant_db_url', 'tenant_db_token_encrypted', 'notes', 'created_at'],
       plans: ['id', 'name', 'max_users', 'storage_limit_mb', 'features_json', 'price_note', 'is_active'],
-      super_admins: ['id', 'name', 'email', 'password_hash', 'token_version', 'created_at'],
+      super_admins: ['id', 'name', 'username', 'password_hash', 'token_version', 'created_at'],
       super_admin_sessions: ['sid_hash', 'super_admin_id', 'token_version', 'expires_at', 'created_at'],
       usage_snapshots: ['id', 'company_id', 'taken_at', 'user_count', 'db_bytes', 'files_bytes'],
       backups: ['id', 'company_id', 'type', 'location', 'size_bytes', 'created_at', 'status'],
@@ -67,7 +67,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       assert.deepEqual(columnResult.rows.map(column => column.name), columns, `expected columns on ${table}`);
     }
     const migrations = await client.execute('SELECT version FROM control_schema_migrations');
-    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, CURRENT_SCHEMA_VERSION]);
+    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, CURRENT_SCHEMA_VERSION]);
   } finally {
     await client.close();
   }
@@ -97,6 +97,40 @@ test('control database client requires its own remote Turso configuration', asyn
   });
   assert.equal(typeof client.execute, 'function');
   await client.close();
+});
+
+test('control schema migration preserves existing super-admin login identifiers', async () => {
+  const client = createClient({ url: 'file::memory:' });
+  try {
+    await client.execute(`CREATE TABLE control_schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    await client.execute(`CREATE TABLE super_admins (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      token_version INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    await client.execute("INSERT INTO control_schema_migrations (version) VALUES (1), (2)");
+    await client.execute({
+      sql: 'INSERT INTO super_admins (name, email, password_hash) VALUES (?, ?, ?)',
+      args: ['Existing Owner', 'owner@example.test', 'existing-hash']
+    });
+
+    assert.equal(await migrateControlDatabase(client), CURRENT_SCHEMA_VERSION);
+    const admins = await client.execute('SELECT name, username, password_hash FROM super_admins');
+    assert.deepEqual(admins.rows.map(admin => [admin.name, admin.username, admin.password_hash]), [
+      ['Existing Owner', 'owner@example.test', 'existing-hash']
+    ]);
+    const columns = await client.execute('PRAGMA table_info(super_admins)');
+    assert.ok(columns.rows.some(column => column.name === 'username'));
+    assert.ok(!columns.rows.some(column => column.name === 'email'));
+  } finally {
+    await client.close();
+  }
 });
 
 test('tenant database tokens are encrypted with authenticated encryption', () => {

@@ -125,7 +125,7 @@ loginForm.addEventListener('submit', async event => {
     await request('login', {
       method: 'POST',
       body: JSON.stringify({
-        email: formData.get('email'),
+        username: formData.get('username'),
         password: formData.get('password')
       })
     });

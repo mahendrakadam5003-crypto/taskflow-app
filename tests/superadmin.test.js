@@ -11,7 +11,7 @@ const { createInitialSuperAdmin } = require('../scripts/create-superadmin');
 
 const bootstrapEnvironment = {
   SUPERADMIN_NAME: 'First Owner',
-  SUPERADMIN_EMAIL: 'FIRST@example.test',
+  SUPERADMIN_USERNAME: ' FIRST OWNER ',
   SUPERADMIN_PASSWORD: 'First-Superadmin-Password-2026!'
 };
 
@@ -25,8 +25,8 @@ test('super-admin bootstrap creates one bcrypt-protected initial account and ref
           if (typeof statement === 'string' && statement.startsWith('SELECT COUNT')) {
             return { rows: [{ count: storedAdmin ? 1 : 0 }] };
           }
-          assert.equal(statement.sql, 'INSERT INTO super_admins (name, email, password_hash) VALUES (?, ?, ?)');
-          storedAdmin = { name: statement.args[0], email: statement.args[1], password_hash: statement.args[2] };
+          assert.equal(statement.sql, 'INSERT INTO super_admins (name, username, password_hash) VALUES (?, ?, ?)');
+          storedAdmin = { name: statement.args[0], username: statement.args[1], password_hash: statement.args[2] };
           return { rows: [] };
         },
         async commit() {},
@@ -36,7 +36,7 @@ test('super-admin bootstrap creates one bcrypt-protected initial account and ref
   };
   await createInitialSuperAdmin(bootstrapEnvironment, async () => controlDb);
   assert.equal(storedAdmin.name, 'First Owner');
-  assert.equal(storedAdmin.email, 'first@example.test');
+  assert.equal(storedAdmin.username, 'first owner');
   assert.notEqual(storedAdmin.password_hash, bootstrapEnvironment.SUPERADMIN_PASSWORD);
   assert.equal(await bcrypt.compare(bootstrapEnvironment.SUPERADMIN_PASSWORD, storedAdmin.password_hash), true);
   await assert.rejects(
@@ -53,7 +53,7 @@ test('super-admin bootstrap rejects weak or missing password before database acc
       opened = true;
       throw new Error('Database should not be opened');
     }),
-    /between 12 and 72 UTF-8 bytes/
+    /between 10 and 72 UTF-8 bytes/
   );
   assert.equal(opened, false);
 });
@@ -63,8 +63,8 @@ async function createApp() {
   await migrateControlDatabase(controlDb);
   const passwordHash = await bcrypt.hash('Superadmin-Test-Password-2026!', 4);
   await controlDb.execute({
-    sql: 'INSERT INTO super_admins (name, email, password_hash) VALUES (?, ?, ?)',
-    args: ['Test Owner', 'owner@example.test', passwordHash]
+    sql: 'INSERT INTO super_admins (name, username, password_hash) VALUES (?, ?, ?)',
+    args: ['Test Owner', 'test owner', passwordHash]
   });
   const company = await controlDb.execute({
     sql: `INSERT INTO companies (code, name, status, plan_id, tenant_db_url, tenant_db_token_encrypted)
@@ -104,20 +104,20 @@ test('super-admin login uses an isolated hashed session and protects the read-on
     const invalidLogin = await fetch(`${baseUrl}/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'owner@example.test', password: 'wrong-password' })
+      body: JSON.stringify({ username: 'test owner', password: 'wrong-password' })
     });
     assert.equal(invalidLogin.status, 401);
-    assert.deepEqual(await invalidLogin.json(), { error: 'Email or password is incorrect.' });
+    assert.deepEqual(await invalidLogin.json(), { error: 'Username or password is incorrect.' });
 
     const login = await fetch(`${baseUrl}/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'OWNER@example.test', password: 'Superadmin-Test-Password-2026!' })
+      body: JSON.stringify({ username: 'TEST OWNER', password: 'Superadmin-Test-Password-2026!' })
     });
     assert.equal(login.status, 200);
     assert.deepEqual(await login.json(), {
       authenticated: true,
-      admin: { name: 'Test Owner', email: 'owner@example.test' }
+      admin: { name: 'Test Owner', username: 'test owner' }
     });
     const cookieHeader = login.headers.get('set-cookie');
     assert.match(cookieHeader, new RegExp(`${COOKIE_NAME}=([A-Za-z0-9_-]{43})`));
@@ -129,7 +129,7 @@ test('super-admin login uses an isolated hashed session and protects the read-on
 
     const session = await fetch(`${baseUrl}/session`, { headers: { Cookie: cookieHeader.split(';')[0] } });
     assert.equal(session.status, 200);
-    assert.deepEqual((await session.json()).admin, { id: 1, name: 'Test Owner', email: 'owner@example.test' });
+    assert.deepEqual((await session.json()).admin, { id: 1, name: 'Test Owner', username: 'test owner' });
 
     const overview = await fetch(`${baseUrl}/overview`, { headers: { Cookie: cookieHeader.split(';')[0] } });
     assert.equal(overview.status, 200);
@@ -164,10 +164,10 @@ test('super-admin login rejects missing fields without establishing a session', 
     const response = await fetch(`${baseUrl}/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: '', password: '' })
+      body: JSON.stringify({ username: '', password: '' })
     });
     assert.equal(response.status, 400);
-    assert.equal((await controlDb.execute('SELECT COUNT(*) AS count FROM super_admin_sessions')).rows[0].count, 0);
+    assert.equal(Number((await controlDb.execute('SELECT COUNT(*) AS count FROM super_admin_sessions')).rows[0].count), 0);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await controlDb.close();

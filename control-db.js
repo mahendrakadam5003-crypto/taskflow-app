@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -113,6 +113,12 @@ const CONTROL_MIGRATIONS = [{
     )`,
     'CREATE INDEX IF NOT EXISTS super_admin_sessions_expires_at_idx ON super_admin_sessions(expires_at)',
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [2] }
+  ]
+}, {
+  version: 3,
+  statements: [
+    'ALTER TABLE super_admins RENAME COLUMN email TO username',
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [3] }
   ]
 }];
 

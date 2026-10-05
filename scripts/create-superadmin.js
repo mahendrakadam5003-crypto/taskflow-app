@@ -4,16 +4,16 @@ const bcrypt = require('bcryptjs');
 const { closeControlDatabase, getControlDatabase } = require('../control-db');
 
 async function createInitialSuperAdmin(environment = process.env, getDatabase = getControlDatabase) {
-  const name = String(environment.SUPERADMIN_NAME || '').trim();
-  const email = String(environment.SUPERADMIN_EMAIL || '').trim().toLowerCase();
+  const username = String(environment.SUPERADMIN_USERNAME || '').trim().toLowerCase();
+  const name = String(environment.SUPERADMIN_NAME || username).trim();
   const password = String(environment.SUPERADMIN_PASSWORD || '');
-  if (!name || name.length > 120) throw new Error('SUPERADMIN_NAME must contain 1 to 120 characters.');
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
-    throw new Error('SUPERADMIN_EMAIL must be a valid email address of at most 254 characters.');
+  if (!username || username.length > 80 || /[\u0000-\u001f\u007f]/.test(username)) {
+    throw new Error('SUPERADMIN_USERNAME must contain 1 to 80 printable characters.');
   }
+  if (!name || name.length > 120) throw new Error('SUPERADMIN_NAME must contain 1 to 120 characters.');
   const passwordBytes = Buffer.byteLength(password, 'utf8');
-  if (passwordBytes < 12 || passwordBytes > 72) {
-    throw new Error('SUPERADMIN_PASSWORD must contain between 12 and 72 UTF-8 bytes.');
+  if (passwordBytes < 10 || passwordBytes > 72) {
+    throw new Error('SUPERADMIN_PASSWORD must contain between 10 and 72 UTF-8 bytes.');
   }
 
   const controlDb = await getDatabase();
@@ -25,8 +25,8 @@ async function createInitialSuperAdmin(environment = process.env, getDatabase = 
     }
     const passwordHash = await bcrypt.hash(password, 12);
     await transaction.execute({
-      sql: 'INSERT INTO super_admins (name, email, password_hash) VALUES (?, ?, ?)',
-      args: [name, email, passwordHash]
+      sql: 'INSERT INTO super_admins (name, username, password_hash) VALUES (?, ?, ?)',
+      args: [name, username, passwordHash]
     });
     await transaction.commit();
   } catch (error) {

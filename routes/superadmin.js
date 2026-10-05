@@ -62,7 +62,7 @@ function createSuperAdminRouter({ getDatabase = getControlDatabase, secureCookie
     if (!token) return null;
     const controlDb = await getDatabase();
     const result = await controlDb.execute({
-      sql:       `SELECT a.id, a.name, a.email, a.token_version AS admin_token_version,
+      sql:             `SELECT a.id, a.name, a.username, a.token_version AS admin_token_version,
           s.token_version AS session_token_version, s.expires_at
         FROM super_admin_sessions s
         JOIN super_admins a ON a.id = s.super_admin_id
@@ -77,23 +77,23 @@ function createSuperAdminRouter({ getDatabase = getControlDatabase, secureCookie
       }
       return null;
     }
-    return { id: Number(sessionRow.id), name: sessionRow.name, email: sessionRow.email };
+    return { id: Number(sessionRow.id), name: sessionRow.name, username: sessionRow.username };
   }
 
   router.post('/login', loginLimiter, handle(async (req, res) => {
-    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase().slice(0, 254) : '';
+    const username = typeof req.body?.username === 'string' ? req.body.username.trim().toLowerCase().slice(0, 80) : '';
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
-    if (!email || !password || password.length > 1024) {
-      return res.status(400).json({ error: 'Enter your email and password.' });
+    if (!username || /[\u0000-\u001f\u007f]/.test(username) || !password || Buffer.byteLength(password, 'utf8') > 72) {
+      return res.status(400).json({ error: 'Enter your username and password.' });
     }
     const controlDb = await getDatabase();
     const result = await controlDb.execute({
-      sql: 'SELECT id, name, email, password_hash, token_version FROM super_admins WHERE lower(email) = ? LIMIT 1',
-      args: [email]
+      sql: 'SELECT id, name, username, password_hash, token_version FROM super_admins WHERE lower(username) = ? LIMIT 1',
+      args: [username]
     });
     const admin = result.rows?.[0];
     const validPassword = await bcrypt.compare(password, admin?.password_hash || DUMMY_PASSWORD_HASH);
-    if (!admin || !validPassword) return res.status(401).json({ error: 'Email or password is incorrect.' });
+    if (!admin || !validPassword) return res.status(401).json({ error: 'Username or password is incorrect.' });
 
     const token = crypto.randomBytes(32).toString('base64url');
     const now = Date.now();
@@ -114,7 +114,7 @@ function createSuperAdminRouter({ getDatabase = getControlDatabase, secureCookie
     ], 'write');
     setSessionCookie(res, token, { secureCookies });
     res.set('Cache-Control', 'no-store');
-    return res.json({ authenticated: true, admin: { name: admin.name, email: admin.email } });
+    return res.json({ authenticated: true, admin: { name: admin.name, username: admin.username } });
   }));
 
   router.get('/session', handle(async (req, res) => {
@@ -188,7 +188,7 @@ function createSuperAdminRouter({ getDatabase = getControlDatabase, secureCookie
     const latestUsage = companies.filter(company => company.userCount !== null);
     res.set('Cache-Control', 'no-store');
     return res.json({
-      admin: { name: admin.name, email: admin.email },
+      admin: { name: admin.name, username: admin.username },
       summary: {
         companyCount: companies.length,
         trialCount: statusCounts.trial || 0,
