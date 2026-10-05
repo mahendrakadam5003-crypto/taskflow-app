@@ -206,6 +206,22 @@ td { padding: 16px 18px; border-top: 1px solid var(--line); color: #d7e0eb; font
 
 .pricing-editor { margin-top: 22px; }
 .pricing-form { padding: 22px 24px; }
+.tier-editor { margin: 0 0 24px; border: 1px solid var(--line); border-radius: 10px; background: rgba(17, 29, 46, .45); }
+.tier-editor > .section-heading { align-items: flex-start; }
+.tier-editor h4, .landing-pricing-preview h4 { margin: 0 0 7px; font-size: 15px; }
+.tier-editor .section-heading .muted { margin: 0; }
+.tier-table-wrap { max-width: 100%; }
+.tier-table { min-width: 1320px; }
+.tier-table th { white-space: nowrap; }
+.tier-table td { min-width: 105px; vertical-align: top; }
+.tier-table td:first-child, .tier-table td:nth-child(7) { min-width: 145px; }
+.tier-table td:last-child { min-width: 90px; }
+.tier-table input:not([type="checkbox"]), .tier-table textarea { width: 100%; min-height: 38px; margin: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: #111d2e; color: #edf2f8; }
+.tier-table textarea { min-height: 75px; resize: vertical; }
+.tier-table input[readonly] { color: #aab8c9; background: rgba(159, 178, 204, .06); }
+.tier-table input:focus, .tier-table textarea:focus { border-color: var(--accent); outline: 2px solid rgba(69, 214, 196, .14); }
+.tier-remove-button { min-height: 36px; padding: 0 10px; }
+.tier-editor > .message { margin: 12px 16px; }
 .pricing-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 18px; }
 .pricing-form label { min-width: 0; }
 .pricing-form input:not([type="checkbox"]), .pricing-form select { width: 100%; min-height: 42px; margin-top: 7px; padding: 0 11px; border: 1px solid var(--line); border-radius: 8px; background: #111d2e; color: #edf2f8; }
@@ -215,6 +231,18 @@ td { padding: 16px 18px; border-top: 1px solid var(--line); color: #d7e0eb; font
 .pricing-preview { margin: 24px 0; padding: 0 16px 14px; border: 1px solid var(--line); border-radius: 10px; background: rgba(17, 29, 46, .55); }
 .pricing-preview .section-heading { margin: 0 -16px 12px; }
 .pricing-preview .muted { margin: 12px 0 0; }
+.pricing-preview .table-wrap table { min-width: 1080px; }
+.pricing-warning-row td { color: #ffd88a; background: rgba(160, 110, 21, .16); }
+.landing-pricing-preview { margin-top: 20px; padding: 16px; border: 1px solid var(--line); border-radius: 9px; background: rgba(23, 36, 56, .7); }
+.landing-preview-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.landing-preview-card { min-width: 0; position: relative; display: flex; flex-direction: column; gap: 8px; padding: 16px; border: 1px solid var(--line); border-radius: 9px; }
+.landing-preview-card h5 { margin: 0; font-size: 15px; }
+.landing-preview-card p, .landing-preview-card > span, .landing-preview-card > small { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.landing-preview-card > strong { font-size: 18px; }
+.landing-preview-card > strong small { color: var(--muted); font-size: 10px; font-weight: 500; }
+.landing-preview-card ul { margin: 5px 0 0; padding-left: 18px; color: #c9d5e3; font-size: 11px; line-height: 1.7; }
+.landing-preview-card .muted { margin: 5px 0 0; }
+.preview-plan-badge { align-self: flex-start; padding: 5px 8px; border-radius: 999px; background: rgba(69, 214, 196, .12); color: #9aeee2 !important; }
 .pricing-form > label { max-width: 420px; }
 .pricing-form > .form-actions { margin-top: 18px; }
 .storage-usage-content { padding: 18px 24px 24px; }
@@ -237,6 +265,9 @@ td { padding: 16px 18px; border-top: 1px solid var(--line); color: #d7e0eb; font
   .pricing-fields { grid-template-columns: 1fr; }
   .storage-usage-grid { grid-template-columns: 1fr; }
   .pricing-form { padding: 16px; }
+  .tier-editor > .section-heading { padding: 16px 12px; }
+  .tier-editor > .section-heading .button { flex: 0 0 auto; }
+  .landing-pricing-preview { padding: 12px; }
   .pricing-preview { padding-right: 10px; padding-left: 10px; }
   .pricing-preview .section-heading { margin-right: -10px; margin-left: -10px; padding: 16px 10px; }
 }

@@ -170,10 +170,16 @@
           <div class="section-heading"><div><p class="eyebrow">VERSIONED SETTINGS</p><h3 id="pricing-editor-heading">Per-seat pricing and trial policy</h3></div></div>
           <p class="footnote">Price changes create a new immutable version. Existing subscriptions retain their locked price unless you choose next-renewal pricing.</p>
           <form id="pricing-form" class="pricing-form">
+            <section class="tier-editor" aria-labelledby="pricing-tiers-heading">
+              <div class="section-heading"><div><h4 id="pricing-tiers-heading">Volume pricing tiers</h4><p class="muted">The rate applies to every seat in the selected tier. Leave the final “To seats” blank for no upper limit.</p></div><button id="pricing-add-tier" class="button button-quiet" type="button">Add tier</button></div>
+              <div class="table-wrap tier-table-wrap"><table class="tier-table">
+                <thead><tr><th scope="col">Name</th><th scope="col">From seats</th><th scope="col">To seats</th><th scope="col">Monthly / seat</th><th scope="col">Computed yearly / seat</th><th scope="col">Yearly override</th><th scope="col">Tagline</th><th scope="col">Highlights (one per line)</th><th scope="col">Action</th></tr></thead>
+                <tbody id="pricing-tier-rows"></tbody>
+              </table></div>
+              <p id="pricing-tier-error" class="message error hidden" role="alert"></p>
+            </section>
             <div class="pricing-fields">
-              <label for="pricing-monthly">Monthly price per user (Rs.)<input id="pricing-monthly" name="monthlyPrice" inputmode="decimal" required></label>
               <label for="pricing-yearly-discount">Yearly discount (%)<input id="pricing-yearly-discount" name="yearlyDiscountPct" type="number" min="0" max="100" step="0.1" required></label>
-              <label for="pricing-yearly-override">Yearly price override (Rs.)<span class="optional-label">Blank calculates from discount</span><input id="pricing-yearly-override" name="yearlyPriceOverride" inputmode="decimal"></label>
               <label for="pricing-tax">Tax / GST (%)<input id="pricing-tax" name="taxPct" type="number" min="0" max="100" step="0.1" required></label>
               <label for="pricing-currency">Currency code<input id="pricing-currency" name="currency" maxlength="3" required></label>
               <label for="pricing-symbol">Currency symbol<input id="pricing-symbol" name="currencySymbol" maxlength="8" required></label>
@@ -196,8 +202,14 @@
             <div class="pricing-preview">
               <div class="section-heading"><div><p class="eyebrow">BEFORE YOU SAVE</p><h3>Price preview</h3></div><button id="pricing-preview-button" class="button button-quiet" type="button">Refresh preview</button></div>
               <p id="pricing-preview-error" class="message error hidden" role="alert"></p>
+              <p id="pricing-tax-preview-note" class="muted"></p>
               <div id="pricing-preview-results" aria-live="polite"></div>
               <p id="pricing-affected-count" class="muted"></p>
+              <section class="landing-pricing-preview" aria-labelledby="landing-pricing-preview-heading">
+                <h4 id="landing-pricing-preview-heading">Live on landing page</h4>
+                <p class="muted">Preview of the tier names, prices, tax wording, and highlights visitors will see after saving.</p>
+                <div id="pricing-live-preview" aria-live="polite"></div>
+              </section>
             </div>
             <label for="pricing-current-password">Re-enter super-admin password to save<input id="pricing-current-password" name="currentPassword" type="password" autocomplete="current-password" required></label>
             <p id="pricing-form-error" class="message error hidden" role="alert"></p>
@@ -275,6 +287,6 @@
     </section>
     <footer>TaskFlow Control <span>•</span> Separate from your company workspace</footer>
   </main>
-  <script src="/js/superadmin.js" defer></script>
+  <script src="/js/superadmin.js?v=20261006-1" defer></script>
 </body>
 </html>

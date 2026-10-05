@@ -183,6 +183,25 @@ test('public pricing is anonymous and pricing edits require super-admin password
   assert.equal(unauthenticated.status, 401);
 
   const headers = { Cookie: `${COOKIE_NAME}=${token}`, 'Content-Type': 'application/json' };
+  const currentPricing = await fetch(`${baseUrl}/api/superadmin/pricing`, { headers });
+  assert.equal(currentPricing.status, 200);
+  const currentPricingBody = await currentPricing.json();
+  assert.deepEqual(currentPricingBody.preview.map(row => row.seats), [1, 5, 10, 11, 25, 50, 100]);
+  assert.ok(currentPricingBody.warnings.some(warning =>
+    warning.cycle === 'monthly' && warning.lowerSeats === 10 && warning.higherSeats === 11));
+
+  const preview = await fetch(`${baseUrl}/api/superadmin/pricing/preview`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(pricingTierUpdate())
+  });
+  assert.equal(preview.status, 200);
+  const previewBody = await preview.json();
+  assert.deepEqual(previewBody.preview.map(row => row.seats), [1, 5, 10, 11, 25, 50, 100]);
+  assert.equal(previewBody.preview.find(row => row.seats === 11).monthly.unitPricePaise, 19900);
+  assert.ok(previewBody.warnings.some(warning =>
+    warning.cycle === 'monthly' && warning.lowerSeats === 10 && warning.higherSeats === 11));
+
   const wrongPassword = await fetch(`${baseUrl}/api/superadmin/pricing`, {
     method: 'POST', headers, body: JSON.stringify({ ...pricingUpdate(), currentPassword: 'wrong-password' })
   });
@@ -228,5 +247,31 @@ function pricingUpdate() {
     existingPricePolicy: true,
     trialApprovalMode: 'manual',
     note: 'Manual pricing test'
+  };
+}
+
+function pricingTierUpdate() {
+  return {
+    yearlyDiscountPct: '10',
+    taxPct: '18',
+    trialDays: '7',
+    trialMaxUsers: '3',
+    trialStorageLimitMb: '1024',
+    gracePeriodDays: '3',
+    readOnlyPeriodDays: '7',
+    minSeats: '1',
+    maxSeats: '',
+    defaultStoragePerSeatMb: '',
+    currency: 'INR',
+    currencySymbol: 'Rs.',
+    taxInclusive: false,
+    prorateSeats: true,
+    seatAdditionBilling: 'immediate',
+    priceChangeScope: 'new_customers',
+    trialApprovalMode: 'manual',
+    tiers: [
+      { key: 'team', name: 'Team', minSeats: '1', maxSeats: '10', monthlyPrice: '299.00', highlights: [] },
+      { key: 'enterprise', name: 'Enterprise', minSeats: '11', maxSeats: '', monthlyPrice: '199.00', highlights: [] }
+    ]
   };
 }

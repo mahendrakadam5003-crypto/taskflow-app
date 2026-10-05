@@ -225,21 +225,159 @@ function formatPaise(value, currency) {
   return `${currency} ${new Intl.NumberFormat('en-IN').format(Number(whole))}.${fraction}`;
 }
 
-function getPricingFormData() {
+function parsePricePaise(value) {
+  const match = /^(0|[1-9]\d*)(?:\.(\d{1,2}))?$/.exec(String(value ?? '').trim());
+  if (!match) return null;
+  const paise = BigInt(match[1]) * 100n + BigInt((match[2] || '').padEnd(2, '0') || '0');
+  return paise <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(paise) : null;
+}
+
+function parseDiscountTenths(value) {
+  const match = /^(\d{1,3})(?:\.(\d))?$/.exec(String(value ?? '').trim());
+  if (!match) return null;
+  const tenths = Number(match[1]) * 10 + Number(match[2] || 0);
+  return tenths <= 1000 ? tenths : null;
+}
+
+function formatPriceInput(paise) {
+  const amount = BigInt(paise);
+  return `${amount / 100n}.${String(amount % 100n).padStart(2, '0')}`;
+}
+
+function normalizeTierKey(name) {
+  return String(name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+function defaultPricingTiers() {
+  return [
+    { key: 'team', name: 'Team', tagline: '', highlights: [], minSeats: 1, maxSeats: 10, monthlyPricePaise: 29900 },
+    { key: 'enterprise', name: 'Enterprise', tagline: '', highlights: [], minSeats: 11, maxSeats: null, monthlyPricePaise: 19900 }
+  ];
+}
+
+function collectPricingTiers() {
+  return [...document.querySelectorAll('#pricing-tier-rows tr')].map((row, index) => ({
+    key: normalizeTierKey(row.querySelector('[data-tier-name]').value) || `tier-${index + 1}`,
+    name: row.querySelector('[data-tier-name]').value.trim(),
+    minSeats: row.querySelector('[data-tier-min]').value,
+    maxSeats: row.querySelector('[data-tier-max]').value,
+    monthlyPrice: row.querySelector('[data-tier-monthly]').value.trim(),
+    yearlyPriceOverride: row.querySelector('[data-tier-yearly-override]').value.trim(),
+    tagline: row.querySelector('[data-tier-tagline]').value.trim(),
+    highlights: row.querySelector('[data-tier-highlights]').value.split(/\r?\n/).map(item => item.trim()).filter(Boolean)
+  }));
+}
+
+function validatePricingTiers(tiers) {
+  if (!Array.isArray(tiers) || tiers.length < 1 || tiers.length > 5) return 'Pricing needs between 1 and 5 tiers.';
+  const keys = new Set();
+  for (let index = 0; index < tiers.length; index += 1) {
+    const tier = tiers[index];
+    const minSeats = Number(tier.minSeats);
+    const maxSeats = tier.maxSeats === '' ? null : Number(tier.maxSeats);
+    const monthlyPricePaise = parsePricePaise(tier.monthlyPrice);
+    const name = tier.name.trim();
+    if (!name || name.length > 60 || !/^[a-z0-9][a-z0-9_-]{0,39}$/.test(tier.key)
+      || keys.has(tier.key) || tier.tagline.length > 160
+      || !Number.isSafeInteger(minSeats) || minSeats < 1
+      || (index === 0 ? minSeats !== 1 : minSeats !== Number(tiers[index - 1].maxSeats) + 1)
+      || (index < tiers.length - 1
+        ? !Number.isSafeInteger(maxSeats) || maxSeats < minSeats
+        : maxSeats !== null)
+      || monthlyPricePaise === null) {
+      return 'Check tier names, prices, and contiguous seat ranges. The first tier must start at 1 and the last tier must be unlimited.';
+    }
+    if (tier.yearlyPriceOverride && parsePricePaise(tier.yearlyPriceOverride) === null) {
+      return `Enter a valid yearly override for the ${name} tier, or leave it blank.`;
+    }
+    if (tier.highlights.length > 8 || tier.highlights.some(item => item.length > 90 || /<\/?[a-z][^>]*>/i.test(item))) {
+      return `The ${name} tier can have up to 8 plain-text highlights, each no longer than 90 characters.`;
+    }
+    keys.add(tier.key);
+  }
+  return null;
+}
+
+function calculateTierYearlyPaise(tier, discountTenths, { useOverride = true } = {}) {
+  const monthly = parsePricePaise(tier.monthlyPrice);
+  if (monthly === null) return null;
+  if (useOverride && tier.yearlyPriceOverride) return parsePricePaise(tier.yearlyPriceOverride);
+  if (discountTenths === null) return null;
+  const annual = BigInt(monthly) * 12n * BigInt(1000 - discountTenths);
+  const yearly = (annual * 2n + 1000n) / 2000n;
+  return yearly <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(yearly) : null;
+}
+
+function createTierRow(tier = {}, index = 0, count = 1) {
+  const row = document.createElement('tr');
+  row.innerHTML = `
+    <td><input data-tier-name maxlength="60" required aria-label="Tier ${index + 1} name" value="${escapeHtml(tier.name || '')}"></td>
+    <td><input data-tier-min type="number" min="1" step="1" readonly aria-label="Tier ${index + 1} starts at seat" value="${index === 0 ? 1 : escapeHtml(tier.minSeats || '')}"></td>
+    <td><input data-tier-max type="number" min="1" step="1" aria-label="Tier ${index + 1} ends at seat; blank means unlimited" value="${tier.maxSeats == null ? '' : escapeHtml(tier.maxSeats)}"></td>
+    <td><input data-tier-monthly inputmode="decimal" required aria-label="Tier ${index + 1} monthly price per seat" value="${tier.monthlyPricePaise == null ? escapeHtml(tier.monthlyPrice || '') : formatPriceInput(tier.monthlyPricePaise)}"></td>
+    <td><input data-tier-yearly-computed readonly aria-label="Tier ${index + 1} computed yearly price per seat"></td>
+    <td><input data-tier-yearly-override inputmode="decimal" aria-label="Tier ${index + 1} optional yearly price override" value="${escapeHtml(tier.yearlyPriceOverride || '')}"></td>
+    <td><input data-tier-tagline maxlength="160" aria-label="Tier ${index + 1} tagline" value="${escapeHtml(tier.tagline || '')}"></td>
+    <td><textarea data-tier-highlights rows="3" aria-label="Tier ${index + 1} highlights, one per line">${escapeHtml((tier.highlights || []).join('\n'))}</textarea></td>
+    <td><button class="button button-quiet tier-remove-button" type="button" aria-label="Remove tier ${index + 1}" ${count <= 1 ? 'disabled' : ''}>Remove</button></td>`;
+  return row;
+}
+
+function renderTierRows(tiers) {
+  const tbody = document.getElementById('pricing-tier-rows');
+  tbody.replaceChildren(...tiers.map((tier, index) => createTierRow(tier, index, tiers.length)));
+  updateTierDerivedFields();
+  updateLandingPricingPreview();
+}
+
+function updateTierDerivedFields() {
+  const rows = [...document.querySelectorAll('#pricing-tier-rows tr')];
+  rows.forEach((row, index) => {
+    const minInput = row.querySelector('[data-tier-min]');
+    if (index === 0) minInput.value = '1';
+    else {
+      const previousMax = rows[index - 1].querySelector('[data-tier-max]').value;
+      const parsedPreviousMax = Number(previousMax);
+      minInput.value = previousMax && Number.isSafeInteger(parsedPreviousMax)
+        && parsedPreviousMax < Number.MAX_SAFE_INTEGER
+        ? String(parsedPreviousMax + 1)
+        : '';
+    }
+    const yearly = calculateTierYearlyPaise({
+      monthlyPrice: row.querySelector('[data-tier-monthly]').value,
+      yearlyPriceOverride: row.querySelector('[data-tier-yearly-override]').value
+    }, parseDiscountTenths(document.getElementById('pricing-yearly-discount').value), { useOverride: false });
+    row.querySelector('[data-tier-yearly-computed]').value = yearly === null
+      ? ''
+      : formatPriceInput(yearly);
+    row.querySelector('.tier-remove-button').disabled = rows.length <= 1;
+  });
+}
+
+function getPricingFormData({ includePassword = false } = {}) {
   const form = document.getElementById('pricing-form');
   const data = Object.fromEntries(new FormData(form));
-  data.yearlyPriceOverride = '';
+  if (!includePassword) delete data.currentPassword;
+  data.tiers = collectPricingTiers();
   data.taxInclusive = document.getElementById('pricing-tax-inclusive').checked;
   data.prorateSeats = document.getElementById('pricing-prorate').checked;
   return data;
 }
 
 function populatePricingForm(pricing) {
-  const monthlyPaise = BigInt(pricing.monthlyPricePaise);
-  const monthlyPrice = `${monthlyPaise / 100n}.${String(monthlyPaise % 100n).padStart(2, '0')}`;
+  const isBackfilledStandard = pricing.tiers?.length === 1 && pricing.tiers[0].key === 'standard';
+  const useDefaults = !pricing.tiers?.length || isBackfilledStandard;
+  const tiers = useDefaults ? defaultPricingTiers() : pricing.tiers.map(tier => {
+    const expectedYearly = calculateTierYearlyPaise({
+      monthlyPrice: formatPriceInput(tier.monthlyPricePaise)
+    }, parseDiscountTenths(String(pricing.yearlyDiscountPct)));
+    return {
+      ...tier,
+      yearlyPriceOverride: expectedYearly === tier.yearlyPricePaise ? '' : formatPriceInput(tier.yearlyPricePaise)
+    };
+  });
   const values = {
-    'pricing-monthly': monthlyPrice,
-    'pricing-yearly-discount': pricing.yearlyDiscountPct,
+    'pricing-yearly-discount': useDefaults ? 10 : pricing.yearlyDiscountPct,
     'pricing-tax': pricing.taxPct,
     'pricing-currency': pricing.currency,
     'pricing-symbol': pricing.currencySymbol,
@@ -258,30 +396,76 @@ function populatePricingForm(pricing) {
   for (const [id, value] of Object.entries(values)) document.getElementById(id).value = value;
   document.getElementById('pricing-tax-inclusive').checked = pricing.taxInclusive;
   document.getElementById('pricing-prorate').checked = pricing.prorateSeats;
+  renderTierRows(tiers);
 }
 
 function renderPricingPreview(result) {
   const currency = document.getElementById('pricing-currency').value.trim().toUpperCase();
+  const warnings = result.warnings || [];
+  document.getElementById('pricing-tax-preview-note').textContent = result.taxInclusive
+    ? 'GST is included in each total.'
+    : 'GST is added to each subtotal.';
   document.getElementById('pricing-preview-results').innerHTML = `
     <div class="table-wrap"><table>
-      <thead><tr><th>Users</th><th>Monthly total</th><th>Yearly total</th></tr></thead>
+      <thead><tr><th>Seats</th><th>Tier</th><th>Monthly / seat</th><th>Monthly subtotal</th><th>GST</th><th>Monthly total</th><th>Yearly / seat</th><th>Yearly subtotal</th><th>GST</th><th>Yearly total</th></tr></thead>
       <tbody>${result.preview.map(row => `<tr>
         <td>${row.seats}</td>
+        <td>${escapeHtml(row.monthly.tierName)}</td>
+        <td>${formatPaise(row.monthly.unitPricePaise, currency)}</td>
+        <td>${formatPaise(row.monthly.subtotalPaise, currency)}</td>
+        <td>${formatPaise(row.monthly.taxPaise, currency)}</td>
         <td>${formatPaise(row.monthly.totalPaise, currency)}</td>
+        <td>${formatPaise(row.yearly.unitPricePaise, currency)}</td>
+        <td>${formatPaise(row.yearly.subtotalPaise, currency)}</td>
+        <td>${formatPaise(row.yearly.taxPaise, currency)}</td>
         <td>${formatPaise(row.yearly.totalPaise, currency)}</td>
-      </tr>`).join('')}</tbody>
+      </tr>`).join('')}
+      ${warnings.map(warning => `<tr class="pricing-warning-row"><td colspan="10">${escapeHtml(warning.cycle)}: ${warning.higherSeats} seats cost ${formatPaise(warning.higherTotalPaise, currency)}, less than ${warning.lowerSeats} seats at ${formatPaise(warning.lowerTotalPaise, currency)}. This is valid volume pricing.</td></tr>`).join('')}
+      </tbody>
     </table></div>`;
   document.getElementById('pricing-affected-count').textContent =
-    `${result.affectedExistingSubscriptions} active or past-due subscription(s) exist. Existing prices stay locked unless next-renewal pricing is selected.`;
+    `${result.affectedExistingSubscriptions} active or past-due subscription(s) keep their locked price unless next-renewal pricing is selected.`;
+}
+
+function updateLandingPricingPreview() {
+  const target = document.getElementById('pricing-live-preview');
+  if (!target) return;
+  const currency = document.getElementById('pricing-symbol').value.trim() || 'Rs.';
+  const discountTenths = parseDiscountTenths(document.getElementById('pricing-yearly-discount').value);
+  const tiers = collectPricingTiers();
+  const taxPct = document.getElementById('pricing-tax').value.trim();
+  const taxText = document.getElementById('pricing-tax-inclusive').checked
+    ? `Prices include ${escapeHtml(taxPct)}% GST`
+    : `+ ${escapeHtml(taxPct)}% GST`;
+  target.innerHTML = `<div class="landing-preview-cards">${tiers.map((tier, index) => {
+    const yearlyPaise = calculateTierYearlyPaise(tier, discountTenths);
+    const monthlyPaise = parsePricePaise(tier.monthlyPrice);
+    const yearlyMonthlyPaise = yearlyPaise === null ? null : Number((BigInt(yearlyPaise) * 2n + 12n) / 24n);
+    const range = `${escapeHtml(tier.minSeats || (index === 0 ? 1 : '—'))}${tier.maxSeats ? `–${escapeHtml(tier.maxSeats)}` : '+'} seats`;
+    const highlights = tier.highlights.length
+      ? `<ul>${tier.highlights.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+      : '<p class="muted">No highlights configured.</p>';
+    return `<article class="landing-preview-card">
+      ${index === 1 ? '<span class="preview-plan-badge">Best value for growing teams</span>' : ''}
+      <h5>${escapeHtml(tier.name || `Tier ${index + 1}`)}</h5>
+      <p>${range}</p>
+      ${tier.tagline ? `<p>${escapeHtml(tier.tagline)}</p>` : ''}
+      <strong>${monthlyPaise === null ? '—' : formatPaise(monthlyPaise, currency)} <small>/ seat / month</small></strong>
+      <span>${yearlyMonthlyPaise === null ? 'Yearly price unavailable' : `${formatPaise(yearlyMonthlyPaise, currency)} / seat / month billed yearly`}</span>
+      <small>${taxText}</small>${highlights}</article>`;
+  }).join('')}</div>`;
 }
 
 async function previewPricing() {
   const errorTarget = document.getElementById('pricing-preview-error');
   errorTarget.classList.add('hidden');
   try {
+    const body = getPricingFormData();
+    const tierError = validatePricingTiers(body.tiers);
+    if (tierError) throw new Error(tierError);
     const result = await request('pricing/preview', {
       method: 'POST',
-      body: JSON.stringify(getPricingFormData())
+      body: JSON.stringify(body)
     });
     renderPricingPreview(result);
   } catch (error) {
@@ -295,6 +479,7 @@ async function loadPricing() {
   populatePricingForm(result.pricing);
   renderPricingPreview({
     preview: result.preview,
+    warnings: result.warnings,
     affectedExistingSubscriptions: result.affectedExistingSubscriptions
   });
 }
@@ -661,8 +846,55 @@ document.getElementById('plan-form').addEventListener('submit', async event => {
 });
 
 document.getElementById('pricing-preview-button').addEventListener('click', previewPricing);
+document.getElementById('pricing-add-tier').addEventListener('click', () => {
+  const tierError = document.getElementById('pricing-tier-error');
+  const tiers = collectPricingTiers();
+  if (tiers.length >= 5) {
+    tierError.textContent = 'Pricing supports up to 5 tiers.';
+    tierError.classList.remove('hidden');
+    return;
+  }
+  const lastMax = tiers.at(-1)?.maxSeats;
+  if (!lastMax || !Number.isSafeInteger(Number(lastMax)) || Number(lastMax) >= Number.MAX_SAFE_INTEGER) {
+    tierError.textContent = 'Set a “To seats” limit for the current final tier before adding another tier.';
+    tierError.classList.remove('hidden');
+    return;
+  }
+  tiers.push({ name: '', tagline: '', highlights: [], minSeats: Number(lastMax) + 1, maxSeats: null });
+  tierError.classList.add('hidden');
+  renderTierRows(tiers);
+  document.querySelector('#pricing-tier-rows tr:last-child [data-tier-name]')?.focus();
+});
+document.getElementById('pricing-tier-rows').addEventListener('click', event => {
+  const button = event.target.closest('.tier-remove-button');
+  if (!button) return;
+  const rows = collectPricingTiers();
+  const index = [...document.querySelectorAll('#pricing-tier-rows tr')].indexOf(button.closest('tr'));
+  if (index < 0 || rows.length <= 1) return;
+  rows.splice(index, 1);
+  if (index === rows.length) rows.at(-1).maxSeats = null;
+  document.getElementById('pricing-tier-error').classList.add('hidden');
+  renderTierRows(rows);
+});
+document.getElementById('pricing-tier-rows').addEventListener('input', () => {
+  updateTierDerivedFields();
+  updateLandingPricingPreview();
+  const error = validatePricingTiers(collectPricingTiers());
+  const errorTarget = document.getElementById('pricing-tier-error');
+  errorTarget.textContent = error || '';
+  errorTarget.classList.toggle('hidden', !error);
+});
+document.getElementById('pricing-form').addEventListener('input', event => {
+  if (event.target.matches('#pricing-yearly-discount, #pricing-tax, #pricing-symbol')) {
+    updateTierDerivedFields();
+    updateLandingPricingPreview();
+  }
+});
 document.getElementById('pricing-form').addEventListener('change', event => {
-  if (event.target.id !== 'pricing-current-password') previewPricing();
+  if (event.target.id !== 'pricing-current-password') {
+    updateLandingPricingPreview();
+    previewPricing();
+  }
 });
 document.getElementById('pricing-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -671,9 +903,12 @@ document.getElementById('pricing-form').addEventListener('submit', async event =
   errorTarget.classList.add('hidden');
   successTarget.classList.add('hidden');
   try {
+    const body = getPricingFormData({ includePassword: true });
+    const tierError = validatePricingTiers(body.tiers);
+    if (tierError) throw new Error(tierError);
     await request('pricing', {
       method: 'POST',
-      body: JSON.stringify(getPricingFormData())
+      body: JSON.stringify(body)
     });
     document.getElementById('pricing-current-password').value = '';
     successTarget.textContent = 'A new pricing version has been saved.';

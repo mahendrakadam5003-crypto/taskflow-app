@@ -9,7 +9,7 @@ const { getControlDatabase } = require('../control-db');
 const { provisionCompany: defaultProvisionCompany, ProvisioningError } = require('../company-provisioning');
 const { createBackupManager } = require('../backup-manager');
 const { getPricing, savePricing, validatePricingInput } = require('../pricing-service');
-const { calculateInvoiceAmounts } = require('../lib/pricing');
+const { calculateTierQuote } = require('../lib/pricing');
 const {
   createManualSubscriptionChangeInvoice,
   createManualSubscriptionInvoice,
@@ -22,6 +22,53 @@ const SUPPORT_MODE_DURATION_MS = 30 * 60 * 1000;
 const DUMMY_PASSWORD_HASH = bcrypt.hashSync(crypto.randomBytes(32).toString('hex'), 10);
 const COMPANY_STATUSES = new Set(['trial', 'active', 'suspended', 'cancelled']);
 const PLAN_FEATURES = ['attendance', 'reimbursements', 'export'];
+
+function buildPricingPreview(pricing) {
+  const tiers = pricing.tiers?.length ? pricing.tiers : [{
+    key: 'standard',
+    name: 'Standard',
+    minSeats: 1,
+    maxSeats: null,
+    monthlyPricePaise: pricing.monthlyPricePaise,
+    yearlyPricePaise: pricing.yearlyPricePaise
+  }];
+  const taxPctTenths = pricing.taxTenths ?? Math.round(pricing.taxPct * 10);
+  const taxInclusive = pricing.taxInclusive === true || pricing.taxInclusive === 1;
+  const quote = (seats, cycle) => {
+    const result = calculateTierQuote({ tiers, seats, cycle, taxPctTenths, taxInclusive });
+    return {
+      tierName: result.tier.name,
+      unitPricePaise: result.unitPricePaise,
+      subtotalPaise: result.subtotalPaise,
+      taxPaise: result.taxPaise,
+      totalPaise: result.totalPaise,
+      monthlyEquivalentPaise: result.monthlyEquivalentPaise,
+      yearlySavingsPaise: result.yearlySavingsPaise
+    };
+  };
+  const preview = [1, 5, 10, 11, 25, 50, 100].map(seats => ({
+    seats,
+    monthly: quote(seats, 'monthly'),
+    yearly: quote(seats, 'yearly')
+  }));
+  const warnings = [];
+  for (let index = 1; index < preview.length; index += 1) {
+    const previous = preview[index - 1];
+    const current = preview[index];
+    for (const cycle of ['monthly', 'yearly']) {
+      if (current[cycle].totalPaise < previous[cycle].totalPaise) {
+        warnings.push({
+          cycle,
+          lowerSeats: previous.seats,
+          higherSeats: current.seats,
+          lowerTotalPaise: previous[cycle].totalPaise,
+          higherTotalPaise: current[cycle].totalPaise
+        });
+      }
+    }
+  }
+  return { preview, warnings, taxInclusive };
+}
 
 function validatePlan(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
@@ -332,23 +379,12 @@ function createSuperAdminRouter({
     const controlDb = await getDatabase();
     const pricing = await getPricing(controlDb);
     const subscriptions = await controlDb.execute("SELECT COUNT(*) AS count FROM subscriptions WHERE status IN ('active', 'past_due')");
-    const preview = [1, 10, 50].map(seats => ({
-      seats,
-      monthly: calculateInvoiceAmounts({
-        unitPricePaise: pricing.monthlyPricePaise,
-        seats,
-        taxPctTenths: Math.round(pricing.taxPct * 10),
-        taxInclusive: pricing.taxInclusive
-      }),
-      yearly: calculateInvoiceAmounts({
-        unitPricePaise: pricing.yearlyPricePaise,
-        seats,
-        taxPctTenths: Math.round(pricing.taxPct * 10),
-        taxInclusive: pricing.taxInclusive
-      })
-    }));
+    const { preview, warnings, taxInclusive } = buildPricingPreview(pricing);
     res.set('Cache-Control', 'no-store');
-    return res.json({ pricing, preview, affectedExistingSubscriptions: Number(subscriptions.rows?.[0]?.count || 0) });
+    return res.json({
+      pricing, preview, warnings, taxInclusive,
+      affectedExistingSubscriptions: Number(subscriptions.rows?.[0]?.count || 0)
+    });
   }));
 
   router.post('/pricing', handle(async (req, res) => {
@@ -381,22 +417,11 @@ function createSuperAdminRouter({
     if (!pricing) return res.status(400).json({ error: 'Check prices, percentages, trial settings, limits, currency, and effective date.' });
     const controlDb = await getDatabase();
     const subscriptions = await controlDb.execute("SELECT COUNT(*) AS count FROM subscriptions WHERE status IN ('active', 'past_due')");
-    const preview = [1, 10, 50].map(seats => ({
-      seats,
-      monthly: calculateInvoiceAmounts({
-        unitPricePaise: pricing.monthlyPricePaise,
-        seats,
-        taxPctTenths: pricing.taxTenths,
-        taxInclusive: pricing.taxInclusive === 1
-      }),
-      yearly: calculateInvoiceAmounts({
-        unitPricePaise: pricing.yearlyPricePaise,
-        seats,
-        taxPctTenths: pricing.taxTenths,
-        taxInclusive: pricing.taxInclusive === 1
-      })
-    }));
-    return res.json({ preview, affectedExistingSubscriptions: Number(subscriptions.rows?.[0]?.count || 0) });
+    const { preview, warnings, taxInclusive } = buildPricingPreview(pricing);
+    return res.json({
+      preview, warnings, taxInclusive,
+      affectedExistingSubscriptions: Number(subscriptions.rows?.[0]?.count || 0)
+    });
   }));
 
   router.post('/companies/:companyId/subscriptions', handle(async (req, res) => {
