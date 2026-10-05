@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -100,6 +100,19 @@ const CONTROL_MIGRATIONS = [{
       sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)',
       args: [1]
     }
+  ]
+}, {
+  version: 2,
+  statements: [
+    `CREATE TABLE IF NOT EXISTS super_admin_sessions (
+      sid_hash TEXT PRIMARY KEY,
+      super_admin_id INTEGER NOT NULL REFERENCES super_admins(id) ON DELETE CASCADE,
+      token_version INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    'CREATE INDEX IF NOT EXISTS super_admin_sessions_expires_at_idx ON super_admin_sessions(expires_at)',
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [2] }
   ]
 }];
 

@@ -91,6 +91,7 @@ const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 
 const { router: authRouter } = require('./routes/auth');
+const { createSuperAdminRouter } = require('./routes/superadmin');
 const tasksRouter = require('./routes/tasks');
 const attendanceRouter = require('./routes/attendance');
 const reimbursementsRouter = require('./routes/reimbursements');
@@ -368,6 +369,12 @@ if (!isRender) {
   sessionOptions.store = new TursoSessionStore();
 }
 app.use(session(sessionOptions));
+
+app.get('/superadmin', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'public', 'superadmin.html'));
+});
+app.use('/api/superadmin', createSuperAdminRouter({ secureCookies: isRender || isTailscaleServe }));
 
 app.use('/api/auth', authRouter);
 app.use('/api', tasksRouter);

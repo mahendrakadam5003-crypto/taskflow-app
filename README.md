@@ -31,10 +31,24 @@ Without `USE_LOCAL_DB=1`, TaskFlow requires both `TURSO_DATABASE_URL` and `TURSO
 
 The admin dashboard's Turso storage quota also requires `TURSO_PLATFORM_TOKEN`. `TURSO_ORG` and `TURSO_DATABASE` are optional when the platform token can discover the organization and the database URL identifies the database.
 
-### Multi-company control database (Phase 1)
-The separate control database stores company registry, plans, super-admin accounts, usage snapshots, backup records, billing notes, and audit entries. It is not used by company routes yet; tenant routing and login are later phases. Create a separate Turso database and database token, then set `CONTROL_DATABASE_URL` and `CONTROL_AUTH_TOKEN` in the environment. Set `APP_ENCRYPTION_KEY` to a private 32-byte key encoded as 64 hexadecimal characters; generate one with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Back up this key securely: tenant database tokens encrypted with it cannot be recovered without the same key.
+### Super-admin control panel (Phase 3)
+The separate control database stores company registry, plans, super-admin accounts and sessions, usage snapshots, backup records, billing notes, and audit entries. Configure `CONTROL_DATABASE_URL` and `CONTROL_AUTH_TOKEN` with a separate Turso database and token, then run `npm run migrate:control`. This migration is repeatable and does not move or change the existing company's database.
 
-Run `npm run migrate:control` to create or safely upgrade the control schema. Migrations are versioned and repeatable. The initial Solo, Team, and Business plans have limits of 1, 10, and 50 users and 1 GB, 10 GB, and unlimited storage, respectively; these are seed defaults, not enforced limits yet.
+Create the first personal super-admin account from a trusted terminal with `SUPERADMIN_NAME`, `SUPERADMIN_EMAIL`, and `SUPERADMIN_PASSWORD` set in the environment, then run `npm run superadmin:create`. Use a unique password of at least 12 characters (72 UTF-8 bytes maximum). For example, in PowerShell:
+
+```powershell
+$env:SUPERADMIN_NAME = 'Your Name'
+$env:SUPERADMIN_EMAIL = 'you@example.com'
+$password = Read-Host 'Choose a unique super-admin password' -AsSecureString
+$env:SUPERADMIN_PASSWORD = [System.Net.NetworkCredential]::new('', $password).Password
+npm run superadmin:create
+Remove-Item Env:SUPERADMIN_PASSWORD
+$password.Dispose()
+```
+
+Set the two control-database variables in this terminal as well (or your deployment environment) before running the command. The bootstrap refuses to add an account if one already exists and never prints the password. Sign in at `/superadmin`; this login is separate from the company admin login. The overview is read-only. It lists only companies in the control database. The existing company will not appear there until its registry is linked in Phase 4; it continues using the same database and company login in the meantime.
+
+Set `APP_ENCRYPTION_KEY` to a private 32-byte key encoded as 64 hexadecimal characters; generate one with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Back up this key securely: tenant database tokens encrypted with it cannot be recovered without the same key.
 
 Tenant database access is scoped to an async company context; database calls without a context fail instead of falling back to a shared database. Until company-code login and the existing-company registry are introduced in later phases, the web app continues to use the same existing Turso database as the temporary `legacy` tenant. In local multi-tenant tests, registered tenants use separate `tenants/<company-code>.db` files. Run `npm run migrate:all` to lazily initialize the legacy database and every registered trial, active, or suspended tenant database. The existing app URL and login are unchanged in this phase.
 

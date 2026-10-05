@@ -10,7 +10,8 @@
     "start": "node server.js",
     "test": "node --test",
     "migrate:control": "node scripts/migrate-control-db.js",
-    "migrate:all": "node scripts/migrate-all-tenants.js"
+    "migrate:all": "node scripts/migrate-all-tenants.js",
+    "superadmin:create": "node scripts/create-superadmin.js"
   },
   "dependencies": {
     "@aparajita/capacitor-biometric-auth": "^10.0.0",

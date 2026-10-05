@@ -54,6 +54,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       companies: ['id', 'code', 'name', 'owner_name', 'owner_email', 'owner_phone', 'status', 'plan_id', 'trial_ends_at', 'tenant_db_url', 'tenant_db_token_encrypted', 'notes', 'created_at'],
       plans: ['id', 'name', 'max_users', 'storage_limit_mb', 'features_json', 'price_note', 'is_active'],
       super_admins: ['id', 'name', 'email', 'password_hash', 'token_version', 'created_at'],
+      super_admin_sessions: ['sid_hash', 'super_admin_id', 'token_version', 'expires_at', 'created_at'],
       usage_snapshots: ['id', 'company_id', 'taken_at', 'user_count', 'db_bytes', 'files_bytes'],
       backups: ['id', 'company_id', 'type', 'location', 'size_bytes', 'created_at', 'status'],
       billing_notes: ['id', 'company_id', 'amount_text', 'note', 'marked_paid_at', 'marked_by'],
@@ -66,7 +67,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       assert.deepEqual(columnResult.rows.map(column => column.name), columns, `expected columns on ${table}`);
     }
     const migrations = await client.execute('SELECT version FROM control_schema_migrations');
-    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [CURRENT_SCHEMA_VERSION]);
+    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, CURRENT_SCHEMA_VERSION]);
   } finally {
     await client.close();
   }
