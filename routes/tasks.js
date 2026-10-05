@@ -142,23 +142,41 @@ async function getStorageUsage() {
     const databaseName = database?.Name || database?.name;
     if (!databaseName) throw new Error(`No matching Turso database found for ${requestedDatabase}`);
 
-    const [databaseResponse, organizationResponse, configurationResponse, plansResponse] = await Promise.all([
-      axios.get(`https://api.turso.tech/v1/organizations/${encodeURIComponent(organization)}/databases/${encodeURIComponent(databaseName)}/usage`, { headers }),
+    const usageResults = await Promise.allSettled([
       axios.get(`https://api.turso.tech/v1/organizations/${encodeURIComponent(organization)}/usage`, { headers }),
+      axios.get(`https://api.turso.tech/v1/organizations/${encodeURIComponent(organization)}/databases/${encodeURIComponent(databaseName)}/usage`, { headers }),
       axios.get(`https://api.turso.tech/v1/organizations/${encodeURIComponent(organization)}/databases/${encodeURIComponent(databaseName)}/configuration`, { headers }),
       axios.get(`https://api.turso.tech/v1/organizations/${encodeURIComponent(organization)}/plans`, { headers })
     ]);
-    const databaseUsage = databaseResponse.data?.database || {};
+    const [organizationResult, databaseResult, configurationResult, plansResult] = usageResults;
+    const logLookupFailure = (result, label) => {
+      if (result.status === 'rejected') console.warn(`Turso ${label} lookup unavailable:`, result.reason?.response?.data?.error || result.reason?.message);
+    };
+    logLookupFailure(organizationResult, 'organization usage');
+    logLookupFailure(databaseResult, 'database usage');
+    logLookupFailure(configurationResult, 'database configuration');
+    logLookupFailure(plansResult, 'plan');
+    const organizationResponse = organizationResult.status === 'fulfilled' ? organizationResult.value : { data: {} };
+    const databaseUsage = databaseResult.status === 'fulfilled' ? databaseResult.value.data?.database || {} : {};
     const organizationUsage = organizationResponse.data?.organization || {};
     const databaseTotal = databaseUsage.total || databaseUsage.usage || {};
     const matchingOrganizationDatabase = (organizationUsage.databases || []).find(item => item.name === databaseName || item.Name === databaseName);
     const organizationDatabaseTotal = matchingOrganizationDatabase?.total || matchingOrganizationDatabase?.usage || {};
     const usedBytes = databaseTotal.storage_bytes ?? databaseTotal.storageBytes ?? organizationDatabaseTotal.storage_bytes ?? organizationDatabaseTotal.storageBytes;
-    const organizationLimit = organizationUsage.usage?.storage_bytes ?? organizationUsage.usage?.storageBytes ?? organizationUsage.usage?.storage;
-    const databaseLimit = configurationResponse.data?.size_limit ?? configurationResponse.data?.sizeLimit;
-    const plans = Array.isArray(plansResponse.data?.plans) ? plansResponse.data.plans : [];
-    const planId = String(organizationRecord?.plan_id || '').toLowerCase();
-    const plan = plans.find(item => String(item.name || item.id || '').toLowerCase() === planId);
+    const organizationQuota = organizationUsage.usage || organizationUsage.total || {};
+    const organizationLimit = organizationQuota.storage_bytes ?? organizationQuota.storageBytes ?? organizationQuota.storage;
+    const configuration = configurationResult.status === 'fulfilled' ? configurationResult.value.data || {} : {};
+    const databaseLimit = configuration.size_limit ?? configuration.sizeLimit;
+    const plansData = plansResult.status === 'fulfilled' ? plansResult.value.data : {};
+    const plans = Array.isArray(plansData?.plans) ? plansData.plans : (Array.isArray(plansData) ? plansData : []);
+    const organizationPlan = organizationRecord?.plan || {};
+    const planIdentifiers = [
+      organizationRecord?.plan_id, organizationRecord?.planId, organizationRecord?.plan_name,
+      organizationRecord?.planName, organizationPlan.id, organizationPlan.name,
+      organizationUsage.plan_id, organizationUsage.plan?.id, organizationUsage.plan?.name
+    ].filter(value => value !== undefined && value !== null).map(value => String(value).trim().toLowerCase());
+    const plan = plans.find(item => [item.id, item.name, item.slug]
+      .some(identifier => identifier !== undefined && identifier !== null && planIdentifiers.includes(String(identifier).trim().toLowerCase())));
     const planLimit = plan?.quotas?.storage ?? plan?.quotas?.storage_bytes ?? plan?.quotas?.storageBytes;
     const documentedPlanLimits = {
       free: 5 * (1024 ** 3),
@@ -168,15 +186,17 @@ async function getStorageUsage() {
       pro: 50 * (1024 ** 3)
     };
     const actualDatabaseBytes = await getDatabaseStorageBytes();
-    const planFallback = documentedPlanLimits[planId]
-      || (/free|starter/i.test(planId) ? documentedPlanLimits.starter : 0);
+    const planFallback = planIdentifiers.map(identifier => documentedPlanLimits[identifier]
+      || (/free|starter/i.test(identifier) ? documentedPlanLimits.starter : 0)).find(Boolean) || 0;
     const quotaCandidates = [databaseLimit, planLimit]
       .map(value => typeof value === 'number' ? value : parseStorageLimit(value))
-      .filter(value => value >= 1024 ** 2 && value >= actualDatabaseBytes);
-    const totalBytes = quotaCandidates[0] || planFallback
-      || (typeof organizationLimit === 'number' ? organizationLimit : parseStorageLimit(organizationLimit));
-    if (Number.isFinite(Number(usedBytes)) && Number.isFinite(Number(totalBytes))) {
-      return formatStorageUsage(totalBytes, Math.max(Number(usedBytes) || 0, actualDatabaseBytes));
+      .filter(value => Number.isFinite(value) && value > 0);
+    const organizationLimitBytes = typeof organizationLimit === 'number' ? organizationLimit : parseStorageLimit(organizationLimit);
+    const totalBytes = quotaCandidates[0] || organizationLimitBytes || planLimit || planFallback;
+    if (Number.isFinite(Number(totalBytes)) && Number(totalBytes) > 0) {
+      const reportedUsedBytes = Number(usedBytes);
+      const actualUsedBytes = Number.isFinite(reportedUsedBytes) ? reportedUsedBytes : 0;
+      return formatStorageUsage(totalBytes, Math.max(actualUsedBytes, actualDatabaseBytes));
     }
     throw new Error('Turso usage response did not include storage values');
   } catch (error) {
