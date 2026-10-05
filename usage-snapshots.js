@@ -96,7 +96,8 @@ function createUsageSnapshotCollector({
     if (!hasControlDatabaseConfiguration(environment)) return 0;
     const controlDb = await getDatabase();
     const companyResult = await controlDb.execute({
-      sql: "SELECT id FROM companies WHERE status IN ('trial', 'active', 'suspended') ORDER BY id"
+      sql: "SELECT id FROM companies WHERE status IN ('trial', 'active', 'suspended') ORDER BY id",
+      args: []
     });
     const snapshots = [];
     for (const row of companyResult.rows || []) {

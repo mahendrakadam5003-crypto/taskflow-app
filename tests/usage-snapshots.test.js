@@ -60,6 +60,7 @@ test('daily usage snapshots collect active users, database bytes, and only refer
     const controlDb = {
       async execute(statement) {
         assert.match(statement.sql, /FROM companies/);
+        assert.deepEqual(statement.args, []);
         return { rows: [{ id: 11 }, { id: 22 }] };
       },
       async batch(statements, mode) {
