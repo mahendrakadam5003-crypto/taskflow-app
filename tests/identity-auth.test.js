@@ -26,8 +26,10 @@ const users = new Map([
   }]
 ]);
 const tokens = new Map();
+const otps = new Map();
 const sentMessages = [];
 const deletedSessions = [];
+let nextOtpId = 1;
 let now = Date.now();
 let profile = { sub: 'google-sub-1', email: 'member@example.test', email_verified: true };
 
@@ -35,6 +37,30 @@ const database = {
   prepare(sql) {
     return {
       get: async (...args) => {
+        if (sql.includes('FROM email_login_otps t JOIN users u')) {
+          const [email, purpose, timestamp] = args;
+          const otp = [...otps.values()].reverse().find(row => row.email === email && row.purpose === purpose
+            && row.consumed_at === null && row.expires_at > Number(timestamp) && row.attempts < 5);
+          const user = otp && users.get(otp.user_id);
+          if (!otp || !user) return null;
+          return {
+            id: otp.id,
+            user_id: otp.user_id,
+            email: otp.email,
+            code_hash: otp.code_hash,
+            expires_at: otp.expires_at,
+            attempts: otp.attempts,
+            account_id: user.id,
+            name: user.name,
+            username: user.username,
+            role: user.role,
+            active: user.active,
+            current_email: user.email,
+            email_verified: user.email_verified,
+            must_change_password: user.must_change_password,
+            token_version: user.token_version
+          };
+        }
         if (sql.includes('FROM email_auth_tokens t JOIN users u')) {
           const [hash, purpose] = args;
           const token = tokens.get(hash);
@@ -54,6 +80,27 @@ const database = {
           const user = [...users.values()].find(row => row.google_sub === args[0]);
           return user ? { ...user } : null;
         }
+        if (sql.includes('FROM users') && sql.includes('id = ?') && sql.includes('active = 1')
+          && sql.includes('email_verified = 0') && sql.includes('lower(trim(email)) = ?')) {
+          const user = users.get(Number(args[0]));
+          return user && Number(user.active) === 1 && Number(user.email_verified) === 0
+            && user.email?.trim().toLowerCase() === args[1]
+            ? { id: user.id, email: user.email }
+            : null;
+        }
+        if (sql.includes('FROM users WHERE id = ? AND active = 1')) {
+          const user = users.get(Number(args[0]));
+          return user && Number(user.active) === 1 ? { id: user.id, email: user.email, email_verified: user.email_verified } : null;
+        }
+        if (sql.includes('FROM users WHERE lower(trim(email)) = ? AND id <> ?')) {
+          const user = [...users.values()].find(row => Number(row.id) !== Number(args[1])
+            && row.email?.trim().toLowerCase() === args[0]);
+          return user ? { id: user.id } : null;
+        }
+        if (sql.includes('FROM users WHERE id = ?')) {
+          const user = users.get(Number(args[0]));
+          return user ? { ...user } : null;
+        }
         if (sql.includes('FROM users') && sql.includes('email_verified = 1')) {
           const user = [...users.values()].find(row => row.email?.trim().toLowerCase() === args[0]
             && Number(row.email_verified) === 1 && Number(row.active) === 1);
@@ -62,6 +109,33 @@ const database = {
         return null;
       },
       run: async (...args) => {
+        if (sql.startsWith('DELETE FROM email_login_otps WHERE user_id = ? AND purpose = ?')) {
+          for (const [id, otp] of otps) {
+            if (otp.user_id === Number(args[0]) && otp.purpose === args[1]) otps.delete(id);
+          }
+          return { changes: 1 };
+        }
+        if (sql.startsWith('INSERT INTO email_login_otps')) {
+          const [userId, email, purpose, codeHash, expiresAt] = args;
+          const id = nextOtpId++;
+          otps.set(id, {
+            id, user_id: Number(userId), email, purpose, code_hash: codeHash,
+            expires_at: Number(expiresAt), attempts: 0, consumed_at: null
+          });
+          return { changes: 1, lastInsertRowid: id };
+        }
+        if (sql.includes('SET attempts = attempts + 1')) {
+          const otp = otps.get(Number(args[0]));
+          if (otp) otp.attempts += 1;
+          return { changes: otp ? 1 : 0 };
+        }
+        if (sql.includes('UPDATE email_login_otps SET consumed_at')) {
+          const [consumedAt, id, expiresAt] = args;
+          const otp = otps.get(Number(id));
+          if (!otp || otp.consumed_at !== null || otp.expires_at <= Number(expiresAt) || otp.attempts >= 5) return { changes: 0 };
+          otp.consumed_at = Number(consumedAt);
+          return { changes: 1 };
+        }
         if (sql.startsWith('DELETE FROM email_auth_tokens WHERE user_id = ? AND purpose = ?')) {
           for (const [hash, token] of tokens) {
             if (token.user_id === Number(args[0]) && token.purpose === args[1]) tokens.delete(hash);
@@ -83,6 +157,23 @@ const database = {
           const token = tokens.get(hash);
           if (!token || token.consumed_at !== null || token.expires_at <= Number(expiresAt)) return { changes: 0 };
           token.consumed_at = Number(consumedAt);
+          return { changes: 1 };
+        }
+        if (sql.includes('UPDATE users SET email = ?, email_verified = 0')) {
+          const [email, userId] = args;
+          const user = users.get(Number(userId));
+          if (!user || Number(user.active) !== 1) return { changes: 0 };
+          user.email = email;
+          user.email_verified = 0;
+          user.google_sub = null;
+          return { changes: 1 };
+        }
+        if (sql.includes('UPDATE users SET email_verified = 1, token_version = token_version + 1')) {
+          const [userId, email] = args;
+          const user = users.get(Number(userId));
+          if (!user || Number(user.active) !== 1 || Number(user.email_verified) !== 0 || user.email !== email) return { changes: 0 };
+          user.email_verified = 1;
+          user.token_version += 1;
           return { changes: 1 };
         }
         if (sql.includes('UPDATE users SET email_verified = 1')) {
@@ -136,6 +227,7 @@ const routerFactory = createIdentityAuthRouter({
   },
   environment: {
     APP_BASE_URL: 'https://taskflow.example.test',
+    SESSION_SECRET: 'identity-auth-test-session-secret-with-more-than-32-characters',
     GOOGLE_CLIENT_ID: 'client-id',
     GOOGLE_CLIENT_SECRET: 'client-secret',
     GOOGLE_REDIRECT_URI: 'https://taskflow.example.test/api/auth/google/callback'
@@ -161,6 +253,12 @@ app.use(session({
   saveUninitialized: false,
   cookie: { httpOnly: true, sameSite: 'lax' }
 }));
+app.post('/test-session', (req, res) => {
+  req.session.userId = 1;
+  req.session.role = 'employee';
+  req.session.tokenVersion = users.get(1).token_version;
+  req.session.save(error => error ? res.status(500).end() : res.json({ ok: true }));
+});
 app.use('/api/auth', routerFactory.router);
 let server;
 let baseUrl;
@@ -210,13 +308,45 @@ test('email verification uses a single-use hashed token and enables email login'
 
   const token = tokenFrom(sentMessages.at(-1));
   const verified = await request('/email/verify', { method: 'POST', body: { token } });
-  assert.equal(verified.status, 200);
+  assert.equal(verified.status, 200, await verified.clone().text());
   assert.deepEqual(await verified.json(), { verified: true });
   assert.equal(users.get(1).email_verified, 1);
   assert.equal(verified.headers.get('cache-control'), 'no-store');
   assert.equal(verified.headers.get('referrer-policy'), 'no-referrer');
 
   const replay = await request('/email/verify', { method: 'POST', body: { token } });
+  assert.equal(replay.status, 400);
+});
+
+test('email OTP sign-in sends a generic response and consumes each code once', async () => {
+  const requested = await request('/email/login/request', {
+    method: 'POST',
+    body: { email: 'MEMBER@example.test' }
+  });
+  assert.equal(requested.status, 202);
+  const genericMessage = await requested.json();
+  assert.match(sentMessages.at(-1).text, /sign-in code is \d{6}/);
+  const code = sentMessages.at(-1).text.match(/sign-in code is (\d{6})/)[1];
+
+  const unknown = await request('/email/login/request', {
+    method: 'POST',
+    body: { email: 'unknown@example.test' }
+  });
+  assert.equal(unknown.status, 202);
+  assert.deepEqual(await unknown.json(), genericMessage);
+
+  const verified = await request('/email/login/verify', {
+    method: 'POST',
+    body: { email: 'member@example.test', code }
+  });
+  assert.equal(verified.status, 200);
+  assert.equal((await verified.json()).id, 1);
+  assert.ok(verified.headers.get('set-cookie'));
+
+  const replay = await request('/email/login/verify', {
+    method: 'POST',
+    body: { email: 'member@example.test', code }
+  });
   assert.equal(replay.status, 400);
 });
 
@@ -293,4 +423,39 @@ test('Google OAuth uses PKCE and links only an existing verified email account',
   });
   assert.equal(unavailable.status, 303);
   assert.match(unavailable.headers.get('location'), /google_account_unavailable/);
+});
+
+test('existing users can enroll and verify a new email with a one-time code', async () => {
+  const snapshot = { ...users.get(1) };
+  try {
+    Object.assign(users.get(1), { email: null, email_verified: 0, google_sub: null, token_version: 0 });
+    const sessionResponse = await fetch(`${baseUrl}/test-session`, { method: 'POST' });
+    const cookie = sessionResponse.headers.get('set-cookie').split(';', 1)[0];
+    const requested = await request('/email/enroll', {
+      method: 'POST',
+      cookie,
+      body: { email: 'new.address@example.test' }
+    });
+    assert.equal(requested.status, 200, await requested.clone().text());
+    assert.equal(users.get(1).email, 'new.address@example.test');
+    assert.equal(users.get(1).email_verified, 0);
+    assert.match(sentMessages.at(-1).text, /verification code is \d{6}/);
+    const code = sentMessages.at(-1).text.match(/verification code is (\d{6})/)[1];
+    assert.equal([...otps.values()].find(otp => otp.purpose === 'enrollment').code_hash,
+      crypto.createHmac('sha256', 'identity-auth-test-session-secret-with-more-than-32-characters').update(code).digest('hex'));
+
+    const verified = await request('/email/enroll/verify', {
+      method: 'POST',
+      cookie,
+      body: { email: 'new.address@example.test', code }
+    });
+    assert.equal(verified.status, 200, await verified.clone().text());
+    assert.deepEqual(await verified.json(), { verified: true });
+    assert.equal(users.get(1).email, 'new.address@example.test');
+    assert.equal(users.get(1).email_verified, 1);
+    assert.ok(verified.headers.get('set-cookie'));
+  } finally {
+    Object.assign(users.get(1), snapshot);
+    otps.clear();
+  }
 });

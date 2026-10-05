@@ -119,6 +119,8 @@ function createEntitlementMiddleware({ getCompanyAccessState }) {
   const accountRecoveryPaths = new Set([
     'GET /api/auth/google/start',
     'GET /api/auth/google/callback',
+    'POST /api/auth/email/login/request',
+    'POST /api/auth/email/login/verify',
     'POST /api/auth/email/verify',
     'POST /api/auth/password-reset/request',
     'POST /api/auth/password-reset/complete'

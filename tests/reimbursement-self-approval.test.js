@@ -17,6 +17,8 @@ const employee = {
   username: 'approver',
   department: 'Testing',
   role: 'employee',
+  email: 'approver@example.test',
+  email_verified: 1,
   active: 1,
   must_change_password: 0,
   token_version: 1

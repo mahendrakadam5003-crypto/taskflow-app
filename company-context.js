@@ -10,6 +10,8 @@ const COMPANY_CODE_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const PUBLIC_AUTH_COMPANY_CONTEXT_PATHS = new Set([
   '/api/auth/google/start',
   '/api/auth/google/callback',
+  '/api/auth/email/login/request',
+  '/api/auth/email/login/verify',
   '/api/auth/email/verify',
   '/api/auth/password-reset/request',
   '/api/auth/password-reset/complete'

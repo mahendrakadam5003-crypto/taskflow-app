@@ -4,16 +4,21 @@ const crypto = require('node:crypto');
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { rateLimit } = require('express-rate-limit');
-const db = require('../db');
 const { getControlDatabase } = require('../control-db');
 const { hasControlDatabaseConfiguration, LEGACY_TENANT_ID } = require('../tenant-manager');
-const { logActivity } = require('../audit');
-const { logRequestEvent } = require('../http-errors');
 const { createMailer } = require('../mailer');
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const passwordMinimumBytes = 10;
 const passwordMaximumBytes = 72;
+
+function logActivity(...args) {
+  return require('../audit').logActivity(...args);
+}
+
+function logRequestEvent(...args) {
+  return require('../http-errors').logRequestEvent(...args);
+}
 
 function normalizeEmail(value) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -23,13 +28,12 @@ function validEmail(value) {
   return value.length <= 254 && emailPattern.test(value);
 }
 
-function createIdentityAuthRouter({
-  database = db,
-  mailer = createMailer(),
-  environment = process.env,
-  fetcher = global.fetch,
-  now = () => Date.now()
-} = {}) {
+function createIdentityAuthRouter(options = {}) {
+  const database = options.database || require('../db');
+  const mailer = options.mailer || createMailer();
+  const environment = options.environment || process.env;
+  const fetcher = options.fetcher || global.fetch;
+  const now = options.now || (() => Date.now());
   if (typeof fetcher !== 'function') throw new TypeError('An HTTP fetch implementation is required.');
   const router = express.Router();
   const publicMailer = mailer;
@@ -46,6 +50,20 @@ function createIdentityAuthRouter({
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many attempts. Try again later.' }
+  });
+  const otpRequestLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many sign-in code requests. Try again later.' }
+  });
+  const otpVerifyLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many code attempts. Try again later.' }
   });
   const googleLoginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -104,7 +122,7 @@ function createIdentityAuthRouter({
     return { token, hash, expiresAt };
   }
 
-  async function deliverLink(req, user, purpose) {
+  async function deliverLink(req, user, purpose, { invitation = false } = {}) {
     if (!emailDeliveryConfigured()) {
       return { sent: false, error: 'Email delivery is not configured. Set APP_BASE_URL and SMTP settings, then try again.' };
     }
@@ -114,11 +132,14 @@ function createIdentityAuthRouter({
     const lifetimeMs = isVerification ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
     const tokenRecord = await issueEmailToken(user, purpose, lifetimeMs);
     const link = createTokenLink(isVerification ? '/verify-email.html' : '/password-reset.html', tokenRecord.token, companyCode(req));
-    const subject = isVerification ? 'Verify your TaskFlow email address' : 'Reset your TaskFlow password';
-    const action = isVerification ? 'verify your email address' : 'reset your password';
-    const text = `Use this link to ${action} for your TaskFlow workspace:\n\n${link}\n\nThis link expires in ${isVerification ? '24 hours' : '1 hour'} and can only be used once. If you did not request this, you can ignore this message.`;
+    const subject = invitation
+      ? 'You are invited to join TaskFlow'
+      : isVerification ? 'Verify your TaskFlow email address' : 'Reset your TaskFlow password';
+    const action = invitation ? 'accept your invitation and verify your email address'
+      : isVerification ? 'verify your email address' : 'reset your password';
+    const text = `Use this link to ${action} for your TaskFlow workspace:\n\n${link}\n\nThis link expires in ${isVerification ? '24 hours' : '1 hour'} and can only be used once. After verifying, sign in with an email code or Google. If you did not request this, you can ignore this message.`;
     const htmlLink = link.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-    const html = `<p>Use the link below to ${action} for your TaskFlow workspace.</p><p><a href="${htmlLink}">${isVerification ? 'Verify email address' : 'Reset password'}</a></p><p>This link expires in ${isVerification ? '24 hours' : '1 hour'} and can only be used once. If you did not request this, you can ignore this message.</p>`;
+    const html = `<p>Use the link below to ${action} for your TaskFlow workspace.</p><p><a href="${htmlLink}">${invitation ? 'Accept invitation and verify email' : isVerification ? 'Verify email address' : 'Reset your password'}</a></p><p>This link expires in ${isVerification ? '24 hours' : '1 hour'} and can only be used once. After verifying, sign in with an email code or Google. If you did not request this, you can ignore this message.</p>`;
     try {
       await publicMailer.send({ to: email, subject, text, html });
       return { sent: true };
@@ -129,6 +150,174 @@ function createIdentityAuthRouter({
     }
   }
 
+  function otpDigest(code) {
+    const secret = String(environment.SESSION_SECRET || '');
+    if (secret.length < 32) throw new Error('Email sign-in requires a configured session secret.');
+    return crypto.createHmac('sha256', secret).update(code).digest('hex');
+  }
+
+  async function sendEmailCode(req, user, purpose) {
+    if (!publicMailer.isConfigured?.()) {
+      return { sent: false, error: 'Email sign-in is not configured. Set SMTP settings, then try again.' };
+    }
+    const email = normalizeEmail(user.email);
+    if (!validEmail(email)) return { sent: false, error: 'A valid email address is required.' };
+    const code = String(crypto.randomInt(100000, 1000000));
+    const codeHash = otpDigest(code);
+    const expiresAt = now() + 10 * 60 * 1000;
+    await database.prepare('DELETE FROM email_login_otps WHERE user_id = ? AND purpose = ?')
+      .run(user.id, purpose);
+    const inserted = await database.prepare(`INSERT INTO email_login_otps
+      (user_id, email, purpose, code_hash, expires_at) VALUES (?, ?, ?, ?, ?)`)
+      .run(user.id, email, purpose, codeHash, expiresAt);
+    const subject = purpose === 'enrollment' ? 'Verify your TaskFlow email address' : 'Your TaskFlow sign-in code';
+    const text = purpose === 'enrollment'
+      ? `Your TaskFlow email verification code is ${code}. It expires in 10 minutes. If you did not request this, ignore this email.`
+      : `Your TaskFlow sign-in code is ${code}. It expires in 10 minutes and can only be used once. Never share this code.`;
+    const html = `<p>${purpose === 'enrollment' ? 'Verify your email address to finish setting up your TaskFlow account.' : 'Use this one-time code to sign in to TaskFlow.'}</p><p style="font-size:28px;font-weight:700;letter-spacing:6px">${code}</p><p>This code expires in 10 minutes and can only be used once. Never share it.</p>`;
+    try {
+      await publicMailer.send({ to: email, subject, text, html });
+      return { sent: true, id: Number(inserted?.lastInsertRowid ?? inserted?.lastID ?? 0) };
+    } catch (error) {
+      await database.prepare('DELETE FROM email_login_otps WHERE user_id = ? AND purpose = ?')
+        .run(user.id, purpose);
+      logRequestEvent(req, purpose === 'enrollment' ? 'email_enrollment_code_delivery_failed' : 'email_login_code_delivery_failed', 'warn');
+      return { sent: false, error: 'The email could not be sent. Check SMTP settings and try again.' };
+    }
+  }
+
+  async function sendGenericLoginResponse(req, res, email) {
+    if (!publicMailer.isConfigured?.()) {
+      return res.status(503).json({ error: 'Email sign-in is not configured. Contact your workspace administrator.' });
+    }
+    const user = await database.prepare(`SELECT id, email FROM users
+      WHERE lower(trim(email)) = ? AND email_verified = 1 AND active = 1 LIMIT 1`).get(email);
+    if (user) {
+      await sendEmailCode(req, user, 'login');
+    }
+    return res.status(202).json({
+      message: 'If an active account has that verified email, a sign-in code has been sent.'
+    });
+  }
+
+  async function verifyEmailCode(email, code, purpose) {
+    const row = await database.prepare(`SELECT t.id, t.user_id, t.email, t.code_hash, t.expires_at,
+        t.attempts, u.id AS account_id, u.name, u.username, u.role, u.active,
+        u.email AS current_email, u.email_verified, u.must_change_password, u.token_version
+      FROM email_login_otps t JOIN users u ON u.id = t.user_id
+      WHERE lower(trim(t.email)) = ? AND t.purpose = ? AND t.consumed_at IS NULL
+        AND t.expires_at > ? AND t.attempts < 5
+      ORDER BY t.id DESC LIMIT 1`).get(email, purpose, now());
+    if (!row || Number(row.active) !== 1 || Number(row.email_verified) !== (purpose === 'login' ? 1 : 0)
+      || normalizeEmail(row.email) !== email || normalizeEmail(row.current_email) !== email) return null;
+    const expected = otpDigest(code);
+    const actualBuffer = Buffer.from(String(row.code_hash), 'hex');
+    const expectedBuffer = Buffer.from(expected, 'hex');
+    if (actualBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(actualBuffer, expectedBuffer)) {
+      await database.prepare(`UPDATE email_login_otps SET attempts = attempts + 1
+        WHERE id = ? AND consumed_at IS NULL AND attempts < 5`).run(row.id);
+      return null;
+    }
+    const consumed = await database.prepare(`UPDATE email_login_otps SET consumed_at = ?
+      WHERE id = ? AND consumed_at IS NULL AND expires_at > ? AND attempts < 5`)
+      .run(now(), row.id, now());
+    if (Number(consumed?.changes ?? consumed?.rowsAffected ?? 0) !== 1) return null;
+    return { ...row, id: Number(row.account_id) };
+  }
+
+  router.post('/email/login/request', otpRequestLimiter, async (req, res) => {
+    const email = normalizeEmail(req.body?.email);
+    if (!validEmail(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+    try {
+      return await sendGenericLoginResponse(req, res, email);
+    } catch (error) {
+      logRequestEvent(req, 'email_login_code_request_failed');
+      return res.status(500).json({ error: 'The sign-in request could not be processed. Try again later.' });
+    }
+  });
+
+  router.post('/email/login/verify', otpVerifyLimiter, async (req, res) => {
+    const email = normalizeEmail(req.body?.email);
+    const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+    if (!validEmail(email) || !/^\d{6}$/.test(code)) {
+      return res.status(400).json({ error: 'Enter the email address and six-digit sign-in code.' });
+    }
+    try {
+      const user = await verifyEmailCode(email, code, 'login');
+      if (!user) return res.status(400).json({ error: 'The sign-in code is invalid, expired, or already used. Request a new code.' });
+      const reason = await authenticateUser(req, user);
+      if (reason) return res.status(reason === 'google_suspended' || reason === 'google_billing_required' ? 403 : 401)
+        .json({ error: reason === 'google_suspended' ? 'Account suspended, contact support.' : reason === 'google_billing_required' ? 'This workspace is locked. Contact your administrator.' : 'Sign-in could not be completed.' });
+      return res.json({
+        id: user.id,
+        name: user.name,
+        username: user.username,
+        role: user.role,
+        must_change_password: false,
+        company_status: req.companyStatus
+      });
+    } catch (error) {
+      logRequestEvent(req, 'email_login_code_verification_failed');
+      return res.status(500).json({ error: 'Sign-in could not be completed. Try again later.' });
+    }
+  });
+
+  router.post('/email/enroll', otpRequestLimiter, async (req, res) => {
+    const userId = Number(req.session?.userId);
+    const email = normalizeEmail(req.body?.email);
+    if (!Number.isSafeInteger(userId) || userId < 1) return res.status(401).json({ error: 'Sign in with your existing account to set up email access.' });
+    if (!validEmail(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+    try {
+      const user = await database.prepare('SELECT id, email, email_verified FROM users WHERE id = ? AND active = 1').get(userId);
+      if (!user) return res.status(401).json({ error: 'Your account is unavailable. Contact your administrator.' });
+      if (Number(user.email_verified) === 1 && normalizeEmail(user.email) === email) {
+        return res.status(409).json({ error: 'Your verified email is already set. Sign in with email code or Google.' });
+      }
+      const duplicate = await database.prepare('SELECT id FROM users WHERE lower(trim(email)) = ? AND id <> ?').get(email, userId);
+      if (duplicate) return res.status(409).json({ error: 'That email address is already attached to another account.' });
+      await database.prepare(`UPDATE users SET email = ?, email_verified = 0, google_sub = NULL,
+        auth_provider = 'email' WHERE id = ? AND active = 1`).run(email, userId);
+      await database.prepare('DELETE FROM email_auth_tokens WHERE user_id = ?').run(userId);
+      const result = await sendEmailCode(req, { id: userId, email }, 'enrollment');
+      if (!result.sent) return res.status(503).json({ error: result.error });
+      return res.json({ sent: true, message: 'A verification code was sent to your email.' });
+    } catch (error) {
+      logRequestEvent(req, 'email_enrollment_code_request_failed');
+      return res.status(500).json({ error: 'Email setup could not be completed. Try again later.' });
+    }
+  });
+
+  router.post('/email/enroll/verify', otpVerifyLimiter, async (req, res) => {
+    const userId = Number(req.session?.userId);
+    const email = normalizeEmail(req.body?.email);
+    const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+    if (!Number.isSafeInteger(userId) || userId < 1) return res.status(401).json({ error: 'Sign in with your existing account to finish email setup.' });
+    if (!validEmail(email) || !/^\d{6}$/.test(code)) return res.status(400).json({ error: 'Enter the email address and six-digit verification code.' });
+    try {
+      const pending = await database.prepare(`SELECT id, email FROM users
+        WHERE id = ? AND active = 1 AND email_verified = 0 AND lower(trim(email)) = ?`)
+        .get(userId, email);
+      const codeUser = pending ? await verifyEmailCode(email, code, 'enrollment') : null;
+      if (!codeUser || codeUser.id !== userId) {
+        return res.status(400).json({ error: 'The verification code is invalid, expired, or already used. Request a new code.' });
+      }
+      const updated = await database.prepare(`UPDATE users SET email_verified = 1, token_version = token_version + 1
+        WHERE id = ? AND active = 1 AND email_verified = 0 AND lower(trim(email)) = ?`)
+        .run(userId, email);
+      if (Number(updated?.changes ?? updated?.rowsAffected ?? 0) !== 1) {
+        return res.status(400).json({ error: 'Email setup could not be completed. Request a new code.' });
+      }
+      await database.prepare('DELETE FROM email_login_otps WHERE user_id = ? AND purpose = ?')
+        .run(userId, 'enrollment');
+      const user = await database.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+      const reason = await authenticateUser(req, user);
+      if (reason) return res.status(403).json({ error: 'Your account cannot sign in to this workspace right now.' });
+      return res.json({ verified: true });
+    } catch (error) {
+      logRequestEvent(req, 'email_enrollment_code_verification_failed');
+      return res.status(500).json({ error: 'Email setup could not be completed. Try again later.' });
+    }
+  });
   async function deleteUserSessions(userId, companyId) {
     if (hasControlDatabaseConfiguration(environment)) {
       const controlDatabase = await getControlDatabase();
@@ -308,9 +497,15 @@ function createIdentityAuthRouter({
     return { googleSub: profile.sub, email };
   }
 
-  async function authenticateGoogleUser(req, user) {
+  async function authenticateUser(req, user) {
     if (req.companyStatus === 'suspended' && user.role !== 'admin') return 'google_suspended';
     if (req.companyAccessState?.state === 'locked' && user.role !== 'admin') return 'google_billing_required';
+    if (Number(user.must_change_password) === 1) {
+      await database.prepare(`UPDATE users SET must_change_password = 0, token_version = token_version + 1
+        WHERE id = ? AND active = 1`).run(user.id);
+      user = await database.prepare('SELECT * FROM users WHERE id = ? AND active = 1').get(user.id);
+      if (!user) return 'google_account_unavailable';
+    }
     await new Promise((resolve, reject) => req.session.regenerate(error => error ? reject(error) : resolve()));
     req.session.userId = Number(user.id);
     req.session.role = user.role;
@@ -364,7 +559,7 @@ function createIdentityAuthRouter({
         }
       }
       if (!user || Number(user.active) !== 1) return redirectToLogin(res, 'google_account_unavailable');
-      const reason = await authenticateGoogleUser(req, user);
+      const reason = await authenticateUser(req, user);
       if (reason) return redirectToLogin(res, reason);
       return res.redirect(303, '/app');
     } catch (error) {
@@ -373,7 +568,11 @@ function createIdentityAuthRouter({
     }
   });
 
-  return { router, sendVerificationEmail: (req, user) => deliverLink(req, user, 'verify_email') };
+  return {
+    router,
+    sendVerificationEmail: (req, user) => deliverLink(req, user, 'verify_email'),
+    sendInvitationEmail: (req, user) => deliverLink(req, user, 'verify_email', { invitation: true })
+  };
 }
 
 module.exports = { createIdentityAuthRouter, normalizeEmail, validEmail };

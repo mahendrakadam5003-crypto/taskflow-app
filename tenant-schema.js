@@ -52,6 +52,8 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       must_change_password INTEGER NOT NULL DEFAULT 0,
       token_version INTEGER NOT NULL DEFAULT 0,
       email TEXT,
+      date_of_birth TEXT,
+      phone TEXT,
       email_verified INTEGER NOT NULL DEFAULT 0 CHECK (email_verified IN (0, 1)),
       google_sub TEXT,
       auth_provider TEXT NOT NULL DEFAULT 'password' CHECK (auth_provider IN ('password', 'google', 'email')),
@@ -758,6 +760,26 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS email_auth_tokens_user_purpose_idx ON email_auth_tokens(user_id, purpose)');
       await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS email_auth_tokens_expiry_idx ON email_auth_tokens(expires_at)');
       await markSchemaVersion(5);
+    }
+    if (schemaVersion < 6) {
+      const userColumns = await dbDriverInterface.prepare('PRAGMA table_info(users)').all();
+      const existingUserColumns = new Set(userColumns.map(column => column.name));
+      if (!existingUserColumns.has('date_of_birth')) await dbDriverInterface.exec('ALTER TABLE users ADD COLUMN date_of_birth TEXT');
+      if (!existingUserColumns.has('phone')) await dbDriverInterface.exec('ALTER TABLE users ADD COLUMN phone TEXT');
+      await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS email_login_otps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        email TEXT NOT NULL,
+        purpose TEXT NOT NULL CHECK (purpose IN ('login', 'enrollment')),
+        code_hash TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        consumed_at INTEGER,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS email_login_otps_user_purpose_idx ON email_login_otps(user_id, purpose, consumed_at)');
+      await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS email_login_otps_expiry_idx ON email_login_otps(expires_at)');
+      await markSchemaVersion(6);
     }
     console.log('Database schema and default settings are ready.');
   } catch (err) {

@@ -54,13 +54,43 @@ function mustChangePassword(user) {
   return Number(user.must_change_password) === 1;
 }
 
+function isValidDateOfBirth(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
+    && value <= new Date().toISOString().slice(0, 10);
+}
+
+function isValidPhone(value) {
+  if (typeof value !== 'string' || value.length > 40 || !/^[+()\d.\-\s]+$/.test(value)) return false;
+  const digits = value.replace(/\D/g, '');
+  return digits.length >= 7 && digits.length <= 15;
+}
+
 function isPasswordFlowAllowed(req) {
   const requestPath = String(req.originalUrl || req.path).split('?')[0];
   return req.method === 'POST' && ['/api/auth/change-password', '/api/auth/logout', '/auth/change-password', '/auth/logout', '/change-password', '/logout'].includes(requestPath);
 }
 
+function isEmailEnrollmentFlowAllowed(req) {
+  const requestPath = String(req.originalUrl || req.path).split('?')[0];
+  return req.method === 'GET' && ['/api/auth/me', '/auth/me', '/me'].includes(requestPath)
+    || req.method === 'POST' && [
+      '/api/auth/logout', '/api/auth/change-password', '/api/auth/email/enroll', '/api/auth/email/enroll/verify',
+      '/auth/logout', '/auth/change-password', '/auth/email/enroll', '/auth/email/enroll/verify',
+      '/logout', '/change-password', '/email/enroll', '/email/enroll/verify'
+    ].includes(requestPath);
+}
+
 function rejectUntilPasswordChanged(res) {
   return res.status(403).json({ error: 'Change your password before continuing.', must_change_password: true });
+}
+
+function rejectUntilEmailEnrolled(res) {
+  return res.status(403).json({
+    error: 'Add and verify your email before continuing.',
+    requires_email_enrollment: true
+  });
 }
 
 function regenerateSession(req) {
@@ -141,10 +171,13 @@ async function requireAuth(req, res, next) {
     }
     if (mustChangePassword(req.authenticatedUser)
       && !isPasswordFlowAllowed(req)) return rejectUntilPasswordChanged(res);
+    if (Number(req.authenticatedUser.email_verified) !== 1
+      && !isEmailEnrollmentFlowAllowed(req)) return rejectUntilEmailEnrolled(res);
     return next();
   }
   try {
-    const user = await db.prepare('SELECT role, name, active, must_change_password, token_version FROM users WHERE id = ?').get(req.session.userId);
+    const user = await db.prepare(`SELECT role, name, active, must_change_password, token_version,
+      email, email_verified FROM users WHERE id = ?`).get(req.session.userId);
     if (!user || Number(user.active) !== 1) return rejectInvalidSession(req, res);
     if (Number(req.session.tokenVersion) !== Number(user.token_version)) return rejectInvalidSession(req, res);
     req.session.role = user.role;
@@ -158,6 +191,7 @@ async function requireAuth(req, res, next) {
       });
     }
     if (mustChangePassword(user) && !isPasswordFlowAllowed(req)) return rejectUntilPasswordChanged(res);
+    if (Number(user.email_verified) !== 1 && !isEmailEnrollmentFlowAllowed(req)) return rejectUntilEmailEnrolled(res);
     req.authenticatedUser = user;
     next();
   } catch (error) {
@@ -191,6 +225,12 @@ router.post('/login', loginIpLimiter, loginUsernameLimiter, loginCompanyLimiter,
     if (!user || Number(user.active) !== 1 || !user.password_hash || !passwordMatches) {
       logFailedLogin(req, username);
       return res.status(401).json({ error: 'Invalid username or password' });
+    }
+    if (Number(user.email_verified) === 1) {
+      return res.status(403).json({
+        error: 'Use a one-time code sent to your verified email or continue with Google.',
+        email_login_required: true
+      });
     }
     if (req.companyStatus === 'suspended' && user.role !== 'admin') {
       return res.status(403).json({
@@ -226,6 +266,7 @@ router.post('/login', loginIpLimiter, loginUsernameLimiter, loginCompanyLimiter,
       username: user.username,
       role: user.role,
       must_change_password: mustChangePassword(user),
+      requires_email_enrollment: true,
       company_status: req.companyStatus
     });
   } catch (error) {
@@ -306,7 +347,8 @@ router.post('/change-password', requireAuth, async (req, res) => {
 
 router.get('/me', requireAuth, async (req, res) => {
   try {
-    const user = await db.prepare('SELECT id, name, username, email, email_verified, department, role, must_change_password FROM users WHERE id = ?').get(req.session.userId);
+    const user = await db.prepare(`SELECT id, name, username, email, email_verified, date_of_birth,
+      phone, department, role, must_change_password FROM users WHERE id = ?`).get(req.session.userId);
     if (!user) return res.status(401).json({ error: 'User record not found' });
     const planUsage = await getPlanUsage(req);
     res.json({
@@ -315,6 +357,9 @@ router.get('/me', requireAuth, async (req, res) => {
       username: user.username,
       email: user.email,
       email_verified: Number(user.email_verified) === 1,
+      date_of_birth: user.date_of_birth,
+      phone: user.phone,
+      requires_email_enrollment: Number(user.email_verified) !== 1,
       department: user.department,
       role: user.role,
       must_change_password: mustChangePassword(user),
@@ -336,7 +381,8 @@ router.get('/me', requireAuth, async (req, res) => {
 // ---- Admin: user management endpoints ----
 router.get('/users', requireAdmin, async (req, res) => {
   try {
-    const users = await db.prepare('SELECT id, name, username, email, email_verified, department, role, active, created_at FROM users ORDER BY name').all();
+    const users = await db.prepare(`SELECT id, name, username, email, email_verified, date_of_birth,
+      phone, department, role, active, created_at FROM users ORDER BY name`).all();
     res.json(users);
   } catch (err) {
     sendInternalError(res, err, 'User list request failed');
@@ -403,34 +449,40 @@ router.post('/users', requireAdmin, async (req, res) => {
     if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
       return res.status(400).json({ error: 'User details must be provided as an object.' });
     }
-    const { name, username, password, department, role, email } = req.body;
-    if (typeof name !== 'string' || typeof username !== 'string' || typeof password !== 'string'
-      || (email !== undefined && typeof email !== 'string')
-      || (department !== undefined && typeof department !== 'string')
+    const { name, department, role, email, date_of_birth, phone } = req.body;
+    if (typeof name !== 'string' || typeof email !== 'string'
+      || typeof date_of_birth !== 'string' || typeof phone !== 'string'
+      || typeof department !== 'string'
       || (role !== undefined && !['admin', 'employee'].includes(role))) {
-      return res.status(400).json({ error: 'Name, username, password, department, or role has an invalid type or value.' });
+      return res.status(400).json({ error: 'Name, email, date of birth, phone, department, or role has an invalid type or value.' });
     }
     const normalizedName = name.trim();
-    const normalizedUsername = username.trim().toLowerCase();
-    const normalizedEmail = email === undefined ? '' : normalizeEmail(email);
-    if (!normalizedName || !normalizedUsername) return res.status(400).json({ error: 'Name and username are required.' });
-    if (normalizedEmail && !validEmail(normalizedEmail)) return res.status(400).json({ error: 'Enter a valid email address.' });
-    if (password.length < passwordMinLength) return res.status(400).json({ error: `Password must be at least ${passwordMinLength} characters.` });
+    const normalizedEmail = normalizeEmail(email);
+    const normalizedDepartment = department.trim();
+    if (!normalizedName) return res.status(400).json({ error: 'Employee name is required.' });
+    if (!validEmail(normalizedEmail)) return res.status(400).json({ error: 'Enter a valid email address.' });
+    if (!isValidDateOfBirth(date_of_birth)) return res.status(400).json({ error: 'Enter a valid date of birth that is not in the future.' });
+    if (!isValidPhone(phone)) return res.status(400).json({ error: 'Enter a valid phone number with 7 to 15 digits.' });
+    if (!normalizedDepartment) return res.status(400).json({ error: 'Choose a department.' });
 
     const plan = await getPlan(req);
-    const hash = await bcrypt.hash(password, 10);
+    const username = `email-${crypto.randomUUID()}`;
+    const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 10);
     const inserted = await db.batch([
       {
-        sql: `INSERT INTO users (name, username, password_hash, department, role, email)
-          SELECT ?, ?, ?, ?, ?, ?
+        sql: `INSERT INTO users
+          (name, username, password_hash, department, role, email, date_of_birth, phone, auth_provider)
+          SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'email'
           WHERE ? IS NULL OR (SELECT COUNT(*) FROM users WHERE active = 1) < ?`,
         args: [
           normalizedName,
-          normalizedUsername,
-          hash,
-          (department || '').trim(),
+          username,
+          passwordHash,
+          normalizedDepartment,
           role === 'admin' ? 'admin' : 'employee',
           normalizedEmail || null,
+          date_of_birth,
+          phone.trim(),
           plan?.maxUsers ?? null,
           plan?.maxUsers ?? null
         ]
@@ -442,17 +494,17 @@ router.post('/users', requireAdmin, async (req, res) => {
     }
     const userId = Number(inserted?.[1]?.rows?.[0]?.id);
     if (!Number.isSafeInteger(userId) || userId < 1) throw new Error('New user record was not returned after insert.');
-    await logActivity(req, 'Employee added', 'user', userId, `${normalizedName} (${normalizedUsername})`, userId);
+    await logActivity(req, 'Employee added', 'user', userId, `${normalizedName} (${role === 'admin' ? 'admin' : 'employee'})`, userId);
     const verification = normalizedEmail
-      ? await identityAuth.sendVerificationEmail(req, { id: userId, email: normalizedEmail })
-      : { sent: false, error: null };
-    res.json({ id: userId, emailVerificationSent: verification.sent, emailVerificationError: verification.error });
+      ? await identityAuth.sendInvitationEmail(req, { id: userId, email: normalizedEmail })
+      : { sent: false, error: 'A valid email address is required.' };
+    res.status(201).json({ id: userId, invitationSent: verification.sent, invitationError: verification.error });
   } catch (e) {
     if (/unique constraint/i.test(String(e.message))) {
       if (/users_email_lower_unique|users\.email/i.test(String(e.message))) {
         return res.status(409).json({ error: 'That email address is already attached to another user.' });
       }
-      return res.status(409).json({ error: 'That username is already in use.' });
+      return res.status(409).json({ error: 'That email address is already attached to another user.' });
     }
     sendInternalError(res, e, 'User creation failed');
   }
@@ -500,12 +552,14 @@ router.post('/users/:id/send-verification', requireAdmin, async (req, res) => {
 
 router.put('/users/:id', requireAdmin, async (req, res) => {
   try {
-    const { name, username, department, role, active, password, email } = req.body || {};
+    const { name, username, department, role, active, password, email, date_of_birth, phone } = req.body || {};
     const id = Number(req.params.id);
     if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'Invalid user id.' });
     if ((name !== undefined && typeof name !== 'string')
       || (username !== undefined && typeof username !== 'string')
       || (email !== undefined && typeof email !== 'string')
+      || (date_of_birth !== undefined && typeof date_of_birth !== 'string')
+      || (phone !== undefined && typeof phone !== 'string')
       || (department !== undefined && typeof department !== 'string')
       || (role !== undefined && !['admin', 'employee'].includes(role))
       || (active !== undefined && ![true, false, 0, 1].includes(active))) {
@@ -534,6 +588,10 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
     if (nextName === '') return res.status(400).json({ error: 'Employee name cannot be empty.' });
     if (nextUsername === '') return res.status(400).json({ error: 'Username cannot be empty.' });
     if (nextEmail && !validEmail(nextEmail)) return res.status(400).json({ error: 'Enter a valid email address.' });
+    if (date_of_birth !== undefined && !isValidDateOfBirth(date_of_birth)) {
+      return res.status(400).json({ error: 'Enter a valid date of birth that is not in the future.' });
+    }
+    if (phone !== undefined && !isValidPhone(phone)) return res.status(400).json({ error: 'Enter a valid phone number with 7 to 15 digits.' });
     if (nextUsername !== undefined) {
       const duplicate = await db.prepare('SELECT id FROM users WHERE username = ? AND id <> ?').get(nextUsername, id);
       if (duplicate) return res.status(409).json({ error: 'That username is already in use.' });
@@ -555,6 +613,8 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
     
     if (nextName !== undefined) await db.prepare('UPDATE users SET name = ? WHERE id = ?').run(nextName, id);
     if (nextUsername !== undefined) await db.prepare('UPDATE users SET username = ? WHERE id = ?').run(nextUsername, id);
+    if (date_of_birth !== undefined) await db.prepare('UPDATE users SET date_of_birth = ? WHERE id = ?').run(date_of_birth, id);
+    if (phone !== undefined) await db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(phone.trim(), id);
     if (emailChanged) {
       await db.prepare(`UPDATE users SET email = ?, email_verified = 0, google_sub = NULL
         WHERE id = ?`).run(nextEmail || null, id);

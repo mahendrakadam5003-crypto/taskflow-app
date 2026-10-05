@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="/icons/taskflow.svg">
 <link rel="icon" href="/icons/taskflow.svg">
 <link rel="stylesheet" href="/css/style.css?v=20260930-12">
-<link rel="stylesheet" href="/css/theme.css?v=7">
+<link rel="stylesheet" href="/css/theme.css?v=8">
 <link rel="preload" href="/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
 </head>
 <body>
@@ -49,30 +49,51 @@
 <div id="login-screen" class="login-screen hidden">
   <div class="login-card">
     <div class="login-mark"><svg class="icon" aria-hidden="true"><use href="#icon-flow"></use></svg><span>TaskFlow</span></div>
-    <p class="login-sub">Internal workspace — tasks &amp; attendance</p>
-    <form id="login-form">
-      <label>Company code <span class="login-optional">(optional for the existing workspace)</span>
+    <p class="login-sub">Sign in with your verified work email or Google account.</p>
+    <label>Company code <span class="login-optional">(optional for the existing workspace)</span>
         <input type="text" id="login-company-code" autocomplete="organization" maxlength="63" autocapitalize="none" spellcheck="false">
+    </label>
+    <form id="email-login-request-form">
+      <label>Work email address
+        <input type="email" id="email-login-address" autocomplete="email" maxlength="254" required>
       </label>
-      <label>Username or verified email
+      <p id="email-login-request-status" class="login-status" role="status" aria-live="polite"></p>
+      <button type="submit" class="btn btn-primary btn-block">Send sign-in code</button>
+    </form>
+    <form id="email-login-verify-form" class="hidden">
+      <label>Six-digit code
+        <input type="text" id="email-login-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      </label>
+      <p id="email-login-verify-status" class="login-status" role="status" aria-live="polite"></p>
+      <button type="submit" class="btn btn-primary btn-block">Verify and sign in</button>
+    </form>
+    <div class="login-provider-actions">
+      <button type="button" class="btn btn-secondary btn-block" id="google-login-button">Continue with Google</button>
+      <button type="button" class="link-btn" id="legacy-login-toggle">Existing account email setup</button>
+    </div>
+    <form id="login-form" class="hidden">
+      <label>Existing username
         <input type="text" id="login-username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
       </label>
       <label>Password
         <input type="password" id="login-password" autocomplete="current-password" required>
       </label>
       <div id="login-error" class="form-error"></div>
-      <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+      <button type="submit" class="btn btn-secondary btn-block">Continue account setup</button>
     </form>
-    <div class="login-provider-actions">
-      <button type="button" class="btn btn-secondary btn-block" id="google-login-button">Continue with Google</button>
-      <button type="button" class="link-btn" id="forgot-password-button">Forgot password?</button>
-    </div>
-    <form id="password-reset-request-form" class="hidden">
+    <form id="email-enrollment-form" class="hidden">
+      <p class="login-sub">Your existing account needs a verified email before you can continue.</p>
       <label>Email address
-        <input type="email" id="password-reset-email" autocomplete="email" maxlength="254" required>
+        <input type="email" id="email-enrollment-address" autocomplete="email" maxlength="254" required>
       </label>
-      <p id="password-reset-request-status" class="form-error" role="status" aria-live="polite"></p>
-      <button type="submit" class="btn btn-secondary btn-block">Send reset link</button>
+      <p id="email-enrollment-status" class="login-status" role="status" aria-live="polite"></p>
+      <button type="submit" class="btn btn-primary btn-block" id="email-enrollment-send">Send verification code</button>
+      <div id="email-enrollment-code-section" class="hidden">
+        <label>Six-digit verification code
+          <input type="text" id="email-enrollment-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6">
+        </label>
+        <button type="button" class="btn btn-secondary btn-block" id="email-enrollment-verify">Verify email and continue</button>
+      </div>
     </form>
   </div>
 </div>
@@ -395,6 +416,6 @@
   <div class="modal" id="modal" role="dialog" aria-modal="true" tabindex="-1"></div>
 </div>
 
-<script src="/js/app.js?v=20261005-3"></script>
+<script src="/js/app.js?v=20261006-1"></script>
 </body>
 </html>

@@ -940,12 +940,12 @@ companyForm.addEventListener('submit', async event => {
     const fields = [
       ['Company', result.company.name],
       ['Company code', result.company.code],
-      ['Company admin username', result.admin.username],
-      ['One-time password', result.admin.oneTimePassword],
+      ['Administrator', result.admin.name],
+      ['Administrator email', result.admin.email],
       ['Trial ends', result.company.trialEndsAt]
     ];
-    createdCompanyDetails.innerHTML = `<h3>Company created — save these login details now</h3>
-      <p>Share the credentials securely with the company admin. The password is shown only in this response.</p>
+    createdCompanyDetails.innerHTML = `<h3>Company created — invitation sent</h3>
+      <p>An invitation has been sent to the administrator email. They must verify it, then sign in using an email code or Google.</p>
       ${fields.map(([label, value]) => `<p><strong>${escapeHtml(label)}:</strong> <code>${escapeHtml(value)}</code></p>`).join('')}
       <button class="button button-quiet" id="dismiss-created-details" type="button">I have saved these details</button>`;
     createdCompanyDetails.classList.remove('hidden');

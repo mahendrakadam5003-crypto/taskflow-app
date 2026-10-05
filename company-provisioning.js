@@ -11,6 +11,8 @@ const {
 } = require('./control-db');
 const { initTenantSchema } = require('./tenant-schema');
 const { createTursoProvisioner } = require('./turso-provisioner');
+const { createIdentityAuthRouter } = require('./routes/identity-auth');
+const { createMailer } = require('./mailer');
 
 const COMPANY_CODE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const RESERVED_COMPANY_CODES = new Set(['www', 'admin', 'api', 'superadmin', 'app']);
@@ -32,7 +34,7 @@ function validateProvisioningInput(body) {
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   const code = typeof body.code === 'string' ? body.code.trim().toLowerCase() : '';
   const adminName = typeof body.adminName === 'string' ? body.adminName.trim() : '';
-  const adminUsername = typeof body.adminUsername === 'string' ? body.adminUsername.trim().toLowerCase() : '';
+  const requestedAdminUsername = typeof body.adminUsername === 'string' ? body.adminUsername.trim().toLowerCase() : '';
   const ownerEmail = typeof body.ownerEmail === 'string' ? body.ownerEmail.trim().toLowerCase() : '';
   const planId = Number(body.planId);
 
@@ -42,11 +44,12 @@ function validateProvisioningInput(body) {
   }
   if (RESERVED_COMPANY_CODES.has(code)) throw new ProvisioningError('That company code is reserved.');
   if (!adminName || adminName.length > 120) throw new ProvisioningError('Administrator name must contain 1 to 120 characters.');
+  const adminUsername = requestedAdminUsername || `email-${crypto.randomUUID()}`;
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(adminUsername)) {
     throw new ProvisioningError('Administrator username must use 1 to 64 lowercase letters, numbers, dots, underscores, or hyphens.');
   }
-  if (ownerEmail && (ownerEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail))) {
-    throw new ProvisioningError('Enter a valid owner email address or leave it blank.');
+  if (!ownerEmail || ownerEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) {
+    throw new ProvisioningError('A valid owner email address is required for the administrator invitation.');
   }
   if (!Number.isSafeInteger(planId) || planId < 1) throw new ProvisioningError('Choose an active plan.');
 
@@ -61,9 +64,11 @@ function createCompanyProvisioner({
   initializeTenantSchema = initTenantSchema,
   encryptToken = encryptTenantDatabaseToken,
   hashPassword = password => bcrypt.hash(password, 10),
+  mailer,
   localTenantRoot = path.join(__dirname, 'tenants'),
   now = () => new Date()
 } = {}) {
+  const emailMailer = mailer || createMailer({ environment });
   return async function provisionCompany(body, admin) {
     const input = validateProvisioningInput(body);
     const controlDb = await getDatabase();
@@ -80,10 +85,12 @@ function createCompanyProvisioner({
     ]);
     if (companyCodeResult.rows?.[0]) throw new ProvisioningError('That company code is already in use.', 409);
     if (!planResult.rows?.[0]) throw new ProvisioningError('Choose an active plan.', 400);
+    if (!environment.APP_BASE_URL || !emailMailer.isConfigured?.()) {
+      throw new ProvisioningError('Configure APP_BASE_URL and SMTP delivery before provisioning invited accounts.', 503);
+    }
 
     const databaseName = `tf-${input.code}`;
-    const oneTimePassword = crypto.randomBytes(24).toString('base64url');
-    const passwordHash = await hashPassword(oneTimePassword);
+    const passwordHash = await hashPassword(crypto.randomBytes(48).toString('base64url'));
     const configuredTrialDays = Number(pricingSettingsResult.rows?.[0]?.trial_days);
     const trialDays = Number.isSafeInteger(configuredTrialDays) && configuredTrialDays >= 1 && configuredTrialDays <= 60
       ? configuredTrialDays
@@ -122,13 +129,14 @@ function createCompanyProvisioner({
 
       tenantClient = createTenantClient({ url: tenantDatabaseUrl, authToken: tenantDatabaseToken });
       await initializeTenantSchema(tenantClient, { seedInitialAdmin: false });
-      await tenantClient.execute({
-        sql: `INSERT INTO users (name, username, password_hash, role, department, active, must_change_password)
-          VALUES (?, ?, ?, 'admin', '', 1, 1)`,
-        args: [input.adminName, input.adminUsername, passwordHash]
+      const createdAdmin = await tenantClient.execute({
+        sql: `INSERT INTO users
+          (name, username, password_hash, role, department, active, must_change_password, email, auth_provider)
+          VALUES (?, ?, ?, 'admin', '', 1, 0, ?, 'email')`,
+        args: [input.adminName, input.adminUsername, passwordHash, input.ownerEmail]
       });
-      await tenantClient.close?.();
-      tenantClient = null;
+      const adminId = Number(createdAdmin.lastInsertRowid);
+      if (!Number.isSafeInteger(adminId) || adminId < 1) throw new Error('New company administrator ID was not returned.');
 
       transaction = await controlDb.transaction('write');
       const insertResult = await transaction.execute({
@@ -150,12 +158,40 @@ function createCompanyProvisioner({
         ]
       });
       const companyId = Number(insertResult.lastInsertRowid);
+      const identity = createIdentityAuthRouter({
+        database: {
+          prepare(sql) {
+            return {
+              async get(...args) {
+                const result = await tenantClient.execute({ sql, args });
+                return result.rows?.[0] || null;
+              },
+              async run(...args) {
+                const result = await tenantClient.execute({ sql, args });
+                return {
+                  changes: Number(result.rowsAffected || 0),
+                  lastInsertRowid: Number(result.lastInsertRowid || 0)
+                };
+              }
+            };
+          }
+        },
+        mailer: emailMailer,
+        environment
+      });
+      const invitation = await identity.sendInvitationEmail(
+        { companyCode: input.code },
+        { id: adminId, email: input.ownerEmail }
+      );
+      if (!invitation.sent) throw new ProvisioningError(invitation.error || 'Administrator invitation could not be sent.', 503);
       await transaction.execute({
         sql: 'INSERT INTO super_admin_audit (super_admin_id, company_id, action, details) VALUES (?, ?, ?, ?)',
         args: [admin.id, companyId, 'Company provisioned', `Created company ${input.code} on trial through ${trialEndsAt}.`]
       });
       await transaction.commit();
       transaction = null;
+      await tenantClient.close?.();
+      tenantClient = null;
 
       return {
         company: {
@@ -169,7 +205,8 @@ function createCompanyProvisioner({
         admin: {
           name: input.adminName,
           username: input.adminUsername,
-          oneTimePassword
+          email: input.ownerEmail,
+          invitationSent: true
         }
       };
     } catch (error) {

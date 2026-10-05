@@ -10,6 +10,16 @@ const { test } = require('node:test');
 const { createCompanyProvisioner, ProvisioningError } = require('../company-provisioning');
 const { createTursoProvisioner } = require('../turso-provisioner');
 
+const invitationEnvironment = {
+  USE_LOCAL_DB: '1',
+  APP_BASE_URL: 'https://taskflow.example.test',
+  SESSION_SECRET: 'company-provisioning-test-session-secret-over-32-chars'
+};
+const invitationMailer = {
+  isConfigured: () => true,
+  async send() { return { accepted: true }; }
+};
+
 async function removeTestDirectory(directory) {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     try {
@@ -88,12 +98,13 @@ async function createControlDatabase({ failAudit = false } = {}) {
   };
 }
 
-test('company provisioning creates isolated local tenant databases with one-time admin accounts', async () => {
+test('company provisioning creates isolated tenants and invites each administrator by email', async () => {
   const controlDb = await createControlDatabase();
   const localTenantRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'taskflow-provision-test-'));
   const tenantDatabases = new Map();
   const provision = createCompanyProvisioner({
-    environment: { USE_LOCAL_DB: '1' },
+    environment: invitationEnvironment,
+    mailer: invitationMailer,
     getDatabase: async () => controlDb,
     localTenantRoot,
     createTenantClient: ({ url }) => {
@@ -115,6 +126,7 @@ test('company provisioning creates isolated local tenant databases with one-time
       code: 'solo-test',
       adminName: 'Solo Admin',
       adminUsername: 'admin',
+      ownerEmail: 'solo@example.test',
       planId: 1
     }, { id: 1 });
     const second = await provision({
@@ -130,16 +142,19 @@ test('company provisioning creates isolated local tenant databases with one-time
       code: 'business-test',
       adminName: 'Business Admin',
       adminUsername: 'thirdadmin',
+      ownerEmail: 'business@example.test',
       planId: 3
     }, { id: 1 });
 
     assert.equal(first.company.status, 'trial');
     assert.equal(first.company.trialEndsAt, '2026-10-12');
     assert.equal(first.admin.username, 'admin');
-    assert.ok(first.admin.oneTimePassword.length >= 30);
+    assert.equal(first.admin.email, 'solo@example.test');
+    assert.equal(first.admin.invitationSent, true);
     assert.equal(second.admin.username, 'owner');
     assert.equal(third.admin.username, 'thirdadmin');
-    assert.notEqual(first.admin.oneTimePassword, second.admin.oneTimePassword);
+    assert.equal(second.admin.invitationSent, true);
+    assert.equal(third.admin.invitationSent, true);
 
     assert.deepEqual(controlDb.companies.map(company => [
       company.code,
@@ -162,9 +177,9 @@ test('company provisioning creates isolated local tenant databases with one-time
     const secondDb = tenantDatabases.get(`file:${path.join(localTenantRoot, 'small-test.db').replace(/\\/g, '/')}`);
     const thirdDb = tenantDatabases.get(`file:${path.join(localTenantRoot, 'business-test.db').replace(/\\/g, '/')}`);
     try {
-      const firstUsers = await firstDb.execute('SELECT name, username, role, active, must_change_password, password_hash FROM users');
-      const secondUsers = await secondDb.execute('SELECT name, username, role, active, must_change_password, password_hash FROM users');
-      const thirdUsers = await thirdDb.execute('SELECT name, username, role, active, must_change_password, password_hash FROM users');
+      const firstUsers = await firstDb.execute('SELECT name, username, role, active, must_change_password, password_hash, email, email_verified, auth_provider FROM users');
+      const secondUsers = await secondDb.execute('SELECT name, username, role, active, must_change_password, password_hash, email, email_verified, auth_provider FROM users');
+      const thirdUsers = await thirdDb.execute('SELECT name, username, role, active, must_change_password, password_hash, email, email_verified, auth_provider FROM users');
       assert.equal(firstUsers.rows.length, 1);
       assert.equal(secondUsers.rows.length, 1);
       assert.equal(thirdUsers.rows.length, 1);
@@ -173,8 +188,10 @@ test('company provisioning creates isolated local tenant databases with one-time
       assert.equal(thirdUsers.rows[0].username, 'thirdadmin');
       assert.equal(firstUsers.rows[0].role, 'admin');
       assert.equal(Number(firstUsers.rows[0].active), 1);
-      assert.equal(Number(firstUsers.rows[0].must_change_password), 1);
-      assert.equal(await bcrypt.compare(first.admin.oneTimePassword, firstUsers.rows[0].password_hash), true);
+      assert.equal(Number(firstUsers.rows[0].must_change_password), 0);
+      assert.equal(firstUsers.rows[0].email, 'solo@example.test');
+      assert.equal(Number(firstUsers.rows[0].email_verified), 0);
+      assert.equal(firstUsers.rows[0].auth_provider, 'email');
       assert.notEqual(firstUsers.rows[0].password_hash, secondUsers.rows[0].password_hash);
       assert.ok(Number((await firstDb.execute('SELECT COUNT(*) AS count FROM settings')).rows[0].count) >= 6);
     } finally {
@@ -187,6 +204,7 @@ test('company provisioning creates isolated local tenant databases with one-time
         code: 'solo-test',
         adminName: 'Duplicate Admin',
         adminUsername: 'admin',
+        ownerEmail: 'solo@example.test',
         planId: 1
       }, { id: 1 }),
       error => error instanceof ProvisioningError && error.statusCode === 409
@@ -244,6 +262,7 @@ test('company provisioning validates reserved codes before opening control stora
       code: 'inactive-plan',
       adminName: 'Admin',
       adminUsername: 'admin',
+      ownerEmail: 'admin@example.test',
       planId: 1
     }, { id: 1 }),
     error => error instanceof ProvisioningError && error.statusCode === 400
@@ -258,6 +277,7 @@ test('company codes fit the Turso database-name limit', async () => {
     code: 'a'.repeat(61),
     adminName: 'Admin',
     adminUsername: 'admin',
+    ownerEmail: 'admin@example.test',
     planId: 1
   });
   assert.equal(`tf-${valid.code}`.length, 64);
@@ -277,8 +297,11 @@ test('failed tenant initialization rolls back the newly created Turso database a
   const provision = createCompanyProvisioner({
     environment: {
       TURSO_PLATFORM_TOKEN: 'test-platform-token',
-      TURSO_ORG: 'test-org'
+      TURSO_ORG: 'test-org',
+      APP_BASE_URL: invitationEnvironment.APP_BASE_URL,
+      SESSION_SECRET: invitationEnvironment.SESSION_SECRET
     },
+    mailer: invitationMailer,
     getDatabase: async () => controlDb,
     createTursoClient: () => ({
       async createDatabase() {
@@ -312,6 +335,7 @@ test('failed tenant initialization rolls back the newly created Turso database a
         code: 'rollback-test',
         adminName: 'Rollback Admin',
         adminUsername: 'admin',
+        ownerEmail: 'rollback@example.test',
         planId: 1
         }, { id: 1 }),
       error => error instanceof ProvisioningError && error.statusCode === 502
@@ -330,7 +354,8 @@ test('control-database transaction failure removes the newly created local tenan
   const localTenantRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'taskflow-provision-rollback-test-'));
   let tenantClosed = false;
   const provision = createCompanyProvisioner({
-    environment: { USE_LOCAL_DB: '1' },
+    environment: invitationEnvironment,
+    mailer: invitationMailer,
     getDatabase: async () => controlDb,
     localTenantRoot,
     createTenantClient: () => {
@@ -354,6 +379,7 @@ test('control-database transaction failure removes the newly created local tenan
         code: 'transaction-failure',
         adminName: 'Admin',
         adminUsername: 'admin',
+        ownerEmail: 'admin@example.test',
         planId: 1
       }, { id: 1 }),
       error => error instanceof ProvisioningError && error.statusCode === 502
@@ -437,8 +463,11 @@ test('Turso provisioning uses the configured organization and returns only the t
     const provision = createCompanyProvisioner({
       environment: {
         TURSO_PLATFORM_TOKEN: 'test-token',
-        TURSO_ORG: 'test-org'
+        TURSO_ORG: 'test-org',
+        APP_BASE_URL: invitationEnvironment.APP_BASE_URL,
+        SESSION_SECRET: invitationEnvironment.SESSION_SECRET
       },
+      mailer: invitationMailer,
       getDatabase: async () => controlDb,
       createTursoClient: () => turso,
       encryptToken: token => `encrypted:${token}`
@@ -451,6 +480,7 @@ test('Turso provisioning uses the configured organization and returns only the t
           code: 'malformed-api',
           adminName: 'Admin',
           adminUsername: 'admin',
+          ownerEmail: 'admin@example.test',
           planId: 1
         }, { id: 1 }),
         error => error instanceof ProvisioningError && error.statusCode === 502

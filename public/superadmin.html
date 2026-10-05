@@ -89,16 +89,12 @@
             <input id="new-company-code" name="code" maxlength="61" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" autocapitalize="none" spellcheck="false" required>
           </div>
           <div class="form-field">
-            <label for="new-company-email">Owner email <span class="optional-label">(optional)</span></label>
-            <input id="new-company-email" name="ownerEmail" type="email" maxlength="254" autocomplete="email">
+            <label for="new-company-email">Administrator email</label>
+            <input id="new-company-email" name="ownerEmail" type="email" maxlength="254" autocomplete="email" required>
           </div>
           <div class="form-field">
             <label for="new-admin-name">First administrator name</label>
             <input id="new-admin-name" name="adminName" maxlength="120" required>
-          </div>
-          <div class="form-field">
-            <label for="new-admin-username">First administrator username</label>
-            <input id="new-admin-username" name="adminUsername" maxlength="64" pattern="[a-zA-Z0-9][a-zA-Z0-9._-]*" autocomplete="username" required>
           </div>
           <div class="form-field">
             <label for="new-company-plan">Trial plan</label>

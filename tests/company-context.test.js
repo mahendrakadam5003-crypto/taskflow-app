@@ -66,6 +66,12 @@ test('legacy and registered-company sign-in preserve existing credentials and is
   app.post('/api/auth/password-reset/request', (req, res) => {
     res.json({ tenantId: manager.getCurrentTenantId() });
   });
+  app.post('/api/auth/email/login/request', (req, res) => {
+    res.json({ tenantId: manager.getCurrentTenantId() });
+  });
+  app.post('/api/auth/email/login/verify', (req, res) => {
+    res.json({ tenantId: manager.getCurrentTenantId() });
+  });
   app.get('/api/auth/google/start', (req, res) => {
     req.session.googleOAuth = { companyId: req.companyTenantId };
     res.json({ tenantId: manager.getCurrentTenantId() });
@@ -163,6 +169,19 @@ test('legacy and registered-company sign-in preserve existing credentials and is
       body: JSON.stringify({ email: 'person@example.test', company_code: 'second-company' })
     });
     assert.deepEqual(await resetRequest.json(), { tenantId: 202 });
+
+    const emailCodeRequest = await fetch(`${baseUrl}/api/auth/email/login/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'person@example.test', company_code: 'second-company' })
+    });
+    assert.deepEqual(await emailCodeRequest.json(), { tenantId: 202 });
+    const emailCodeVerify = await fetch(`${baseUrl}/api/auth/email/login/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'person@example.test', code: '123456', company_code: 'second-company' })
+    });
+    assert.deepEqual(await emailCodeVerify.json(), { tenantId: 202 });
 
     const googleStart = await fetch(`${baseUrl}/api/auth/google/start?company_code=second-company`);
     assert.deepEqual(await googleStart.json(), { tenantId: 202 });

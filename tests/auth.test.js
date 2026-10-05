@@ -15,8 +15,8 @@ const user = {
   id: 1,
   name: 'Test Employee',
   username: 'employee',
-  email: null,
-  email_verified: 0,
+  email: 'employee@example.test',
+  email_verified: 1,
   google_sub: null,
   auth_provider: 'password',
   department: 'Testing',
@@ -30,8 +30,8 @@ const otherUser = {
   id: 2,
   name: 'Second Employee',
   username: 'second',
-  email: null,
-  email_verified: 0,
+  email: 'second@example.test',
+  email_verified: 1,
   google_sub: null,
   auth_provider: 'password',
   department: 'Testing',
@@ -113,13 +113,13 @@ const mockDb = {
   },
   async batch(statements) {
     const statement = statements[0];
-    const [name, username, passwordHash, department, role, email, limit] = statement.args;
+    const [name, username, passwordHash, department, role, email, dateOfBirth, phone, limit] = statement.args;
     const activeCount = [...users.values()].filter(row => Number(row.active) === 1).length;
     if (limit !== null && activeCount >= Number(limit)) return [{ rowsAffected: 0 }, { rows: [] }];
     const id = Math.max(...users.keys()) + 1;
     users.set(id, {
       id, name, username, password_hash: passwordHash, department, role, active: 1,
-      email, email_verified: 0, google_sub: null, auth_provider: 'password',
+      email, date_of_birth: dateOfBirth, phone, email_verified: 0, google_sub: null, auth_provider: 'email',
       must_change_password: 0, token_version: 0
     });
     return [{ rowsAffected: 1 }, { rows: [{ id }] }];
@@ -158,6 +158,14 @@ app.use(session({
   saveUninitialized: false,
   cookie: { httpOnly: true, sameSite: 'lax' }
 }));
+app.post('/test-session', (req, res) => {
+  req.session.userId = user.id;
+  req.session.role = user.role;
+  req.session.name = user.name;
+  req.session.tokenVersion = user.token_version;
+  req.session.companyId = 'legacy';
+  req.session.save(error => error ? res.status(500).end() : res.json({ ok: true }));
+});
 app.get('/api/company-status-probe', (req, res, next) => {
   req.companyStatus = 'suspended';
   next();
@@ -217,9 +225,8 @@ async function request(route, { method = 'GET', body, cookie, timeoutMs = 3000 }
 }
 
 async function login(password = 'initial-password-123') {
-  const response = await request('/login', {
+  const response = await fetch(`${baseUrl}/test-session`, {
     method: 'POST',
-    body: { username: 'employee', password }
   });
   assert.equal(response.status, 200);
   const setCookie = response.headers.get('set-cookie');
@@ -286,7 +293,8 @@ test('password change invalidates the other browser session', async () => {
     method: 'POST',
     body: { username: 'employee', password: 'replacement-password-456' }
   });
-  assert.equal(replacementLogin.status, 200);
+  assert.equal(replacementLogin.status, 403);
+  assert.equal((await replacementLogin.json()).email_login_required, true);
 });
 
 test('inactive company status blocks authenticated requests', async () => {
@@ -391,7 +399,10 @@ test('user seats are enforced for creation and reactivation, and deactivation fr
     const denied = await request('/users', {
       method: 'POST',
       cookie: adminCookie,
-      body: { name: 'Over limit', username: 'over-limit', password: 'valid-password-123' }
+      body: {
+        name: 'Over limit', date_of_birth: '1990-01-01', phone: '+1 555 010 2030',
+        email: 'over-limit@example.test', department: 'Testing'
+      }
     });
     assert.equal(denied.status, 403);
     assert.deepEqual(await denied.json(), { error: 'User limit reached - add seats.' });
@@ -401,10 +412,18 @@ test('user seats are enforced for creation and reactivation, and deactivation fr
     const created = await request('/users', {
       method: 'POST',
       cookie: adminCookie,
-      body: { name: 'New seat', username: 'new-seat', password: 'valid-password-123' }
+      body: {
+        name: 'New seat', date_of_birth: '1990-01-01', phone: '+1 555 010 2031',
+        email: 'new-seat@example.test', department: 'Testing'
+      }
     });
-    assert.equal(created.status, 200);
-    const { id: newUserId } = await created.json();
+    assert.equal(created.status, 201);
+    const createdUser = await created.json();
+    const { id: newUserId } = createdUser;
+    assert.equal(createdUser.invitationSent, false);
+    assert.equal(users.get(newUserId).email, 'new-seat@example.test');
+    assert.equal(users.get(newUserId).date_of_birth, '1990-01-01');
+    assert.equal(users.get(newUserId).phone, '+1 555 010 2031');
 
     const deniedReactivation = await request('/users/2', { method: 'PUT', cookie: adminCookie, body: { active: true } });
     assert.equal(deniedReactivation.status, 403);
@@ -422,7 +441,7 @@ test('user seats are enforced for creation and reactivation, and deactivation fr
   }
 });
 
-test('verified email works as a password login alias while unverified email does not', async () => {
+test('email password sign-in is disabled for verified accounts while unverified aliases are rejected', async () => {
   const originalPasswordHash = user.password_hash;
   const originalEmail = user.email;
   const originalVerified = user.email_verified;
@@ -441,12 +460,41 @@ test('verified email works as a password login alias while unverified email does
       method: 'POST',
       body: { username: user.email, password: 'email-login-password-123' }
     });
-    assert.equal(verified.status, 200);
-    assert.equal((await verified.json()).username, user.username);
+    assert.equal(verified.status, 403);
+    assert.equal((await verified.json()).email_login_required, true);
   } finally {
     user.password_hash = originalPasswordHash;
     user.email = originalEmail;
     user.email_verified = originalVerified;
+  }
+});
+
+test('existing accounts without a verified email are restricted to email enrollment', async () => {
+  const snapshot = { ...user };
+  try {
+    user.email = null;
+    user.email_verified = 0;
+    user.password_hash = await bcrypt.hash('legacy-account-password', 4);
+    const loginResponse = await request('/login', {
+      method: 'POST',
+      body: { username: user.username, password: 'legacy-account-password' }
+    });
+    assert.equal(loginResponse.status, 200);
+    assert.equal((await loginResponse.json()).requires_email_enrollment, true);
+    const cookie = loginResponse.headers.get('set-cookie').split(';', 1)[0];
+
+    const profile = await request('/me', { cookie });
+    assert.equal(profile.status, 200);
+    assert.equal((await profile.json()).requires_email_enrollment, true);
+
+    const blocked = await request('/activity', { cookie });
+    assert.equal(blocked.status, 403);
+    assert.deepEqual(await blocked.json(), {
+      error: 'Add and verify your email before continuing.',
+      requires_email_enrollment: true
+    });
+  } finally {
+    Object.assign(user, snapshot);
   }
 });
 
