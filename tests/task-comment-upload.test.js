@@ -7,10 +7,18 @@ const dbPath = require.resolve('../db');
 const authPath = require.resolve('../routes/auth');
 const auditPath = require.resolve('../audit');
 const storagePath = require.resolve('../telegram-storage');
-const originals = new Map([dbPath, authPath, auditPath, storagePath].map(modulePath => [modulePath, require.cache[modulePath]]));
+const limitsPath = require.resolve('../limits');
+const originals = new Map([dbPath, authPath, auditPath, storagePath, limitsPath].map(modulePath => [modulePath, require.cache[modulePath]]));
 const originalTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
 let telegramUploads = 0;
 let dbWrites = 0;
+let rejectStorageReservation = false;
+class TestStorageLimitError extends Error {
+  constructor() {
+    super('Storage limit reached.');
+    this.statusCode = 413;
+  }
+}
 
 const mockDb = {
   ready: Promise.resolve(),
@@ -27,6 +35,14 @@ const mockDb = {
         return { changes: 1, lastInsertRowid: dbWrites };
       }
     };
+  },
+  async batch() {
+    dbWrites += 1;
+    return [
+      { rowsAffected: 1 },
+      { rowsAffected: 1, lastInsertRowid: dbWrites },
+      { rowsAffected: 1 }
+    ];
   }
 };
 
@@ -55,6 +71,21 @@ require.cache[storagePath] = {
       telegramUploads += 1;
       return { fileId: `test-file-${telegramUploads}`, messageId: telegramUploads };
     }
+  }
+};
+require.cache[limitsPath] = {
+  id: limitsPath,
+  filename: limitsPath,
+  loaded: true,
+  exports: {
+    async getPlanUsage() { return { plan: null, features: { attendance: true, reimbursements: true, export: true }, usage: null }; },
+    async reserveUpload() {
+      if (rejectStorageReservation) throw new TestStorageLimitError();
+      return 'pending:test';
+    },
+    async releaseUpload() {},
+    requireFeature() { return (req, res, next) => next(); },
+    StorageLimitError: TestStorageLimitError
   }
 };
 process.env.TELEGRAM_BOT_TOKEN = 'test-token';
@@ -118,6 +149,18 @@ test('comment uploads allow approved file types under 10 MB', async () => {
   const response = await uploadComment('photo.png', 'image/png', 32);
   assert.equal(response.status, 200);
   assert.equal(telegramUploads, 1);
+});
+
+test('comment upload stops before Telegram when company storage quota is exceeded', async () => {
+  telegramUploads = 0;
+  rejectStorageReservation = true;
+  try {
+    const response = await uploadComment('photo.png', 'image/png', 32);
+    assert.equal(response.status, 413);
+    assert.equal(telegramUploads, 0);
+  } finally {
+    rejectStorageReservation = false;
+  }
 });
 
 test('comment uploads reject mismatched or disallowed file types', async () => {

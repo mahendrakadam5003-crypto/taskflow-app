@@ -75,8 +75,8 @@
     </div>
 
     <nav class="nav-section" id="main-nav-section">
-      <button class="nav-item" data-view="attendance"><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg><span class="nav-label">Attendance</span></button>
-      <button class="nav-item" data-view="reimbursements"><svg class="icon" aria-hidden="true"><use href="#icon-receipt"></use></svg><span class="nav-label">Reimbursements</span></button>
+      <button class="nav-item" data-feature="attendance" data-view="attendance"><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg><span class="nav-label">Attendance</span></button>
+      <button class="nav-item" data-feature="reimbursements" data-view="reimbursements"><svg class="icon" aria-hidden="true"><use href="#icon-receipt"></use></svg><span class="nav-label">Reimbursements</span></button>
       <button class="nav-item" data-view="mytasks"><svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg><span class="nav-label">My Tasks</span></button>
       <button class="nav-item" id="nav-payment-history" data-view="payment-history" style="display:none"><svg class="icon" aria-hidden="true"><use href="#icon-wallet"></use></svg><span class="nav-label">Payment History</span></button>
       <button class="nav-item" data-view="notifications"><svg class="icon" aria-hidden="true"><use href="#icon-bell"></use></svg><span class="nav-label">Notifications</span></button>
@@ -119,8 +119,8 @@
         </div>
       </div>
       <div class="dashboard-grid">
-        <button class="dashboard-card dashboard-card-primary" data-dashboard-view="reimbursements"><span class="dashboard-card-icon"><svg class="icon" aria-hidden="true"><use href="#icon-receipt"></use></svg></span><b>Reimbursements</b><small>Submit and review expenses</small></button>
-        <button class="dashboard-card" data-dashboard-view="attendance"><span class="dashboard-card-icon"><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg></span><b>Attendance</b><small>Punch in and view history</small></button>
+        <button class="dashboard-card dashboard-card-primary" data-feature="reimbursements" data-dashboard-view="reimbursements"><span class="dashboard-card-icon"><svg class="icon" aria-hidden="true"><use href="#icon-receipt"></use></svg></span><b>Reimbursements</b><small>Submit and review expenses</small></button>
+        <button class="dashboard-card" data-feature="attendance" data-dashboard-view="attendance"><span class="dashboard-card-icon"><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg></span><b>Attendance</b><small>Punch in and view history</small></button>
         <button class="dashboard-card" data-dashboard-view="mytasks"><span class="dashboard-card-icon"><svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg></span><b>My Tasks</b><small>See tasks assigned to you</small></button>
         <button class="dashboard-card" id="dashboard-payment-history-card" data-dashboard-view="payment-history" style="display:none"><span class="dashboard-card-icon"><svg class="icon" aria-hidden="true"><use href="#icon-wallet"></use></svg></span><b>Payment History</b><small id="dashboard-payment-history-hint">Track invoices and payments</small></button>
         <button class="dashboard-card" data-dashboard-view="notifications"><span class="dashboard-card-icon"><svg class="icon" aria-hidden="true"><use href="#icon-bell"></use></svg></span><b>Notifications</b><small>Recent workspace changes</small></button>
@@ -336,9 +336,9 @@
     </div>
   </aside>
   <nav class="mobile-bottom-nav" aria-label="Primary mobile navigation">
-    <button type="button" class="mobile-tab" data-view="attendance" aria-label="Attendance"><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg><span>Attendance</span></button>
+    <button type="button" class="mobile-tab" data-feature="attendance" data-view="attendance" aria-label="Attendance"><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg><span>Attendance</span></button>
     <button type="button" class="mobile-tab" data-view="mytasks" aria-label="My tasks"><svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg><span>Tasks</span></button>
-    <button type="button" class="mobile-tab" data-view="reimbursements" aria-label="Reimbursements"><svg class="icon" aria-hidden="true"><use href="#icon-receipt"></use></svg><span>Expenses</span></button>
+    <button type="button" class="mobile-tab" data-feature="reimbursements" data-view="reimbursements" aria-label="Reimbursements"><svg class="icon" aria-hidden="true"><use href="#icon-receipt"></use></svg><span>Expenses</span></button>
     <button type="button" class="mobile-tab" data-view="notifications" aria-label="Notifications"><svg class="icon" aria-hidden="true"><use href="#icon-bell"></use></svg><span>Alerts</span></button>
     <button type="button" id="btn-mobile-more" aria-label="More navigation"><svg class="icon" aria-hidden="true"><use href="#icon-menu"></use></svg><span>More</span></button>
   </nav>

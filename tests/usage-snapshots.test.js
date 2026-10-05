@@ -21,6 +21,7 @@ test('daily usage snapshots collect active users, database bytes, and only refer
         userCount: 4,
         pages: 8,
         pageSize: 4096,
+        trackedFileBytes: 100,
         comments: [{ image_path: '/uploads/task-proof.png' }],
         reimbursements: [{ receipt_path: 'telegram:external-file', receipt_paths: JSON.stringify(['telegram:external-file', 'receipt.pdf']) }]
       },
@@ -28,6 +29,7 @@ test('daily usage snapshots collect active users, database bytes, and only refer
         userCount: 2,
         pages: 3,
         pageSize: 4096,
+        trackedFileBytes: 200,
         comments: [{ image_path: '/uploads/missing.png' }],
         reimbursements: []
       }
@@ -46,6 +48,7 @@ test('daily usage snapshots collect active users, database bytes, and only refer
             if (sql.includes('COUNT(*)')) return { user_count: data.userCount };
             if (sql.includes('page_count')) return { page_count: data.pages };
             if (sql.includes('page_size')) return { page_size: data.pageSize };
+            if (sql.includes('SUM(bytes)')) return { bytes: data.trackedFileBytes };
             assert.fail(`Unexpected tenant query: ${sql}`);
           },
           async all() {
@@ -79,8 +82,8 @@ test('daily usage snapshots collect active users, database bytes, and only refer
     assert.equal(await collectUsageSnapshots(), 2);
     assert.deepEqual(tenantIds, [11, 22]);
     assert.deepEqual(snapshotStatements.slice(0, 2).map(statement => statement.args), [
-      [11, 4, 32768, 42],
-      [22, 2, 12288, 0]
+      [11, 4, 32768, 142],
+      [22, 2, 12288, 200]
     ]);
     assert.match(snapshotStatements[2].sql, /365 days/);
   } finally {

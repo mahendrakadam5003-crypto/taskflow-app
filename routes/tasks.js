@@ -10,10 +10,10 @@ const db = require('../db');
 const { requireAuth, requireAdmin } = require('./auth');
 const { logActivity } = require('../audit');
 const { sendInternalError, wrapAsyncRoutes } = require('../http-errors');
-const { uploadToTelegram } = require('../telegram-storage');
+const { uploadToTelegram, deleteTelegramMessage } = require('../telegram-storage');
 const { parseMoneyAmount, parsePaymentAmounts } = require('../lib/money');
-const { getConfiguredTursoDatabaseName } = require('../lib/turso-config');
 const { businessDate } = require('../lib/business-date');
+const { getPlanUsage, reserveUpload, releaseUpload, requireFeature, StorageLimitError } = require('../limits');
 
 const router = express.Router();
 wrapAsyncRoutes(router);
@@ -59,156 +59,6 @@ router.use('/comments/:id', async (req, res, next) => {
   return res.status(403).json({ error: 'This project is locked. Unlock it with the project PIN first.' });
 });
 const asanaImportProgress = new Map();
-
-function formatStorageUsage(totalBytes, usedBytes, source = 'turso') {
-  const total = Number(totalBytes) || 0;
-  const used = Math.max(0, Number(usedBytes) || 0);
-  const free = Math.max(0, total - used);
-  const percentUsed = total ? (used / total) * 100 : 0;
-  const toGB = (bytes) => Number((bytes / (1024 ** 3)).toFixed(2));
-
-  return {
-    total_bytes: total,
-    used_bytes: used,
-    free_bytes: free,
-    total_gb: toGB(total),
-    used_gb: toGB(used),
-    free_gb: toGB(free),
-    percent_used: Number(percentUsed.toFixed(1)),
-    available: total > 0,
-    source
-  };
-}
-
-function parseStorageLimit(value) {
-  if (typeof value === 'number') return value;
-  const match = String(value || '').trim().match(/^([\d.]+)\s*(b|kb|mb|gb|tb)?$/i);
-  if (!match) return 0;
-  const units = { b: 1, kb: 1024, mb: 1024 ** 2, gb: 1024 ** 3, tb: 1024 ** 4 };
-  return Number(match[1]) * (units[String(match[2] || 'b').toLowerCase()] || 1);
-}
-
-async function getDatabaseStorageBytes() {
-  const pageCount = await db.prepare('PRAGMA page_count').get();
-  const pageSize = await db.prepare('PRAGMA page_size').get();
-  const pages = Number(pageCount?.page_count ?? pageCount?.PAGE_COUNT ?? 0);
-  const size = Number(pageSize?.page_size ?? pageSize?.PAGE_SIZE ?? 0);
-  return pages * size;
-}
-
-function getLocalStorageUsage() {
-  const { bavail, bsize, blocks } = fs.statfsSync(__dirname);
-  const totalBytes = Number(blocks) * Number(bsize);
-  const freeBytes = Number(bavail) * Number(bsize);
-  const usedBytes = Math.max(0, totalBytes - freeBytes);
-  return formatStorageUsage(totalBytes, usedBytes, 'local');
-}
-
-function normalizeToken(value) {
-  return typeof value === 'string' ? value.trim().replace(/^Bearer\s+/i, '').trim() : value;
-}
-
-async function getStorageUsage() {
-  const platformToken = normalizeToken(process.env.TURSO_PLATFORM_TOKEN);
-  if (!platformToken) return getLocalStorageUsage();
-
-  try {
-    const headers = { Authorization: `Bearer ${platformToken}` };
-    let organization = process.env.TURSO_ORG;
-    let organizationRecord = null;
-    let organizations = [];
-    try {
-      const organizationsResponse = await axios.get('https://api.turso.tech/v1/organizations', { headers });
-      organizations = Array.isArray(organizationsResponse.data) ? organizationsResponse.data : [];
-    } catch (error) {
-      if (!organization || /^\d+$/.test(organization)) throw error;
-      console.error('Turso organization plan lookup unavailable:', error.response?.data?.error || error.message);
-    }
-    if (organization && !/^\d+$/.test(organization)) {
-      organizationRecord = organizations.find(item => item.slug === organization) || null;
-    }
-    if (!organization || /^\d+$/.test(organization)) {
-      organizationRecord = organizations.find(item => item.type === 'team') || organizations[0];
-      organization = organizationRecord?.slug;
-    }
-    if (!organization) throw new Error('No Turso organization slug was found for this token');
-
-    const databasesResponse = await axios.get(`https://api.turso.tech/v1/organizations/${encodeURIComponent(organization)}/databases`, { headers });
-    const databases = Array.isArray(databasesResponse.data?.databases) ? databasesResponse.data.databases : [];
-    const requestedDatabase = getConfiguredTursoDatabaseName();
-    const database = databases.find(item => [item.Name, item.name, item.Hostname, item.hostname].includes(requestedDatabase))
-      || databases.find(item => String(item.Hostname || item.hostname || '').startsWith(`${requestedDatabase}.`))
-      || (databases.length === 1 ? databases[0] : null);
-    const databaseName = database?.Name || database?.name;
-    if (!databaseName) throw new Error(`No matching Turso database found for ${requestedDatabase}`);
-
-    const usageResults = await Promise.allSettled([
-      axios.get(`https://api.turso.tech/v1/organizations/${encodeURIComponent(organization)}/usage`, { headers }),
-      axios.get(`https://api.turso.tech/v1/organizations/${encodeURIComponent(organization)}/databases/${encodeURIComponent(databaseName)}/usage`, { headers }),
-      axios.get(`https://api.turso.tech/v1/organizations/${encodeURIComponent(organization)}/databases/${encodeURIComponent(databaseName)}/configuration`, { headers }),
-      axios.get(`https://api.turso.tech/v1/organizations/${encodeURIComponent(organization)}/plans`, { headers })
-    ]);
-    const [organizationResult, databaseResult, configurationResult, plansResult] = usageResults;
-    const logLookupFailure = (result, label) => {
-      if (result.status === 'rejected') console.warn(`Turso ${label} lookup unavailable:`, result.reason?.response?.data?.error || result.reason?.message);
-    };
-    logLookupFailure(organizationResult, 'organization usage');
-    logLookupFailure(databaseResult, 'database usage');
-    logLookupFailure(configurationResult, 'database configuration');
-    logLookupFailure(plansResult, 'plan');
-    const organizationResponse = organizationResult.status === 'fulfilled' ? organizationResult.value : { data: {} };
-    const databaseUsage = databaseResult.status === 'fulfilled' ? databaseResult.value.data?.database || {} : {};
-    const organizationUsage = organizationResponse.data?.organization || {};
-    const databaseTotal = databaseUsage.total || databaseUsage.usage || {};
-    const matchingOrganizationDatabase = (organizationUsage.databases || []).find(item => item.name === databaseName || item.Name === databaseName);
-    const organizationDatabaseTotal = matchingOrganizationDatabase?.total || matchingOrganizationDatabase?.usage || {};
-    const usedBytes = databaseTotal.storage_bytes ?? databaseTotal.storageBytes ?? organizationDatabaseTotal.storage_bytes ?? organizationDatabaseTotal.storageBytes;
-    const organizationQuota = organizationUsage.usage || organizationUsage.total || {};
-    const organizationLimit = organizationQuota.storage_bytes ?? organizationQuota.storageBytes ?? organizationQuota.storage;
-    const configuration = configurationResult.status === 'fulfilled' ? configurationResult.value.data || {} : {};
-    const databaseLimit = configuration.size_limit ?? configuration.sizeLimit;
-    const plansData = plansResult.status === 'fulfilled' ? plansResult.value.data : {};
-    const plans = Array.isArray(plansData?.plans) ? plansData.plans : (Array.isArray(plansData) ? plansData : []);
-    const organizationPlan = organizationRecord?.plan || {};
-    const planIdentifiers = [
-      organizationRecord?.plan_id, organizationRecord?.planId, organizationRecord?.plan_name,
-      organizationRecord?.planName, organizationPlan.id, organizationPlan.name,
-      organizationUsage.plan_id, organizationUsage.plan?.id, organizationUsage.plan?.name
-    ].filter(value => value !== undefined && value !== null).map(value => String(value).trim().toLowerCase());
-    const plan = plans.find(item => [item.id, item.name, item.slug]
-      .some(identifier => identifier !== undefined && identifier !== null && planIdentifiers.includes(String(identifier).trim().toLowerCase())));
-    const planLimit = plan?.quotas?.storage ?? plan?.quotas?.storage_bytes ?? plan?.quotas?.storageBytes;
-    const documentedPlanLimits = {
-      free: 5 * (1024 ** 3),
-      starter: 5 * (1024 ** 3),
-      developer: 9 * (1024 ** 3),
-      scaler: 24 * (1024 ** 3),
-      pro: 50 * (1024 ** 3)
-    };
-    const actualDatabaseBytes = await getDatabaseStorageBytes();
-    const planFallback = planIdentifiers.map(identifier => documentedPlanLimits[identifier]
-      || (/free|starter/i.test(identifier) ? documentedPlanLimits.starter : 0)).find(Boolean) || 0;
-    const quotaCandidates = [databaseLimit, planLimit]
-      .map(value => typeof value === 'number' ? value : parseStorageLimit(value))
-      .filter(value => Number.isFinite(value) && value > 0);
-    const organizationLimitBytes = typeof organizationLimit === 'number' ? organizationLimit : parseStorageLimit(organizationLimit);
-    const totalBytes = quotaCandidates[0] || organizationLimitBytes || planLimit || planFallback;
-    if (Number.isFinite(Number(totalBytes)) && Number(totalBytes) > 0) {
-      const reportedUsedBytes = Number(usedBytes);
-      const actualUsedBytes = Number.isFinite(reportedUsedBytes) ? reportedUsedBytes : 0;
-      return formatStorageUsage(totalBytes, Math.max(actualUsedBytes, actualDatabaseBytes));
-    }
-    throw new Error('Turso usage response did not include storage values');
-  } catch (error) {
-    console.error('Turso storage usage unavailable:', error.response?.data?.error || error.message);
-    try {
-      return formatStorageUsage(0, await getDatabaseStorageBytes(), 'turso');
-    } catch (databaseError) {
-      console.error('Turso database size unavailable:', databaseError.message);
-      return getLocalStorageUsage();
-    }
-  }
-}
 
 // ---- File storage config ----
 // Attachments are relayed through a Telegram bot/channel as free file storage.
@@ -493,6 +343,9 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
         AND COALESCE(t.payment_status, 'not_received') <> 'received'
         AND t.invoice_date IS NOT NULL AND date(t.invoice_date, '+30 days') < ?
       ORDER BY t.invoice_date ASC`).all(today) : [];
+    const planUsage = req.session.role === 'admin' ? await getPlanUsage(req) : null;
+    const storageUsage = planUsage?.usage;
+    const storageLimit = planUsage?.plan?.storageLimitBytes ?? null;
     res.json({
       projects,
       open_tasks: taskRows.length,
@@ -502,7 +355,18 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
       active_task: activeTask || null,
       payment_alert_count: paymentAlerts.length,
       payment_alerts: paymentAlerts.map(row => ({ ...row, pending_amount: Math.round(Math.max(0, Number(row.total_amount || 0) - Number(row.amount_received || 0)) * 100) / 100 })),
-      storage: req.session.role === 'admin' ? await getStorageUsage() : null
+      storage: req.session.role === 'admin' && storageUsage ? {
+        total_bytes: storageLimit ?? 0,
+        used_bytes: storageUsage.storageBytes,
+        free_bytes: storageLimit === null ? null : Math.max(0, storageLimit - storageUsage.storageBytes),
+        total_gb: storageLimit === null ? null : Number((storageLimit / (1024 ** 3)).toFixed(2)),
+        used_gb: Number((storageUsage.storageBytes / (1024 ** 3)).toFixed(2)),
+        free_gb: storageLimit === null ? null : Number((Math.max(0, storageLimit - storageUsage.storageBytes) / (1024 ** 3)).toFixed(2)),
+        percent_used: storageUsage.percentUsed,
+        available: storageLimit !== null,
+        unlimited: storageLimit === null,
+        source: 'company'
+      } : null
     });
   } catch (err) { sendInternalError(res, err, 'Dashboard summary failed'); }
 });
@@ -720,7 +584,7 @@ router.get('/project-action-access/me', async (req, res) => {
   }
 });
 
-router.get('/admin/data-export', requireAdmin, async (req, res) => {
+router.get('/admin/data-export', requireFeature('export'), requireAdmin, async (req, res) => {
   try {
     const projects = await db.prepare('SELECT id, name, created_by, asana_gid, created_at FROM projects ORDER BY name, id').all();
     const exportedProjects = [];
@@ -1045,6 +909,8 @@ router.post('/admin/asana-import/:projectId/attachments', requireAdmin, handleAs
   for (let index = 0; index < files.length; index++) {
     const file = files[index];
     const mapping = mappings[index] || {};
+    let reservation = null;
+    let stored;
     try {
       let task = await db.prepare(`SELECT id, title FROM tasks
         WHERE project_id = ? AND (asana_gid = ? OR (? <> '' AND title = ?))
@@ -1067,15 +933,35 @@ router.post('/admin/asana-import/:projectId/attachments', requireAdmin, handleAs
         results.push({ filename, status: 'already imported' });
         continue;
       }
-      const stored = await uploadToTelegram(file);
-      await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, task_id) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(stored.fileId, stored.messageId, filename, file.mimetype || 'application/octet-stream', req.session.userId, task.id);
-      await db.prepare('INSERT INTO comments (task_id, user_id, body, image_path, attachment_name, attachment_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(task.id, req.session.userId, body, `/api/download/${encodeURIComponent(stored.fileId)}`, filename, file.mimetype || 'application/octet-stream', mapping.created_at || new Date().toISOString());
+      reservation = await reserveUpload(req, file.size);
+      stored = await uploadToTelegram(file);
+      await db.batch([
+        {
+          sql: 'INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, task_id, file_size) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          args: [stored.fileId, stored.messageId, filename, file.mimetype || 'application/octet-stream', req.session.userId, task.id, file.size]
+        },
+        {
+          sql: 'INSERT INTO comments (task_id, user_id, body, image_path, attachment_name, attachment_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          args: [task.id, req.session.userId, body, `/api/download/${encodeURIComponent(stored.fileId)}`, filename, file.mimetype || 'application/octet-stream', mapping.created_at || new Date().toISOString()]
+        },
+        { sql: 'DELETE FROM file_usage WHERE file_reference = ?', args: [reservation] }
+      ]);
       results.push({ filename, status: 'imported', task: task.title });
     } catch (error) {
+      if (stored?.messageId) {
+        try { await deleteTelegramMessage(stored.messageId); }
+        catch (cleanupError) { console.error(`Failed to clean up Asana attachment ${filename} after import failure:`, cleanupError); }
+      }
+      if (reservation) {
+        try { await releaseUpload(reservation); }
+        catch (cleanupError) { console.error(`Failed to release Asana attachment reservation for ${filename}:`, cleanupError); }
+      }
       console.error(`Asana attachment import failed for ${file.originalname}:`, error);
-      results.push({ filename: file.originalname, status: 'failed', error: 'Attachment import failed.' });
+      results.push({
+        filename: file.originalname,
+        status: 'failed',
+        error: error instanceof StorageLimitError ? error.message : 'Attachment import failed.'
+      });
     }
   }
   res.json({ ok: results.every(result => result.status !== 'failed'), results });
@@ -1721,16 +1607,38 @@ router.post('/tasks/:id/comments', requireTaskCheckinToComment, handleCommentUpl
   try {
     const body = String(req.body.body || '').trim();
     if (!body && !req.file) return res.status(400).json({ error: 'Write a comment or attach an image.' });
-    let imagePath = null;
     if (req.file) {
-      const attachment = await uploadToTelegram(req.file);
-      await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, task_id) VALUES (?, ?, ?, ?, ?, ?)').run(attachment.fileId, attachment.messageId, req.file.originalname, req.file.mimetype, req.session.userId, req.params.id);
-      imagePath = `/api/download/${encodeURIComponent(attachment.fileId)}`;
+      const reservation = await reserveUpload(req, req.file.size);
+      let attachment;
+      try {
+        attachment = await uploadToTelegram(req.file);
+        const results = await db.batch([
+          {
+            sql: 'INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, task_id, file_size) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            args: [attachment.fileId, attachment.messageId, req.file.originalname, req.file.mimetype, req.session.userId, req.params.id, req.file.size]
+          },
+          {
+            sql: 'INSERT INTO comments (task_id, user_id, body, image_path, attachment_name, attachment_type) VALUES (?, ?, ?, ?, ?, ?)',
+            args: [req.params.id, req.session.userId, body, `/api/download/${encodeURIComponent(attachment.fileId)}`, req.file.originalname, req.file.mimetype]
+          },
+          { sql: 'DELETE FROM file_usage WHERE file_reference = ?', args: [reservation] }
+        ]);
+        return res.json({ ok: true, id: results?.[1]?.lastInsertRowid });
+      } catch (error) {
+        if (attachment?.messageId) {
+          try { await deleteTelegramMessage(attachment.messageId); }
+          catch (cleanupError) { console.error('Failed to clean up a TaskFlow comment attachment after save failure:', cleanupError); }
+        }
+        try { await releaseUpload(reservation); }
+        catch (cleanupError) { console.error('Failed to release a TaskFlow comment upload reservation:', cleanupError); }
+        throw error;
+      }
     }
     const info = await db.prepare('INSERT INTO comments (task_id, user_id, body, image_path, attachment_name, attachment_type) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(req.params.id, req.session.userId, body, imagePath, req.file?.originalname || null, req.file?.mimetype || null);
+      .run(req.params.id, req.session.userId, body, null, null, null);
     res.json({ ok: true, id: info.lastInsertRowid });
   } catch (err) {
+    if (err instanceof StorageLimitError) return res.status(err.statusCode).json({ error: err.message });
     sendInternalError(res, err, 'Comment creation failed');
   }
 });

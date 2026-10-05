@@ -108,6 +108,27 @@ test('expired sessions can be pruned while current rows remain', () => {
   `);
 });
 
+test('Telegram attachment storage usage tracks insert, soft-delete, and delete', () => {
+  runInIsolatedDatabase(`
+    const admin = await db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
+    const project = await db.prepare('INSERT INTO projects (name, created_by) VALUES (?, ?)').run('Attachment usage', admin.id);
+    const task = await db.prepare('INSERT INTO tasks (project_id, title) VALUES (?, ?)').run(project.lastInsertRowid, 'Attachment usage');
+    await db.prepare('INSERT INTO telegram_attachments (file_id, message_id, task_id, uploaded_by, file_size) VALUES (?, ?, ?, ?, ?)').run('usage-file', 9001, task.lastInsertRowid, admin.id, 2048);
+    let usage = await db.prepare('SELECT bytes FROM file_usage WHERE file_reference = ?').get('telegram:9001');
+    assert.equal(Number(usage.bytes), 2048);
+
+    await db.prepare('UPDATE telegram_attachments SET deleted_at = CURRENT_TIMESTAMP WHERE file_id = ?').run('usage-file');
+    let count = await db.prepare('SELECT COUNT(*) AS count FROM file_usage WHERE file_reference = ?').get('telegram:9001');
+    assert.equal(Number(count.count), 0);
+
+    await db.prepare('UPDATE telegram_attachments SET deleted_at = NULL WHERE file_id = ?').run('usage-file');
+    await db.prepare('DELETE FROM telegram_attachments WHERE file_id = ?').run('usage-file');
+    count = await db.prepare('SELECT COUNT(*) AS count FROM file_usage WHERE file_reference = ?').get('telegram:9001');
+    assert.equal(Number(count.count), 0);
+    console.log('Telegram attachment storage accounting follows insert, soft-delete, and delete.');
+  `);
+});
+
 test('SQLite UTC timestamps render the same instant as ISO punch timestamps', () => {
   const output = runInIsolatedDatabase(`
     const admin = await db.prepare('SELECT id FROM users WHERE username = ?').get('admin');

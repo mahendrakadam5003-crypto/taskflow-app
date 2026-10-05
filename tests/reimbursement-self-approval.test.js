@@ -6,9 +6,11 @@ const session = require('express-session');
 const dbPath = require.resolve('../db');
 const auditPath = require.resolve('../audit');
 const storagePath = require.resolve('../telegram-storage');
+const limitsPath = require.resolve('../limits');
 const originalDbModule = require.cache[dbPath];
 const originalAuditModule = require.cache[auditPath];
 const originalStorageModule = require.cache[storagePath];
+const originalLimitsModule = require.cache[limitsPath];
 const employee = {
   id: 41,
   name: 'Approver Employee',
@@ -55,6 +57,12 @@ let receiptUploadCalls = 0;
 let deletedTelegramMessages = [];
 const auditEntries = [];
 const submissionClaims = new Map();
+class TestStorageLimitError extends Error {
+  constructor() {
+    super('Storage limit reached.');
+    this.statusCode = 413;
+  }
+}
 let reimbursementRowsForList = [];
 let receiptMetadataQueryCount = 0;
 let reimbursementListArgs = [];
@@ -160,6 +168,18 @@ require.cache[storagePath] = {
     streamFromTelegram: async () => {}
   }
 };
+require.cache[limitsPath] = {
+  id: limitsPath,
+  filename: limitsPath,
+  loaded: true,
+  exports: {
+    async getPlanUsage() { return { plan: null, features: { attendance: true, reimbursements: true, export: true }, usage: null }; },
+    async reserveUpload() { return 'pending:test'; },
+    async releaseUpload() {},
+    requireFeature() { return (req, res, next) => next(); },
+    StorageLimitError: TestStorageLimitError
+  }
+};
 
 const reimbursementsRouter = require('../routes/reimbursements');
 const app = express();
@@ -208,6 +228,8 @@ after(async () => {
   else delete require.cache[auditPath];
   if (originalStorageModule) require.cache[storagePath] = originalStorageModule;
   else delete require.cache[storagePath];
+  if (originalLimitsModule) require.cache[limitsPath] = originalLimitsModule;
+  else delete require.cache[limitsPath];
   delete require.cache[require.resolve('../routes/reimbursements')];
   delete require.cache[require.resolve('../routes/auth')];
 });

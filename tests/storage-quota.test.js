@@ -3,7 +3,7 @@ const { after, before, test } = require('node:test');
 const express = require('express');
 const session = require('express-session');
 
-const modulePaths = ['../db', '../routes/auth', '../audit', '../telegram-storage', 'axios'];
+const modulePaths = ['../db', '../routes/auth', '../audit', '../telegram-storage', '../limits', 'axios'];
 const originals = new Map(modulePaths.map(moduleName => {
   const modulePath = require.resolve(moduleName);
   return [modulePath, require.cache[modulePath]];
@@ -57,6 +57,17 @@ for (const [moduleName, exports] of [
   }],
   ['../audit', { logActivity: async () => {} }],
   ['../telegram-storage', { uploadToTelegram: async () => {}, streamFromTelegram: async () => {} }],
+  ['../limits', {
+    async getPlanUsage() {
+      return {
+        plan: { storageLimitBytes: 9_000_000_000 },
+        usage: { storageBytes: 8192, percentUsed: 0.1 }
+      };
+    },
+    reserveUpload: async () => 'pending:test',
+    releaseUpload: async () => {},
+    requireFeature: () => (req, res, next) => next()
+  }],
   ['axios', mockAxios]
 ]) {
   const modulePath = require.resolve(moduleName);
@@ -100,17 +111,17 @@ after(async () => {
   }
 });
 
-test('dashboard retains organization quota when optional Turso endpoints fail', async () => {
+test('dashboard reports the company plan limit and tenant storage usage', async () => {
   const response = await fetch(`${baseUrl}/api/dashboard/summary`, { headers: { Cookie: cookie } });
   assert.equal(response.status, 200);
   const summary = await response.json();
   assert.equal(summary.storage.available, true);
   assert.equal(summary.storage.total_bytes, 9_000_000_000);
   assert.equal(summary.storage.used_bytes, 8192);
-  assert.equal(summary.storage.source, 'turso');
+  assert.equal(summary.storage.source, 'company');
 });
 
-test('dashboard uses the matched plan quota when organization usage is unavailable', async () => {
+test('dashboard continues reporting the company plan limit independently of Turso APIs', async () => {
   failOrganizationUsage = true;
   plansEndpointAvailable = true;
   const response = await fetch(`${baseUrl}/api/dashboard/summary`, { headers: { Cookie: cookie } });
@@ -118,11 +129,11 @@ test('dashboard uses the matched plan quota when organization usage is unavailab
   const summary = await response.json();
   assert.equal(summary.storage.available, true);
   assert.equal(summary.storage.total_bytes, 9_000_000_000);
-  assert.equal(summary.storage.source, 'turso');
+  assert.equal(summary.storage.source, 'company');
 });
 
 
-test('dashboard finds the Turso database from its URL when TURSO_DATABASE is unset', async () => {
+test('dashboard company storage is independent of the configured Turso database URL', async () => {
   delete process.env.TURSO_DATABASE;
   process.env.TURSO_DATABASE_URL = 'libsql://taskflow.taskflow-org.turso.io';
   const response = await fetch(`${baseUrl}/api/dashboard/summary`, { headers: { Cookie: cookie } });
@@ -130,5 +141,5 @@ test('dashboard finds the Turso database from its URL when TURSO_DATABASE is uns
   const summary = await response.json();
   assert.equal(summary.storage.available, true);
   assert.equal(summary.storage.total_bytes, 9_000_000_000);
-  assert.equal(summary.storage.source, 'turso');
+  assert.equal(summary.storage.source, 'company');
 });

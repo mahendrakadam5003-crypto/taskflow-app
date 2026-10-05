@@ -10,11 +10,13 @@ const { sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { uploadToTelegram, streamFromTelegram, deleteTelegramMessage } = require('../telegram-storage');
 const { parseMoneyAmount } = require('../lib/money');
 const { businessDate } = require('../lib/business-date');
+const { requireFeature, reserveUpload, releaseUpload, StorageLimitError } = require('../limits');
 
 const router = express.Router();
 
 wrapAsyncRoutes(router);
 router.use(requireAuth);
+router.use(requireFeature('reimbursements'));
 
 const receiptsDir = path.join(__dirname, '..', 'uploads', 'receipts');
 if (!fs.existsSync(receiptsDir)) fs.mkdirSync(receiptsDir, { recursive: true });
@@ -305,7 +307,7 @@ router.get('/receipts/:fileId', async (req, res) => {
   }
 });
 
-router.get('/export.csv', async (req, res) => {
+router.get('/export.csv', requireFeature('export'), async (req, res) => {
   try {
     const rows = await getReimbursementRows(req);
     const headers = ['Employee', 'Department', 'Submitted on', 'Expense date', 'Category', 'Description', 'Amount', 'Currency', 'Status', 'Admin note'];
@@ -356,7 +358,19 @@ router.post('/', handleReceiptUpload, async (req, res) => {
     }
     const receiptPaths = [];
     const receiptMeta = [];
-    const uploadedAttachments = await uploadReceiptFiles(req.files || []);
+    const receiptBytes = Number(req.receiptUploadBytes || 0);
+    let reservation = null;
+    if (receiptBytes > 0) reservation = await reserveUpload(req, receiptBytes);
+    let uploadedAttachments;
+    try {
+      uploadedAttachments = await uploadReceiptFiles(req.files || []);
+    } catch (error) {
+      if (reservation) {
+        try { await releaseUpload(reservation); }
+        catch (cleanupError) { console.error('Failed to release a receipt upload reservation:', cleanupError); }
+      }
+      throw error;
+    }
     for (const { attachment, file } of uploadedAttachments) {
       receiptPaths.push(`telegram:${attachment.fileId}`);
       receiptMeta.push({ original_name: file.originalname, mime_type: file.mimetype });
@@ -368,13 +382,19 @@ router.post('/', handleReceiptUpload, async (req, res) => {
         .run(req.session.userId, amount, currency, category, description, expenseDate, receiptPaths[0] || null,
           receiptPaths.length ? JSON.stringify(receiptPaths) : null, receiptMeta.length ? JSON.stringify(receiptMeta) : null, submissionKey);
       if (uploadedAttachments.length) {
-        await db.batch(uploadedAttachments.map(({ attachment, file }) => ({
-          sql: 'INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, reimbursement_id) VALUES (?, ?, ?, ?, ?, ?)',
-          args: [attachment.fileId, attachment.messageId, file.originalname, file.mimetype, req.session.userId, info.lastInsertRowid]
-        })));
+        const statements = uploadedAttachments.map(({ attachment, file }) => ({
+          sql: 'INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, reimbursement_id, file_size) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          args: [attachment.fileId, attachment.messageId, file.originalname, file.mimetype, req.session.userId, info.lastInsertRowid, file.size]
+        }));
+        statements.push({ sql: 'DELETE FROM file_usage WHERE file_reference = ?', args: [reservation] });
+        await db.batch(statements);
       }
     } catch (error) {
       await cleanupUploadedReceipts(uploadedAttachments, info?.lastInsertRowid || null);
+      if (reservation) {
+        try { await releaseUpload(reservation); }
+        catch (cleanupError) { console.error('Failed to release a receipt upload reservation after persistence failure:', cleanupError); }
+      }
       if (/reimbursements\.submission_key/i.test(String(error.message))) {
         const duplicate = await db.prepare(`SELECT id, user_id, amount, currency, category, description, expense_date
           FROM reimbursements WHERE submission_key=?`).get(submissionKey);
@@ -395,6 +415,7 @@ router.post('/', handleReceiptUpload, async (req, res) => {
     await logActivity(req, 'Reimbursement added', 'reimbursement', info.lastInsertRowid, `${amount} ${currency} - ${category}`, req.session.userId);
     res.json({ ok: true, id: info.lastInsertRowid });
   } catch (error) {
+    if (error instanceof StorageLimitError) return res.status(error.statusCode).json({ error: error.message });
     sendInternalError(res, error, 'Reimbursement creation failed');
   }
 });
@@ -432,16 +453,29 @@ router.put('/:id(\\d+)', handleReceiptUpload, async (req, res) => {
       return res.status(400).json({ error: 'An expense can have up to 10 receipts.' });
     }
     while (receiptMeta.length < receiptPaths.length) receiptMeta.push({});
-    const uploadedAttachments = await uploadReceiptFiles(req.files || []);
+    const receiptBytes = Number(req.receiptUploadBytes || 0);
+    let reservation = null;
+    if (receiptBytes > 0) reservation = await reserveUpload(req, receiptBytes);
+    let uploadedAttachments;
+    try {
+      uploadedAttachments = await uploadReceiptFiles(req.files || []);
+    } catch (error) {
+      if (reservation) {
+        try { await releaseUpload(reservation); }
+        catch (cleanupError) { console.error('Failed to release a receipt edit reservation:', cleanupError); }
+      }
+      throw error;
+    }
     for (const { attachment, file } of uploadedAttachments) {
       receiptPaths.push(`telegram:${attachment.fileId}`);
       receiptMeta.push({ original_name: file.originalname, mime_type: file.mimetype });
     }
 
     const statements = uploadedAttachments.map(({ attachment, file }) => ({
-      sql: 'INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, reimbursement_id) VALUES (?, ?, ?, ?, ?, ?)',
-      args: [attachment.fileId, attachment.messageId, file.originalname, file.mimetype, req.session.userId, claim.id]
+      sql: 'INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, reimbursement_id, file_size) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      args: [attachment.fileId, attachment.messageId, file.originalname, file.mimetype, req.session.userId, claim.id, file.size]
     }));
+    if (reservation) statements.push({ sql: 'DELETE FROM file_usage WHERE file_reference = ?', args: [reservation] });
     statements.push({
       sql: `UPDATE reimbursements
         SET amount = ?, currency = ?, category = ?, description = ?, expense_date = ?,
@@ -457,11 +491,19 @@ router.put('/:id(\\d+)', handleReceiptUpload, async (req, res) => {
       results = await db.batch(statements);
     } catch (error) {
       await cleanupUploadedReceipts(uploadedAttachments, claim.id);
+      if (reservation) {
+        try { await releaseUpload(reservation); }
+        catch (cleanupError) { console.error('Failed to release a receipt edit reservation after persistence failure:', cleanupError); }
+      }
       throw error;
     }
     const updated = results?.at(-1);
     if (Number(updated?.rowsAffected ?? updated?.changes ?? 0) !== 1) {
       await cleanupUploadedReceipts(uploadedAttachments, claim.id);
+      if (reservation) {
+        try { await releaseUpload(reservation); }
+        catch (cleanupError) { console.error('Failed to release a receipt edit reservation after claim conflict:', cleanupError); }
+      }
       return res.status(409).json({ error: 'This expense is no longer editable.' });
     }
     await logActivity(req, 'Reimbursement updated', 'reimbursement', req.params.id,
@@ -469,6 +511,7 @@ router.put('/:id(\\d+)', handleReceiptUpload, async (req, res) => {
       req.session.userId);
     res.json({ ok: true });
   } catch (error) {
+    if (error instanceof StorageLimitError) return res.status(error.statusCode).json({ error: error.message });
     sendInternalError(res, error, 'Reimbursement update failed');
   }
 });

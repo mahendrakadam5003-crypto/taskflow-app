@@ -734,11 +734,15 @@ function updateDashboardGreeting() {
 }
 
 function formatStorageDisplay(gb, bytes) {
-  if (bytes > 0 && gb < 0.01) return `${(bytes / (1024 ** 2)).toFixed(2)} MB`;
-  return `${gb} GB`;
+  const size = Number(bytes || 0);
+  if (size >= 1024 ** 3) return `${(size / (1024 ** 3)).toFixed(2)} GB`;
+  if (size >= 1024 ** 2) return `${(size / (1024 ** 2)).toFixed(2)} MB`;
+  if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${size} B`;
 }
 
 function isStorageQuotaAvailable(storage) {
+  if (storage?.unlimited) return true;
   return storage?.available !== false
     && (Number(storage?.total_bytes || 0) > 0 || Number(storage?.total_gb || 0) > 0);
 }
@@ -750,12 +754,12 @@ function showStorageDetails(storage) {
     <h3>Storage usage</h3>
     <div class="storage-detail-grid">
       <div><small>Used</small><b>${Number(storage.used_bytes || 0) > 0 ? formatStorageDisplay(storage.used_gb, storage.used_bytes) : storageAvailable ? formatStorageDisplay(storage.used_gb, storage.used_bytes) : 'Unavailable'}</b></div>
-      <div><small>Remaining</small><b>${storageAvailable ? formatStorageDisplay(storage.free_gb, storage.free_bytes) : 'Unavailable'}</b></div>
-      <div><small>Total</small><b>${storageAvailable ? `${storage.total_gb} GB` : 'Unavailable'}</b></div>
-      <div><small>Usage</small><b>${storageAvailable ? `${storage.percent_used}%` : 'Unavailable'}</b></div>
+      <div><small>Remaining</small><b>${storage.unlimited ? 'Unlimited' : storageAvailable ? formatStorageDisplay(storage.free_gb, storage.free_bytes) : 'Unavailable'}</b></div>
+      <div><small>Total</small><b>${storage.unlimited ? 'Unlimited' : storageAvailable ? formatStorageDisplay(storage.total_gb, storage.total_bytes) : 'Unavailable'}</b></div>
+      <div><small>Usage</small><b>${storage.unlimited ? 'No plan limit' : storageAvailable ? `${storage.percent_used}%` : 'Unavailable'}</b></div>
     </div>
-    <div class="dashboard-progress"><span style="width:${storageAvailable ? Math.min(100, Math.max(0, storage.percent_used)) : 0}%"></span></div>
-    <p class="hint">Source: ${storage.source === 'turso' ? 'Turso database' : 'App server disk'}</p>
+    <div class="dashboard-progress"><span style="width:${storageAvailable && !storage.unlimited ? Math.min(100, Math.max(0, storage.percent_used)) : 0}%"></span></div>
+    <p class="hint">Usage includes this company's database and tracked uploaded files.</p>
     <div class="modal-actions"><button class="btn btn-primary" id="storage-details-close">Close</button></div>`);
   $('#storage-details-close')?.addEventListener('click', closeModal);
 }
@@ -780,13 +784,14 @@ async function renderDashboard() {
     const summaryPanel = $('#dashboard-summary');
     if (summaryPanel) {
       const storageQuotaAvailable = isStorageQuotaAvailable(summary.storage);
+      const storagePercent = Number(summary.storage?.percent_used || 0);
       const storageMetric = ME?.role === 'admin' && summary?.storage ? `
         <div class="dashboard-metric storage">
           <small>Storage used</small>
-          <b>${storageQuotaAvailable ? `${summary.storage.percent_used}%` : 'Quota unavailable'}</b>
-          <div class="dashboard-progress"><span style="width:${storageQuotaAvailable ? Math.min(100, Math.max(0, summary.storage.percent_used)) : 0}%"></span></div>
-          <small>${Number(summary.storage.used_bytes || 0) > 0 ? `${formatStorageDisplay(summary.storage.used_gb, summary.storage.used_bytes)} used` : storageQuotaAvailable ? `${formatStorageDisplay(summary.storage.used_gb, summary.storage.used_bytes)} used` : 'Database usage unavailable'}${storageQuotaAvailable ? ` · ${formatStorageDisplay(summary.storage.free_gb, summary.storage.free_bytes)} left` : ''}</small>
-          <small>${storageQuotaAvailable ? `${summary.storage.total_gb} GB total` : 'Turso did not provide a storage limit'}</small>
+          <b>${summary.storage.unlimited ? 'No limit' : storageQuotaAvailable ? `${storagePercent}%` : 'Quota unavailable'}</b>
+          <div class="dashboard-progress"><span style="width:${storageQuotaAvailable && !summary.storage.unlimited ? Math.min(100, Math.max(0, storagePercent)) : 0}%"></span></div>
+          <small>${formatStorageDisplay(summary.storage.used_gb, summary.storage.used_bytes)} used${summary.storage.unlimited ? '' : storageQuotaAvailable ? ` · ${formatStorageDisplay(summary.storage.free_gb, summary.storage.free_bytes)} left` : ''}</small>
+          <small>${summary.storage.unlimited ? 'Unlimited plan storage' : storageQuotaAvailable ? `${formatStorageDisplay(summary.storage.total_gb, summary.storage.total_bytes)} plan limit` : 'No company storage limit configured'}</small>
         </div>` : '';
 
       summaryPanel.innerHTML = `
@@ -956,11 +961,20 @@ async function enterApp() {
   }
   const companyStatusBanner = $('#company-status-banner');
   if (companyStatusBanner) {
-    companyStatusBanner.textContent = ME.company_status === 'suspended'
-      ? 'Account suspended, contact support. This workspace is read-only.'
-      : '';
-    companyStatusBanner.classList.toggle('hidden', ME.company_status !== 'suspended');
+    const messages = [];
+    if (ME.company_status === 'suspended') messages.push('Account suspended, contact support. This workspace is read-only.');
+    const warningThreshold = Number(ME.usage?.warningThreshold);
+    if (ME.role === 'admin' && [80, 95].includes(warningThreshold)) {
+      messages.push(`Storage usage has reached ${warningThreshold}% of this plan. Contact support to upgrade.`);
+    }
+    companyStatusBanner.textContent = messages.join(' ');
+    companyStatusBanner.classList.toggle('hidden', messages.length === 0);
   }
+
+  const features = ME.features || { attendance: true, reimbursements: true, export: true };
+  $$('[data-feature]').forEach(element => {
+    element.style.display = features[element.dataset.feature] === false ? 'none' : '';
+  });
   
   const meBadge = $('#me-badge');
   if (meBadge) meBadge.innerHTML = `Signed in as<br><b>${escapeHtml(ME.name)}</b>`;
@@ -1028,6 +1042,11 @@ $$('.mobile-tab[data-view]').forEach((btn) => {
 $('#btn-mobile-more')?.addEventListener('click', () => $('#btn-mobile-nav')?.click());
 
 function showView(view) {
+  const featureForView = { attendance: 'attendance', reimbursements: 'reimbursements' }[view];
+  if (featureForView && ME?.features?.[featureForView] === false) {
+    showView('dashboard');
+    return;
+  }
   if (view !== 'attendance') stopAttendanceClock();
   if (mobilePageTitle) mobilePageTitle.textContent = view === 'dashboard' ? 'TaskFlow' : (mobileViewTitles[view] || 'TaskFlow');
   const compactSidebarViews = new Set(['dashboard', 'attendance', 'reimbursements', 'mytasks', 'payment-history', 'notifications', 'admin', 'tracking']);

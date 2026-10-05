@@ -64,21 +64,24 @@ async function getLocalFilesBytes(db, uploadsDirectory) {
 }
 
 async function getTenantUsage(db, uploadsDirectory) {
-  const [users, pageCount, pageSize, filesBytes] = await Promise.all([
+  const [users, pageCount, pageSize, localFilesBytes, trackedFiles] = await Promise.all([
     db.prepare('SELECT COUNT(*) AS user_count FROM users WHERE active = 1').get(),
     db.prepare('PRAGMA page_count').get(),
     db.prepare('PRAGMA page_size').get(),
-    getLocalFilesBytes(db, uploadsDirectory)
+    getLocalFilesBytes(db, uploadsDirectory),
+    db.prepare('SELECT COALESCE(SUM(bytes), 0) AS bytes FROM file_usage').get()
   ]);
   const userCount = Number(users?.user_count ?? users?.USER_COUNT);
   const pages = Number(pageCount?.page_count ?? pageCount?.PAGE_COUNT);
   const bytesPerPage = Number(pageSize?.page_size ?? pageSize?.PAGE_SIZE);
+  const trackedFilesBytes = Number(trackedFiles?.bytes ?? trackedFiles?.BYTES ?? 0);
   if (!Number.isSafeInteger(userCount) || userCount < 0
     || !Number.isSafeInteger(pages) || pages < 0
-    || !Number.isSafeInteger(bytesPerPage) || bytesPerPage < 1) {
+    || !Number.isSafeInteger(bytesPerPage) || bytesPerPage < 1
+    || !Number.isSafeInteger(trackedFilesBytes) || trackedFilesBytes < 0) {
     throw new Error('Tenant usage query returned invalid user or database size values.');
   }
-  return { userCount, dbBytes: pages * bytesPerPage, filesBytes };
+  return { userCount, dbBytes: pages * bytesPerPage, filesBytes: localFilesBytes + trackedFilesBytes };
 }
 
 function createUsageSnapshotCollector({

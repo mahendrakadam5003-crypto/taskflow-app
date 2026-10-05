@@ -6,8 +6,10 @@ const bcrypt = require('bcryptjs');
 
 const dbPath = require.resolve('../db');
 const auditPath = require.resolve('../audit');
+const limitsPath = require.resolve('../limits');
 const originalDbModule = require.cache[dbPath];
 const originalAuditModule = require.cache[auditPath];
+const originalLimitsModule = require.cache[limitsPath];
 
 const user = {
   id: 1,
@@ -66,9 +68,19 @@ const mockDb = {
           target.token_version += 1;
           return { changes: 1 };
         }
+        if (sql.includes('UPDATE users SET active = 1')) {
+          const [id, limit] = args;
+          const target = users.get(Number(id));
+          const activeCount = [...users.values()].filter(row => Number(row.active) === 1).length;
+          if (!target || Number(target.active) !== 0 || (limit !== null && activeCount >= Number(limit))) {
+            return { changes: 0 };
+          }
+          target.active = 1;
+          return { changes: 1 };
+        }
         if (sql.includes('UPDATE users SET active')) {
           const target = users.get(Number(args.at(-1)));
-          target.active = Number(args[0]);
+          target.active = sql.includes('active = 0') ? 0 : Number(args[0]);
           return { changes: 1 };
         }
         if (sql.includes('UPDATE users SET role')) {
@@ -79,6 +91,18 @@ const mockDb = {
         return { changes: 0 };
       }
     };
+  },
+  async batch(statements) {
+    const statement = statements[0];
+    const [name, username, passwordHash, department, role, limit] = statement.args;
+    const activeCount = [...users.values()].filter(row => Number(row.active) === 1).length;
+    if (limit !== null && activeCount >= Number(limit)) return [{ rowsAffected: 0 }, { rows: [] }];
+    const id = Math.max(...users.keys()) + 1;
+    users.set(id, {
+      id, name, username, password_hash: passwordHash, department, role, active: 1,
+      must_change_password: 0, token_version: 0
+    });
+    return [{ rowsAffected: 1 }, { rows: [{ id }] }];
   }
 };
 
@@ -88,6 +112,19 @@ require.cache[auditPath] = {
   filename: auditPath,
   loaded: true,
   exports: { logActivity: async () => {} }
+};
+require.cache[limitsPath] = {
+  id: limitsPath,
+  filename: limitsPath,
+  loaded: true,
+  exports: {
+    getPlan: async () => ({ maxUsers: 2 }),
+    getPlanUsage: async () => ({
+      plan: null,
+      features: { attendance: true, reimbursements: true, export: true },
+      usage: { activeUsers: 2, databaseBytes: 0, fileBytes: 0, storageBytes: 0, percentUsed: null, warningThreshold: null }
+    })
+  }
 };
 
 const { router, requireAuth } = require('../routes/auth');
@@ -137,6 +174,8 @@ after(async () => {
   else delete require.cache[dbPath];
   if (originalAuditModule) require.cache[auditPath] = originalAuditModule;
   else delete require.cache[auditPath];
+  if (originalLimitsModule) require.cache[limitsPath] = originalLimitsModule;
+  else delete require.cache[limitsPath];
   delete require.cache[require.resolve('../routes/auth')];
 });
 
@@ -219,6 +258,7 @@ test('password change invalidates the other browser session', async () => {
   const oldFirstBrowserResponse = await request('/me', { cookie: browserOne });
   const secondBrowserResponse = await request('/me', { cookie: browserTwo });
   assert.equal(firstBrowserResponse.status, 200);
+  assert.equal((await firstBrowserResponse.json()).features.attendance, true);
   assert.equal(oldFirstBrowserResponse.status, 401);
   assert.equal(secondBrowserResponse.status, 401);
 
@@ -303,6 +343,7 @@ test('admin password reset and user deactivation delete persistent sessions', as
       cookie: adminCookie,
       body: { password: 'reset-password-12345' }
     });
+
     assert.equal(reset.status, 200);
     assert.deepEqual(deletedSessionUsers, [otherUser.id]);
 
@@ -318,5 +359,43 @@ test('admin password reset and user deactivation delete persistent sessions', as
     Object.assign(user, originalUser);
     Object.assign(otherUser, originalOtherUser);
     deletedSessionUsers.length = 0;
+  }
+});
+
+test('user seats are enforced for creation and reactivation, and deactivation frees a seat', async () => {
+  const originalUsers = new Map([...users].map(([id, row]) => [id, { ...row }]));
+  try {
+    user.role = 'admin';
+    otherUser.active = 1;
+    const adminCookie = await login('replacement-password-456');
+    const denied = await request('/users', {
+      method: 'POST',
+      cookie: adminCookie,
+      body: { name: 'Over limit', username: 'over-limit', password: 'valid-password-123' }
+    });
+    assert.equal(denied.status, 403);
+
+    const deactivate = await request('/users/2', { method: 'PUT', cookie: adminCookie, body: { active: false } });
+    assert.equal(deactivate.status, 200);
+    const created = await request('/users', {
+      method: 'POST',
+      cookie: adminCookie,
+      body: { name: 'New seat', username: 'new-seat', password: 'valid-password-123' }
+    });
+    assert.equal(created.status, 200);
+    const { id: newUserId } = await created.json();
+
+    const deniedReactivation = await request('/users/2', { method: 'PUT', cookie: adminCookie, body: { active: true } });
+    assert.equal(deniedReactivation.status, 403);
+    const freeSeat = await request(`/users/${newUserId}`, { method: 'PUT', cookie: adminCookie, body: { active: false } });
+    assert.equal(freeSeat.status, 200);
+    const reactivated = await request('/users/2', { method: 'PUT', cookie: adminCookie, body: { active: true } });
+    assert.equal(reactivated.status, 200);
+  } finally {
+    users.clear();
+    Object.assign(user, originalUsers.get(user.id));
+    Object.assign(otherUser, originalUsers.get(otherUser.id));
+    users.set(user.id, user);
+    users.set(otherUser.id, otherUser);
   }
 });

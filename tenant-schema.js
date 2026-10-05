@@ -464,6 +464,7 @@ async function initTenantSchema(db, { seedInitialAdmin = true } = {}) {
       uploaded_by INTEGER,
       task_id INTEGER,
       reimbursement_id INTEGER,
+      file_size INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       deleted_at TEXT,
       delete_attempts INTEGER NOT NULL DEFAULT 0,
@@ -518,6 +519,36 @@ async function initTenantSchema(db, { seedInitialAdmin = true } = {}) {
       }
     }
     }
+
+    const currentAttachmentColumns = await dbDriverInterface.prepare('PRAGMA table_info(telegram_attachments)').all();
+    if (!currentAttachmentColumns.some(row => row.name === 'file_size')) {
+      await dbDriverInterface.exec('ALTER TABLE telegram_attachments ADD COLUMN file_size INTEGER');
+    }
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS file_usage (
+      file_reference TEXT PRIMARY KEY,
+      bytes INTEGER NOT NULL CHECK (bytes >= 0),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );`);
+    await dbDriverInterface.exec(`CREATE TRIGGER IF NOT EXISTS telegram_file_usage_insert
+      AFTER INSERT ON telegram_attachments
+      WHEN NEW.deleted_at IS NULL AND NEW.file_size IS NOT NULL
+      BEGIN
+        INSERT OR REPLACE INTO file_usage (file_reference, bytes)
+        VALUES ('telegram:' || NEW.message_id, NEW.file_size);
+      END;`);
+    await dbDriverInterface.exec(`CREATE TRIGGER IF NOT EXISTS telegram_file_usage_update
+      AFTER UPDATE OF deleted_at, file_size, message_id ON telegram_attachments
+      BEGIN
+        DELETE FROM file_usage WHERE file_reference = 'telegram:' || OLD.message_id;
+        INSERT OR REPLACE INTO file_usage (file_reference, bytes)
+        SELECT 'telegram:' || NEW.message_id, NEW.file_size
+        WHERE NEW.deleted_at IS NULL AND NEW.file_size IS NOT NULL;
+      END;`);
+    await dbDriverInterface.exec(`CREATE TRIGGER IF NOT EXISTS telegram_file_usage_delete
+      AFTER DELETE ON telegram_attachments
+      BEGIN
+        DELETE FROM file_usage WHERE file_reference = 'telegram:' || OLD.message_id;
+      END;`);
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS task_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

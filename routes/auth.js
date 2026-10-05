@@ -8,6 +8,7 @@ const { hasControlDatabaseConfiguration, LEGACY_TENANT_ID } = require('../tenant
 const { clearCompanyContextCookie } = require('../company-context');
 const { logActivity } = require('../audit');
 const { asyncHandler, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
+const { getPlan, getPlanUsage } = require('../limits');
 
 const router = express.Router();
 wrapAsyncRoutes(router);
@@ -229,6 +230,7 @@ router.get('/me', requireAuth, async (req, res) => {
   try {
     const user = await db.prepare('SELECT id, name, username, department, role, must_change_password FROM users WHERE id = ?').get(req.session.userId);
     if (!user) return res.status(401).json({ error: 'User record not found' });
+    const planUsage = await getPlanUsage(req);
     res.json({
       id: user.id,
       name: user.name,
@@ -236,7 +238,10 @@ router.get('/me', requireAuth, async (req, res) => {
       department: user.department,
       role: user.role,
       must_change_password: mustChangePassword(user),
-      company_status: req.companyStatus
+      company_status: req.companyStatus,
+      plan: planUsage.plan,
+      features: planUsage.features,
+      usage: planUsage.usage
     });
   } catch (err) {
     sendInternalError(res, err, 'Current user lookup failed');
@@ -324,11 +329,32 @@ router.post('/users', requireAdmin, async (req, res) => {
     if (!normalizedName || !normalizedUsername) return res.status(400).json({ error: 'Name and username are required.' });
     if (password.length < passwordMinLength) return res.status(400).json({ error: `Password must be at least ${passwordMinLength} characters.` });
 
+    const plan = await getPlan(req);
     const hash = await bcrypt.hash(password, 10);
-    const info = await db.prepare(`INSERT INTO users (name, username, password_hash, department, role) VALUES (?, ?, ?, ?, ?)`)
-      .run(normalizedName, normalizedUsername, hash, (department || '').trim(), role === 'admin' ? 'admin' : 'employee');
-    await logActivity(req, 'Employee added', 'user', info.lastInsertRowid, `${normalizedName} (${normalizedUsername})`, info.lastInsertRowid);
-    res.json({ id: info.lastInsertRowid });
+    const inserted = await db.batch([
+      {
+        sql: `INSERT INTO users (name, username, password_hash, department, role)
+          SELECT ?, ?, ?, ?, ?
+          WHERE ? IS NULL OR (SELECT COUNT(*) FROM users WHERE active = 1) < ?`,
+        args: [
+          normalizedName,
+          normalizedUsername,
+          hash,
+          (department || '').trim(),
+          role === 'admin' ? 'admin' : 'employee',
+          plan?.maxUsers ?? null,
+          plan?.maxUsers ?? null
+        ]
+      },
+      { sql: 'SELECT last_insert_rowid() AS id', args: [] }
+    ]);
+    if (Number(inserted?.[0]?.rowsAffected ?? inserted?.[0]?.changes ?? 0) !== 1) {
+      return res.status(403).json({ error: 'User limit reached. Contact support to upgrade.' });
+    }
+    const userId = Number(inserted?.[1]?.rows?.[0]?.id);
+    if (!Number.isSafeInteger(userId) || userId < 1) throw new Error('New user record was not returned after insert.');
+    await logActivity(req, 'Employee added', 'user', userId, `${normalizedName} (${normalizedUsername})`, userId);
+    res.json({ id: userId });
   } catch (e) {
     if (/unique constraint/i.test(String(e.message))) {
       return res.status(409).json({ error: 'That username is already in use.' });
@@ -380,6 +406,12 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
     const nextRole = role === undefined ? undefined : role;
     if (id === Number(req.session.userId) && nextActive === false) return res.status(400).json({ error: "You can't disable your own account." });
     if (id === Number(req.session.userId) && nextRole !== undefined && nextRole !== 'admin') return res.status(400).json({ error: "You can't remove your own admin access." });
+    const activeChanged = nextActive !== undefined && Number(target.active) !== (nextActive ? 1 : 0);
+    let userLimit = null;
+    if (activeChanged && nextActive) {
+      const plan = await getPlan(req);
+      userLimit = plan?.maxUsers ?? null;
+    }
     if (password && password.length < passwordMinLength) return res.status(400).json({ error: `Password must be at least ${passwordMinLength} characters.` });
     const nextName = name === undefined ? undefined : name.trim();
     const nextUsername = username === undefined ? undefined : username.trim().toLowerCase();
@@ -388,6 +420,16 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
     if (nextUsername !== undefined) {
       const duplicate = await db.prepare('SELECT id FROM users WHERE username = ? AND id <> ?').get(nextUsername, id);
       if (duplicate) return res.status(409).json({ error: 'That username is already in use.' });
+    }
+
+    if (activeChanged && nextActive) {
+      const activation = await db.prepare(`UPDATE users SET active = 1
+        WHERE id = ? AND active = 0
+          AND (? IS NULL OR (SELECT COUNT(*) FROM users WHERE active = 1) < ?)`)
+        .run(id, userLimit, userLimit);
+      if (Number(activation?.changes ?? activation?.rowsAffected ?? 0) !== 1) {
+        return res.status(403).json({ error: 'User limit reached. Contact support to upgrade.' });
+      }
     }
     
     if (nextName !== undefined) await db.prepare('UPDATE users SET name = ? WHERE id = ?').run(nextName, id);
@@ -398,12 +440,11 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
       if (target.department !== nextDepartment) await logActivity(req, 'Department changed', 'user', id, `${target.name}: ${target.department || 'No department'} -> ${nextDepartment || 'No department'}`, id);
     }
     const roleChanged = nextRole !== undefined && target.role !== nextRole;
-    const activeChanged = nextActive !== undefined && Number(target.active) !== (nextActive ? 1 : 0);
     if (roleChanged) {
       await db.prepare('UPDATE users SET role = ? WHERE id = ?').run(nextRole, id);
       await logActivity(req, 'Role changed', 'user', id, `${target.name}: ${target.role} -> ${nextRole}`, id);
     }
-    if (nextActive !== undefined) await db.prepare('UPDATE users SET active = ? WHERE id = ?').run(nextActive ? 1 : 0, id);
+    if (activeChanged && !nextActive) await db.prepare('UPDATE users SET active = 0 WHERE id = ?').run(id);
     if (activeChanged) await logActivity(req, 'Account status changed', 'user', id, `${target.name}: ${Number(target.active) === 1 ? 'active' : 'inactive'} -> ${nextActive ? 'active' : 'inactive'}`, id);
     if (password) {
       const hash = await bcrypt.hash(password, 10);

@@ -9,10 +9,12 @@ const { requireAuth, requireAdmin } = require('./auth');
 const { logActivity } = require('../audit');
 const { sendLocationToTelegram } = require('../telegram-storage');
 const { wrapAsyncRoutes } = require('../http-errors');
+const { requireFeature } = require('../limits');
 
 const router = express.Router();
 wrapAsyncRoutes(router);
 router.use(requireAuth);
+router.use(requireFeature('attendance'));
 const attendanceVerificationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 5,
