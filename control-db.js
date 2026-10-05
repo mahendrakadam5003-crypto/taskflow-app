@@ -123,14 +123,16 @@ const CONTROL_MIGRATIONS = [{
 }];
 
 function getControlDatabaseConfig(environment = process.env) {
-  const url = String(environment.CONTROL_DATABASE_URL || '').trim();
-  const authToken = String(environment.CONTROL_AUTH_TOKEN || '').trim().replace(/^Bearer\s+/i, '').trim();
+  const hasExplicitControlConfig = Boolean(environment.CONTROL_DATABASE_URL || environment.CONTROL_AUTH_TOKEN);
+  const url = String(hasExplicitControlConfig ? environment.CONTROL_DATABASE_URL || '' : environment.TURSO_DATABASE_URL || '').trim();
+  const token = hasExplicitControlConfig ? environment.CONTROL_AUTH_TOKEN : environment.TURSO_AUTH_TOKEN;
+  const authToken = String(token || '').trim().replace(/^Bearer\s+/i, '').trim();
 
   if (!url || !authToken) {
-    throw new Error('CONTROL_DATABASE_URL and CONTROL_AUTH_TOKEN are required to connect to the control database.');
+    throw new Error('Set both CONTROL_DATABASE_URL and CONTROL_AUTH_TOKEN, or configure TURSO_DATABASE_URL and TURSO_AUTH_TOKEN to share the company database.');
   }
   if (!/^libsql:\/\//i.test(url) && !/^https:\/\//i.test(url)) {
-    throw new Error('CONTROL_DATABASE_URL must be a remote libsql:// or https:// URL.');
+    throw new Error('The control database URL must be a remote libsql:// or https:// URL.');
   }
 
   return { url, authToken };

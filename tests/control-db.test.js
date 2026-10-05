@@ -16,6 +16,8 @@ test('control database migration is versioned, repeatable, and seeds sample plan
   const client = createClient({ url: 'file::memory:' });
 
   try {
+    await client.execute('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL)');
+    await client.execute("INSERT INTO users (id, username) VALUES (1, 'existing-company-user')");
     assert.equal(await migrateControlDatabase(client), CURRENT_SCHEMA_VERSION);
     await client.execute("UPDATE plans SET price_note = 'custom test note' WHERE id = 1");
     assert.equal(await migrateControlDatabase(client), CURRENT_SCHEMA_VERSION);
@@ -43,6 +45,8 @@ test('control database migration is versioned, repeatable, and seeds sample plan
     const companyResult = await client.execute("SELECT code, status, tenant_db_token_encrypted FROM companies WHERE code = 'solo-test'");
     assert.equal(companyResult.rows.length, 1);
     assert.equal(companyResult.rows[0].tenant_db_token_encrypted, tokenCiphertext);
+    const existingUser = await client.execute('SELECT username FROM users WHERE id = 1');
+    assert.equal(existingUser.rows[0].username, 'existing-company-user');
     await assert.rejects(
       client.execute("INSERT INTO companies (code, name, tenant_db_url, tenant_db_token_encrypted) VALUES ('Bad_Code', 'Invalid', 'libsql://invalid.example', 'ciphertext')"),
       /CHECK constraint failed/
@@ -73,10 +77,10 @@ test('control database migration is versioned, repeatable, and seeds sample plan
   }
 });
 
-test('control database client requires its own remote Turso configuration', async () => {
+test('control database accepts explicit remote configuration', async () => {
   assert.throws(
     () => getControlDatabaseConfig({}),
-    /CONTROL_DATABASE_URL and CONTROL_AUTH_TOKEN are required/
+    /TURSO_DATABASE_URL and TURSO_AUTH_TOKEN/
   );
   assert.throws(
     () => getControlDatabaseConfig({ CONTROL_DATABASE_URL: 'file:control.db', CONTROL_AUTH_TOKEN: 'test-token' }),
@@ -94,6 +98,40 @@ test('control database client requires its own remote Turso configuration', asyn
   const client = createControlDatabaseClient({
     CONTROL_DATABASE_URL: 'https://control.example',
     CONTROL_AUTH_TOKEN: 'test-control-token'
+  });
+  assert.equal(typeof client.execute, 'function');
+  await client.close();
+});
+
+test('control database reuses company Turso credentials by default', async () => {
+  assert.deepEqual(getControlDatabaseConfig({
+    TURSO_DATABASE_URL: 'libsql://company.example',
+    TURSO_AUTH_TOKEN: 'Bearer company-token'
+  }), {
+    url: 'libsql://company.example',
+    authToken: 'company-token'
+  });
+  assert.deepEqual(getControlDatabaseConfig({
+    TURSO_DATABASE_URL: 'libsql://company.example',
+    TURSO_AUTH_TOKEN: 'company-token',
+    CONTROL_DATABASE_URL: 'https://control.example',
+    CONTROL_AUTH_TOKEN: 'control-token'
+  }), {
+    url: 'https://control.example',
+    authToken: 'control-token'
+  });
+  assert.throws(
+    () => getControlDatabaseConfig({
+      TURSO_DATABASE_URL: 'libsql://company.example',
+      TURSO_AUTH_TOKEN: 'company-token',
+      CONTROL_DATABASE_URL: 'libsql://control.example'
+    }),
+    /Set both CONTROL_DATABASE_URL and CONTROL_AUTH_TOKEN/
+  );
+
+  const client = createControlDatabaseClient({
+    TURSO_DATABASE_URL: 'https://company.example',
+    TURSO_AUTH_TOKEN: 'company-token'
   });
   assert.equal(typeof client.execute, 'function');
   await client.close();

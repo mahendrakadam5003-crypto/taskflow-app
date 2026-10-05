@@ -14,12 +14,8 @@ services:
         sync: false
       - key: TURSO_AUTH_TOKEN
         sync: false
-      - key: CONTROL_DATABASE_URL
-        sync: false
-      - key: CONTROL_AUTH_TOKEN
-        sync: false
       - key: SUPERADMIN_USERNAME
-        sync: false
+        value: super admin
       - key: SUPERADMIN_PASSWORD
         sync: false
       - key: TURSO_PLATFORM_TOKEN
