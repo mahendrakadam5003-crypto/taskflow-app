@@ -148,6 +148,11 @@
           <div><p class="eyebrow">CATALOG</p><h2 id="plans-heading">Plans &amp; Pricing</h2></div>
         </div>
         <div class="plan-layout">
+          <div class="plan-section-copy">
+            <p class="eyebrow">ENTITLEMENTS</p>
+            <h3>Plans = what a company can use (limits + features)</h3>
+            <p class="muted">Plan assignments control company limits and feature access; they do not set the subscription price.</p>
+          </div>
           <form id="plan-form" class="plan-form">
             <h3 id="plan-form-heading">Create plan</h3>
             <input id="plan-id" type="hidden">
@@ -167,11 +172,13 @@
           <div id="plan-rows" class="plan-list" aria-live="polite"></div>
         </div>
         <section class="detail-panel detail-wide pricing-editor" aria-labelledby="pricing-editor-heading">
-          <div class="section-heading"><div><p class="eyebrow">VERSIONED SETTINGS</p><h3 id="pricing-editor-heading">Per-seat pricing and trial policy</h3></div></div>
+          <div class="section-heading"><div><p class="eyebrow">VERSIONED SETTINGS</p><h3 id="pricing-editor-heading">Pricing = what a company pays</h3></div></div>
+          <p class="muted">Per-seat rates, billing cycle, tax, and trial settings determine what a company is charged.</p>
           <p class="footnote">Price changes create a new immutable version. Existing subscriptions retain their locked price unless you choose next-renewal pricing.</p>
           <form id="pricing-form" class="pricing-form">
             <section class="tier-editor" aria-labelledby="pricing-tiers-heading">
               <div class="section-heading"><div><h4 id="pricing-tiers-heading">Volume pricing tiers</h4><p class="muted">The rate applies to every seat in the selected tier. Leave the final “To seats” blank for no upper limit.</p></div><button id="pricing-add-tier" class="button button-quiet" type="button">Add tier</button></div>
+              <p class="footnote">Landing-page highlights are edited in these pricing tiers and must match the feature checkboxes on the plan you assign: Attendance, Reimbursements, and Data export.</p>
               <div class="table-wrap tier-table-wrap"><table class="tier-table">
                 <thead><tr><th scope="col">Name</th><th scope="col">From seats</th><th scope="col">To seats</th><th scope="col">Monthly / seat</th><th scope="col">Computed yearly / seat</th><th scope="col">Yearly override</th><th scope="col">Tagline</th><th scope="col">Highlights (one per line)</th><th scope="col">Action</th></tr></thead>
                 <tbody id="pricing-tier-rows"></tbody>

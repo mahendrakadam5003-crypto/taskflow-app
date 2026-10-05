@@ -150,6 +150,9 @@ td { padding: 16px 18px; border-top: 1px solid var(--line); color: #d7e0eb; font
 .billing-form label { min-width: 0; }
 .billing-form button { align-self: end; }
 .plan-layout { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(0, 1.2fr); gap: 14px; margin-top: 14px; }
+.plan-section-copy { grid-column: 1 / -1; }
+.plan-section-copy h3 { margin: 0 0 7px; font-size: 15px; }
+.plan-section-copy p:last-child { margin: 0; line-height: 1.6; }
 .plan-form { display: flex; flex-direction: column; }
 .plan-form > label { margin-top: 14px; }
 .plan-form input[type="checkbox"], .feature-options input { width: 16px; height: 16px; accent-color: var(--accent); }

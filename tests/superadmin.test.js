@@ -62,6 +62,15 @@ test('super-admin bootstrap rejects weak or missing password before database acc
   assert.equal(opened, false);
 });
 
+test('super-admin plans and pricing page explains the entitlement and price split', async () => {
+  const page = await fs.readFile(path.join(__dirname, '..', 'public', 'superadmin.html'), 'utf8');
+  assert.match(page, /Plans = what a company can use \(limits \+ features\)/);
+  assert.match(page, /Plan assignments control company limits and feature access; they do not set the subscription price\./);
+  assert.match(page, /Pricing = what a company pays/);
+  assert.match(page, /Per-seat rates, billing cycle, tax, and trial settings determine what a company is charged\./);
+  assert.match(page, /Landing-page highlights are edited in these pricing tiers and must match the feature checkboxes on the plan you assign: Attendance, Reimbursements, and Data export\./);
+});
+
 test('startup bootstrap creates and can privately reset only the configured super-admin', async () => {
   let storedAdmin = null;
   const auditEntries = [];
