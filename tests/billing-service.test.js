@@ -2,7 +2,12 @@
 
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { createManualSubscriptionInvoice, markManualInvoicePaid, periodEnd } = require('../billing-service');
+const {
+  createManualSubscriptionChangeInvoice,
+  createManualSubscriptionInvoice,
+  markManualInvoicePaid,
+  periodEnd
+} = require('../billing-service');
 
 function createBillingFixture() {
   const companies = new Map([[1, { id: 1, status: 'trial', trial_policy_version: 1 }], [2, { id: 2, status: 'active', trial_policy_version: null }]]);
@@ -14,6 +19,7 @@ function createBillingFixture() {
   const payments = [];
   const events = [];
   const audits = [];
+  const billingRequests = [];
   const controlDb = {
     async execute(statement) {
       const sql = typeof statement === 'string' ? statement : statement.sql;
@@ -30,6 +36,7 @@ function createBillingFixture() {
         prorate_seats: 1, seat_addition_billing: 'immediate', price_change_scope: 'new_customers', trial_approval_mode: 'manual'
       }] };
       if (sql.includes('SELECT * FROM pricing_versions')) return { rows: [{ ...pricing }] };
+      if (sql.includes('SELECT monthly_price_paise, yearly_price_paise')) return { rows: [{ ...pricing }] };
       throw new Error(`Unexpected billing query: ${sql}`);
     },
     async transaction() {
@@ -51,7 +58,7 @@ function createBillingFixture() {
           }
           if (sql.startsWith('INSERT INTO subscriptions')) {
             const row = {
-              id: subscriptions.length + 1,
+              id: Math.max(0, ...subscriptions.map(item => item.id)) + 1,
               company_id: Number(args[0]),
               billing_cycle: args[1],
               seats: Number(args[2]),
@@ -86,6 +93,26 @@ function createBillingFixture() {
             invoices.push(row);
             return { lastInsertRowid: row.id };
           }
+          if (sql.startsWith('SELECT id, requested_billing_cycle, requested_seats FROM subscription_change_requests')) {
+            const request = billingRequests.find(item => item.id === Number(args[0])
+              && item.company_id === Number(args[1]) && item.status === 'pending');
+            return { rows: request ? [{ ...request }] : [] };
+          }
+          if (sql.includes('SELECT id, billing_cycle, unit_price_paise, pricing_version_id, current_period_end')
+            && sql.includes('FROM subscriptions WHERE company_id')) {
+            return { rows: subscriptions.filter(item => item.company_id === Number(args[0])
+              && ['active', 'past_due'].includes(item.status)).slice(-1) };
+          }
+          if (sql.startsWith('SELECT min_seats')) return { rows: [{ ...settings }] };
+          if (sql.startsWith('SELECT monthly_price_paise, yearly_price_paise')) return { rows: [{ ...pricing }] };
+          if (sql.startsWith('UPDATE subscription_change_requests SET status')) {
+            const request = billingRequests.find(item => item.id === Number(args[3]) && item.status === 'pending');
+            if (request) Object.assign(request, {
+              status: 'invoiced', invoice_id: Number(args[0]),
+              previous_subscription_id: args[1] == null ? null : Number(args[1])
+            });
+            return { rowsAffected: request ? 1 : 0 };
+          }
           if (sql.startsWith('UPDATE companies SET status')) {
             const company = companies.get(Number(args[0]));
             if (company?.trial_policy_version === 1) company.status = 'active';
@@ -102,6 +129,11 @@ function createBillingFixture() {
             if (invoice) { invoice.status = 'paid'; invoice.paid_at = args[0]; }
             return { rowsAffected: invoice ? 1 : 0 };
           }
+          if (sql.startsWith("UPDATE subscriptions SET status = 'cancelled'")) {
+            const subscription = subscriptions.find(row => row.id === Number(args[0]) && row.company_id === Number(args[1]));
+            if (subscription) subscription.status = 'cancelled';
+            return { rowsAffected: subscription ? 1 : 0 };
+          }
           if (sql.startsWith('UPDATE subscriptions SET status')) {
             const subscription = subscriptions.find(row => row.id === Number(args[2]) && row.company_id === Number(args[3]));
             if (subscription) Object.assign(subscription, { status: 'active', current_period_start: args[0], current_period_end: args[1] });
@@ -113,6 +145,11 @@ function createBillingFixture() {
             return { rowsAffected: company ? 1 : 0 };
           }
           if (sql.startsWith('INSERT INTO payments')) { payments.push(args); return { rowsAffected: 1 }; }
+          if (sql.startsWith('SELECT id, previous_subscription_id FROM subscription_change_requests')) {
+            const request = billingRequests.find(item => item.invoice_id === Number(args[0])
+              && item.company_id === Number(args[1]) && item.status === 'invoiced');
+            return { rows: request ? [{ ...request }] : [] };
+          }
           throw new Error(`Unexpected billing transaction: ${sql}`);
         },
         async commit() {},
@@ -120,7 +157,7 @@ function createBillingFixture() {
       };
     }
   };
-  return { audits, companies, controlDb, events, invoices, payments, sequences, subscriptions };
+  return { audits, billingRequests, companies, controlDb, events, invoices, payments, sequences, subscriptions };
 }
 
 test('manual invoice locks current price, numbers invoices, and activates the period only when paid', async () => {
@@ -161,4 +198,31 @@ test('manual invoice locks current price, numbers invoices, and activates the pe
 test('billing period end clamps month-end dates instead of overflowing into the next month', () => {
   assert.equal(periodEnd(new Date('2026-01-31T12:00:00.000Z'), 'monthly').toISOString(), '2026-02-28T12:00:00.000Z');
   assert.equal(periodEnd(new Date('2024-02-29T12:00:00.000Z'), 'yearly').toISOString(), '2025-02-28T12:00:00.000Z');
+});
+
+test('approved subscription changes use the original price version and replace the old subscription only after payment', async () => {
+  const fixture = createBillingFixture();
+  fixture.subscriptions.push({
+    id: 9, company_id: 2, billing_cycle: 'monthly', seats: 3, unit_price_paise: 19900,
+    pricing_version_id: 1, status: 'active', current_period_end: '2026-11-06T12:00:00.000Z'
+  });
+  fixture.billingRequests.push({
+    id: 4, company_id: 2, requested_seats: 5, requested_billing_cycle: 'yearly', status: 'pending'
+  });
+  const admin = { id: 7 };
+  const invoice = await createManualSubscriptionChangeInvoice(fixture.controlDb, admin, {
+    companyId: 2, requestId: 4, now: new Date('2026-10-06T12:00:00.000Z')
+  });
+  assert.equal(invoice.unitPricePaise, 214920);
+  assert.equal(invoice.billingCycle, 'yearly');
+  assert.equal(invoice.periodStart, '2026-11-06T12:00:00.000Z');
+  assert.equal(fixture.billingRequests[0].status, 'invoiced');
+  assert.equal(fixture.billingRequests[0].previous_subscription_id, 9);
+  assert.equal(fixture.subscriptions.find(item => item.id === 9).status, 'active');
+
+  await markManualInvoicePaid(fixture.controlDb, admin, {
+    companyId: 2, invoiceId: invoice.invoiceId, now: new Date('2026-10-06T12:00:00.000Z')
+  });
+  assert.equal(fixture.subscriptions.find(item => item.id === 9).status, 'cancelled');
+  assert.equal(fixture.subscriptions.find(item => item.id === invoice.subscriptionId).status, 'active');
 });

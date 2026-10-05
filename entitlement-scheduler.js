@@ -6,7 +6,7 @@ const { createMailer } = require('./mailer');
 const { parseAccessDate } = require('./entitlements');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const TRIAL_DATA_NOTICE = 'Trial data may be deleted at any time after the trial ends. Export anything you need. No data retention or backup is guaranteed.';
+const TRIAL_DATA_NOTICE = 'Trial access may be limited after expiry. Automatic workspace deletion is disabled.';
 
 function calendarDaysRemaining(value, now) {
   const end = parseAccessDate(value, { endOfDay: true });

@@ -92,6 +92,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       company_price_overrides: ['company_id', 'unit_price_paise', 'currency', 'created_by', 'note', 'updated_at'],
       entitlement_notifications: ['id', 'company_id', 'event_key', 'notification_type', 'recipient_email', 'status', 'attempts', 'created_at', 'last_attempt_at', 'sent_at'],
       invoice_sequences: ['year', 'last_number'],
+      subscription_change_requests: ['id', 'company_id', 'requested_by_user_id', 'requested_seats', 'requested_billing_cycle', 'status', 'invoice_id', 'previous_subscription_id', 'reviewed_by', 'reviewed_at', 'created_at'],
       control_schema_migrations: ['version', 'applied_at']
     };
     for (const [table, columns] of Object.entries(expectedColumns)) {
@@ -100,7 +101,9 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       assert.deepEqual(columnResult.rows.map(column => column.name), columns, `expected columns on ${table}`);
     }
     const migrations = await client.execute('SELECT version FROM control_schema_migrations');
-    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, CURRENT_SCHEMA_VERSION]);
+    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, CURRENT_SCHEMA_VERSION
+    ]);
     const pricing = await client.execute('SELECT monthly_price_paise, yearly_discount_pct, yearly_price_paise, tax_pct, currency, is_current FROM pricing_versions');
     assert.deepEqual(pricing.rows.map(row => [Number(row.monthly_price_paise), Number(row.yearly_discount_pct), Number(row.yearly_price_paise), Number(row.tax_pct), row.currency, Number(row.is_current)]), [[19900, 10, 214920, 18, 'INR', 1]]);
     const pricingSettings = await client.execute('SELECT trial_days, trial_max_users, trial_storage_limit_mb, grace_period_days, read_only_period_days, trial_approval_mode, seat_addition_billing FROM pricing_settings WHERE id = 1');

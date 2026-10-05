@@ -10,7 +10,11 @@ const { provisionCompany: defaultProvisionCompany, ProvisioningError } = require
 const { createBackupManager } = require('../backup-manager');
 const { getPricing, savePricing, validatePricingInput } = require('../pricing-service');
 const { calculateInvoiceAmounts } = require('../lib/pricing');
-const { createManualSubscriptionInvoice, markManualInvoicePaid } = require('../billing-service');
+const {
+  createManualSubscriptionChangeInvoice,
+  createManualSubscriptionInvoice,
+  markManualInvoicePaid
+} = require('../billing-service');
 
 const COOKIE_NAME = 'taskflow.superadmin.sid';
 const SESSION_DURATION_MS = 4 * 60 * 60 * 1000;
@@ -180,6 +184,83 @@ function createSuperAdminRouter({
     setSessionCookie(res, token, { secureCookies });
     res.set('Cache-Control', 'no-store');
     return res.json({ authenticated: true, admin: { name: admin.name, username: admin.username } });
+  }));
+
+  router.post('/companies/:companyId/billing-requests/:requestId/invoice', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    const requestId = Number(req.params.requestId);
+    if (!Number.isSafeInteger(companyId) || companyId < 1
+      || !Number.isSafeInteger(requestId) || requestId < 1) {
+      return res.status(400).json({ error: 'Choose a valid company and billing request.' });
+    }
+    const controlDb = await getDatabase();
+    const [requestResult, subscriptionResult] = await Promise.all([
+      controlDb.execute({
+        sql: `SELECT requested_seats, requested_billing_cycle FROM subscription_change_requests
+          WHERE id = ? AND company_id = ? AND status = 'pending' LIMIT 1`,
+        args: [requestId, companyId]
+      }),
+      controlDb.execute({
+        sql: `SELECT id FROM subscriptions WHERE company_id = ?
+          ORDER BY id DESC LIMIT 1`,
+        args: [companyId]
+      })
+    ]);
+    const billingRequest = requestResult.rows?.[0];
+    if (!billingRequest) return res.status(409).json({ error: 'Pending billing request not found.' });
+    const tenantDb = getTenantDatabase();
+    const activeUsers = await tenantDb.runWithTenant(companyId, async () => {
+      const result = await tenantDb.prepare('SELECT COUNT(*) AS count FROM users WHERE active = 1').get();
+      return Number(result?.count);
+    });
+    if (!Number.isSafeInteger(activeUsers) || activeUsers < 0) {
+      throw new Error('Unable to verify the company’s active user count before invoicing.');
+    }
+    if (Number(billingRequest.requested_seats) < activeUsers) {
+      return res.status(409).json({ error: `The company now has ${activeUsers} active users. Update the request to at least that seat count.` });
+    }
+    try {
+      const invoice = subscriptionResult.rows?.[0]
+        ? await createManualSubscriptionChangeInvoice(controlDb, admin, { companyId, requestId })
+        : await createManualSubscriptionInvoice(controlDb, admin, {
+          companyId, requestId,
+          billingCycle: billingRequest.requested_billing_cycle,
+          seats: Number(billingRequest.requested_seats)
+        });
+      res.set('Cache-Control', 'no-store');
+      return res.status(201).json(invoice);
+    } catch (error) {
+      if (/Company not found/.test(String(error.message))) return res.status(404).json({ error: error.message });
+      if (/Pending billing request not found|Paid subscription not found|already has a paid subscription/.test(String(error.message))) {
+        return res.status(409).json({ error: error.message });
+      }
+      if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+      throw error;
+    }
+  }));
+
+  router.post('/companies/:companyId/billing-requests/:requestId/reject', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    const requestId = Number(req.params.requestId);
+    if (!Number.isSafeInteger(companyId) || companyId < 1
+      || !Number.isSafeInteger(requestId) || requestId < 1) {
+      return res.status(400).json({ error: 'Choose a valid company and billing request.' });
+    }
+    const controlDb = await getDatabase();
+    const result = await controlDb.execute({
+      sql: `UPDATE subscription_change_requests
+        SET status = 'rejected', reviewed_by = ?, reviewed_at = datetime('now')
+        WHERE id = ? AND company_id = ? AND status = 'pending'`,
+      args: [admin.id, requestId, companyId]
+    });
+    if (Number(result.rowsAffected || 0) !== 1) return res.status(404).json({ error: 'Pending billing request not found.' });
+    await writeAudit(controlDb, admin, companyId, 'Billing request rejected', `Billing request ${requestId} was rejected.`);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ id: requestId, status: 'rejected' });
   }));
 
   router.get('/session', handle(async (req, res) => {
@@ -636,7 +717,7 @@ function createSuperAdminRouter({
     const companyId = Number(req.params.companyId);
     if (!Number.isSafeInteger(companyId) || companyId < 1) return res.status(400).json({ error: 'Choose a valid company.' });
     const controlDb = await getDatabase();
-    const [companyResult, usageResult, backupsResult, billingResult, restoreResult, restoreTestsResult] = await Promise.all([
+    const [companyResult, usageResult, backupsResult, billingResult, restoreResult, restoreTestsResult, billingRequestsResult] = await Promise.all([
       controlDb.execute({
         sql: `SELECT c.id, c.code, c.name, c.owner_name, c.owner_email, c.owner_phone, c.status,
             c.plan_id, c.trial_ends_at, c.last_login_at, c.delete_after, c.max_users_override, c.storage_limit_mb_override,
@@ -674,6 +755,12 @@ function createSuperAdminRouter({
       controlDb.execute({
         sql: `SELECT id, backup_id, test_month, status, details, created_at
           FROM backup_tests WHERE company_id = ? ORDER BY test_month DESC LIMIT 12`,
+        args: [companyId]
+      }),
+      controlDb.execute({
+        sql: `SELECT id, requested_by_user_id, requested_seats, requested_billing_cycle,
+            status, invoice_id, created_at, reviewed_at
+          FROM subscription_change_requests WHERE company_id = ? ORDER BY id DESC LIMIT 20`,
         args: [companyId]
       })
     ]);
@@ -724,6 +811,16 @@ function createSuperAdminRouter({
       billingNotes: billingResult.rows.map(note => ({
         id: Number(note.id), amountText: note.amount_text, note: note.note,
         markedPaidAt: note.marked_paid_at, markedByName: note.marked_by_name, createdAt: null
+      })),
+      billingRequests: billingRequestsResult.rows.map(request => ({
+        id: Number(request.id),
+        requestedByUserId: request.requested_by_user_id == null ? null : Number(request.requested_by_user_id),
+        seats: Number(request.requested_seats),
+        billingCycle: request.requested_billing_cycle,
+        status: request.status,
+        invoiceId: request.invoice_id == null ? null : Number(request.invoice_id),
+        createdAt: request.created_at,
+        reviewedAt: request.reviewed_at
       }))
     });
   }));

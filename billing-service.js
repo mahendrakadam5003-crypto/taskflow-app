@@ -38,7 +38,18 @@ async function nextInvoiceNumber(transaction, year) {
   return `INV-${year}-${String(next).padStart(4, '0')}`;
 }
 
-async function createManualSubscriptionInvoice(controlDb, admin, { companyId, billingCycle, seats, now = new Date() }) {
+async function markBillingRequestInvoiced(transaction, admin, requestId, invoiceId, previousSubscriptionId = null) {
+  if (requestId == null) return;
+  const result = await transaction.execute({
+    sql: `UPDATE subscription_change_requests SET status = 'invoiced', invoice_id = ?,
+      previous_subscription_id = ?, reviewed_by = ?, reviewed_at = datetime('now')
+      WHERE id = ? AND status = 'pending'`,
+    args: [invoiceId, previousSubscriptionId, admin.id, requestId]
+  });
+  if (Number(result.rowsAffected || 0) !== 1) throw new Error('Billing request is no longer pending.');
+}
+
+async function createManualSubscriptionInvoice(controlDb, admin, { companyId, billingCycle, seats, now = new Date(), requestId = null }) {
   const normalizedCompanyId = Number(companyId);
   if (!Number.isSafeInteger(normalizedCompanyId) || normalizedCompanyId < 1) throw new TypeError('A valid company is required.');
   if (!['monthly', 'yearly'].includes(billingCycle)) throw new TypeError('Billing cycle must be monthly or yearly.');
@@ -96,6 +107,7 @@ async function createManualSubscriptionInvoice(controlDb, admin, { companyId, bi
         seats, unitPricePaise, amounts.subtotalPaise, amounts.discountPaise, amounts.taxPaise,
         amounts.totalPaise, pricing.currency, pricing.taxPct]
     });
+    await markBillingRequestInvoiced(transaction, admin, requestId, Number(invoice.lastInsertRowid));
     await transaction.execute({
       sql: 'INSERT INTO subscription_events (company_id, subscription_id, actor_super_admin_id, event, details) VALUES (?, ?, ?, ?, ?)',
       args: [normalizedCompanyId, subscriptionId, admin.id, 'manual_subscription_created', `Created ${billingCycle} subscription for ${seats} seats at ${unitPricePaise} paise per seat.`]
@@ -117,6 +129,120 @@ async function createManualSubscriptionInvoice(controlDb, admin, { companyId, bi
       periodStart: periodStartText,
       periodEnd: invoicePeriodEndText,
       status: 'open'
+    };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+async function createManualSubscriptionChangeInvoice(controlDb, admin, { companyId, requestId, now = new Date() }) {
+  const normalizedCompanyId = Number(companyId);
+  const normalizedRequestId = Number(requestId);
+  if (!Number.isSafeInteger(normalizedCompanyId) || normalizedCompanyId < 1
+    || !Number.isSafeInteger(normalizedRequestId) || normalizedRequestId < 1) {
+    throw new TypeError('A valid company and billing request are required.');
+  }
+  const transaction = await controlDb.transaction('write');
+  try {
+    const requestResult = await transaction.execute({
+      sql: `SELECT id, requested_billing_cycle, requested_seats FROM subscription_change_requests
+        WHERE id = ? AND company_id = ? AND status = 'pending' LIMIT 1`,
+      args: [normalizedRequestId, normalizedCompanyId]
+    });
+    const request = requestResult.rows?.[0];
+    if (!request) throw new Error('Pending billing request not found.');
+
+    const subscriptionResult = await transaction.execute({
+      sql: `SELECT id, billing_cycle, unit_price_paise, pricing_version_id, current_period_end
+        FROM subscriptions WHERE company_id = ? AND status IN ('active', 'past_due', 'cancelled', 'expired')
+        ORDER BY id DESC LIMIT 1`,
+      args: [normalizedCompanyId]
+    });
+    const current = subscriptionResult.rows?.[0];
+    if (!current) throw new Error('Paid subscription not found.');
+
+    const requestedCycle = request.requested_billing_cycle;
+    const seats = Number(request.requested_seats);
+    const settingsResult = await transaction.execute('SELECT min_seats, max_seats, tax_inclusive FROM pricing_settings WHERE id = 1');
+    const settings = settingsResult.rows?.[0] || {};
+    const minSeats = Number(settings.min_seats ?? 1);
+    const maxSeats = settings.max_seats == null ? null : Number(settings.max_seats);
+    if (seats < minSeats || (maxSeats !== null && seats > maxSeats)) {
+      throw new RangeError(`Seats must be between ${minSeats} and ${maxSeats ?? 'unlimited'}.`);
+    }
+
+    let unitPricePaise;
+    let discountPct = 0;
+    let taxPct = 18;
+    let currency = 'INR';
+    if (current.pricing_version_id != null) {
+      const versionResult = await transaction.execute({
+        sql: 'SELECT monthly_price_paise, yearly_price_paise, yearly_discount_pct, tax_pct, currency FROM pricing_versions WHERE id = ? LIMIT 1',
+        args: [Number(current.pricing_version_id)]
+      });
+      const version = versionResult.rows?.[0];
+      if (!version) throw new Error('Locked subscription pricing version was not found.');
+      unitPricePaise = Number(requestedCycle === 'yearly' ? version.yearly_price_paise : version.monthly_price_paise);
+      discountPct = requestedCycle === 'yearly' ? Number(version.yearly_discount_pct) : 0;
+      taxPct = Number(version.tax_pct);
+      currency = version.currency;
+    } else if (requestedCycle === current.billing_cycle) {
+      unitPricePaise = Number(current.unit_price_paise);
+    } else {
+      throw new Error('This subscription has no saved pricing version for the requested billing cycle.');
+    }
+
+    const nowDate = new Date(now);
+    const savedPeriodEnd = new Date(current.current_period_end);
+    const periodStart = Number.isNaN(savedPeriodEnd.getTime()) || savedPeriodEnd <= nowDate
+      ? nowDate : savedPeriodEnd;
+    const invoicePeriodEnd = periodEnd(periodStart, requestedCycle);
+    const periodStartText = periodStart.toISOString();
+    const invoicePeriodEndText = invoicePeriodEnd.toISOString();
+    const amounts = calculateInvoiceAmounts({
+      unitPricePaise,
+      seats,
+      discountPctTenths: 0,
+      taxPctTenths: Math.round(taxPct * 10),
+      taxInclusive: Number(settings.tax_inclusive) === 1
+    });
+    const number = await nextInvoiceNumber(transaction, periodStart.getUTCFullYear());
+    const subscription = await transaction.execute({
+      sql: `INSERT INTO subscriptions (
+        company_id, billing_cycle, seats, unit_price_paise, discount_pct, pricing_version_id,
+        status, current_period_start, current_period_end, provider
+      ) VALUES (?, ?, ?, ?, ?, ?, 'past_due', ?, ?, 'manual')`,
+      args: [normalizedCompanyId, requestedCycle, seats, unitPricePaise, discountPct,
+        current.pricing_version_id, periodStartText, invoicePeriodEndText]
+    });
+    const subscriptionId = Number(subscription.lastInsertRowid);
+    const invoice = await transaction.execute({
+      sql: `INSERT INTO invoices (
+        company_id, subscription_id, number, period_start, period_end, seats, unit_price_paise,
+        subtotal_paise, discount_paise, tax_paise, total_paise, currency, tax_pct, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
+      args: [normalizedCompanyId, subscriptionId, number, periodStartText, invoicePeriodEndText,
+        seats, unitPricePaise, amounts.subtotalPaise, amounts.discountPaise, amounts.taxPaise,
+        amounts.totalPaise, currency, taxPct]
+    });
+    const invoiceId = Number(invoice.lastInsertRowid);
+    await markBillingRequestInvoiced(transaction, admin, normalizedRequestId, invoiceId, Number(current.id));
+    await transaction.execute({
+      sql: 'INSERT INTO subscription_events (company_id, subscription_id, actor_super_admin_id, event, details) VALUES (?, ?, ?, ?, ?)',
+      args: [normalizedCompanyId, subscriptionId, admin.id, 'manual_subscription_change_invoiced',
+        `Issued ${requestedCycle} invoice ${number} for ${seats} seats at the subscription's locked price.`]
+    });
+    await transaction.execute({
+      sql: 'INSERT INTO super_admin_audit (super_admin_id, company_id, action, details) VALUES (?, ?, ?, ?)',
+      args: [admin.id, normalizedCompanyId, 'Subscription change invoice created',
+        `${number}: ${requestedCycle}, ${seats} seats, ${amounts.totalPaise} paise total.`]
+    });
+    await transaction.commit();
+    return {
+      subscriptionId, invoiceId, number, billingCycle: requestedCycle, seats,
+      unitPricePaise, ...amounts, currency, periodStart: periodStartText,
+      periodEnd: invoicePeriodEndText, status: 'open'
     };
   } catch (error) {
     await transaction.rollback();
@@ -151,6 +277,22 @@ async function markManualInvoicePaid(controlDb, admin, { companyId, invoiceId, p
         cancel_at_period_end = 0 WHERE id = ? AND company_id = ?`,
       args: [invoice.period_start, invoice.period_end, Number(invoice.subscription_id), normalizedCompanyId]
     });
+    const changeResult = await transaction.execute({
+      sql: 'SELECT id, previous_subscription_id FROM subscription_change_requests WHERE invoice_id = ? AND company_id = ? AND status = \'invoiced\' LIMIT 1',
+      args: [normalizedInvoiceId, normalizedCompanyId]
+    });
+    const previousSubscriptionId = changeResult.rows?.[0]?.previous_subscription_id;
+    if (previousSubscriptionId != null) {
+      await transaction.execute({
+        sql: "UPDATE subscriptions SET status = 'cancelled' WHERE id = ? AND company_id = ? AND id <> ?",
+        args: [Number(previousSubscriptionId), normalizedCompanyId, Number(invoice.subscription_id)]
+      });
+      await transaction.execute({
+        sql: 'INSERT INTO subscription_events (company_id, subscription_id, actor_super_admin_id, event, details) VALUES (?, ?, ?, ?, ?)',
+        args: [normalizedCompanyId, Number(previousSubscriptionId), admin.id, 'subscription_replaced',
+          `Replaced by paid invoice ${invoice.number}.`]
+      });
+    }
     await transaction.execute({
       sql: 'UPDATE companies SET status = \'active\', delete_after = NULL WHERE id = ?',
       args: [normalizedCompanyId]
@@ -175,4 +317,9 @@ async function markManualInvoicePaid(controlDb, admin, { companyId, invoiceId, p
   }
 }
 
-module.exports = { createManualSubscriptionInvoice, markManualInvoicePaid, periodEnd };
+module.exports = {
+  createManualSubscriptionChangeInvoice,
+  createManualSubscriptionInvoice,
+  markManualInvoicePaid,
+  periodEnd
+};

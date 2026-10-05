@@ -16,7 +16,7 @@ test('legacy and active companies without subscription rows keep full access', (
 test('trial remains full-access through its end date and locks afterward', () => {
   const inTrial = getCompanyAccessState(company, { now: fixedNow('2026-10-06T23:59:59.999Z') });
   assert.equal(inTrial.state, 'full');
-  assert.match(inTrial.message, /No data retention or backup is guaranteed/);
+  assert.match(inTrial.message, /Automatic workspace deletion is disabled/);
   const ended = getCompanyAccessState(company, { now: fixedNow('2026-10-07T00:00:00.000Z') });
   assert.equal(ended.state, 'locked');
   assert.deepEqual(ended.reasons, ['trial_ended']);

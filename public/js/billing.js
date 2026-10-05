@@ -67,6 +67,11 @@ function renderBilling(data) {
     : `plus ${data.pricing.taxPct}% applicable tax`;
   document.getElementById('price-summary').textContent =
     `${monthly} per seat monthly, or ${yearly} per seat yearly (${data.pricing.yearlyDiscountPct}% discount), ${taxLabel}.`;
+  const seatsInput = document.getElementById('requested-seats');
+  seatsInput.min = String(Math.max(1, Number(data.billingRules?.minSeats || 1)));
+  if (data.billingRules?.maxSeats != null) seatsInput.max = String(data.billingRules.maxSeats);
+  if (!seatsInput.value) seatsInput.value = String(subscription?.seats || usage.activeUsers || 1);
+  if (subscription) document.getElementById('requested-cycle').value = subscription.billing_cycle;
   document.getElementById('billing-updated').textContent = `Live usage refreshed ${new Date().toLocaleString()}.`;
   const rows = document.getElementById('invoice-rows');
   rows.innerHTML = data.invoices.map(invoice => `<tr>
@@ -76,8 +81,16 @@ function renderBilling(data) {
     <td>${escapeHtml(formatMoney(invoice.total_paise, invoice.currency))}</td>
     <td class="status status-${escapeHtml(invoice.status)}">${escapeHtml(invoice.status)}</td>
     <td>${escapeHtml(formatDate(invoice.paid_at))}</td>
+    <td>${invoice.status === 'paid' ? `<a href="/api/billing/invoices/${encodeURIComponent(invoice.id)}/receipt">Download receipt</a>` : '—'}</td>
   </tr>`).join('');
   document.getElementById('invoice-empty').classList.toggle('hidden', data.invoices.length > 0);
+  document.getElementById('billing-request-rows').innerHTML = data.billingRequests.map(request => `<tr>
+    <td>#${Number(request.id)}</td>
+    <td>${Number(request.requested_seats)}</td>
+    <td>${escapeHtml(request.requested_billing_cycle)}</td>
+    <td>${escapeHtml(request.status)}${request.invoice_id ? ` · invoice #${Number(request.invoice_id)}` : ''}</td>
+    <td>${escapeHtml(formatDate(request.created_at))}</td>
+  </tr>`).join('');
   document.getElementById('billing-content').classList.remove('hidden');
 }
 
@@ -87,6 +100,7 @@ async function loadBilling() {
     const response = await fetch('/api/billing/me', { credentials: 'same-origin', headers: { Accept: 'application/json' } });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Unable to load billing details.');
+    error.classList.add('hidden');
     renderBilling(result);
   } catch (reason) {
     error.textContent = reason.message;
@@ -96,4 +110,34 @@ async function loadBilling() {
 
 document.getElementById('print-button').addEventListener('click', () => window.print());
 document.getElementById('refresh-button').addEventListener('click', loadBilling);
+document.getElementById('billing-change-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = document.getElementById('billing-request-submit');
+  const message = document.getElementById('billing-request-message');
+  message.classList.add('hidden');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/billing/requests', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        seats: Number(document.getElementById('requested-seats').value),
+        billingCycle: document.getElementById('requested-cycle').value
+      })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Unable to submit the billing request.');
+    message.textContent = 'Request submitted for administrator review. No payment has been taken.';
+    message.classList.add('success');
+    message.classList.remove('hidden');
+    await loadBilling();
+  } catch (error) {
+    message.textContent = error.message;
+    message.classList.remove('success');
+    message.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+  }
+});
 loadBilling();

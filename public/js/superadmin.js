@@ -425,6 +425,11 @@ function renderCompanyRecords(detail) {
       ? `<span>Paid ${escapeHtml(formatDate(note.markedPaidAt))}</span>`
       : `<button class="button button-quiet" type="button" data-billing-paid="${note.id}">Mark as paid</button>`}</div>`).join('')
     : '<p class="muted">No billing notes recorded.</p>';
+  document.getElementById('billing-request-list').innerHTML = detail.billingRequests.length
+    ? detail.billingRequests.map(item => `<div class="record-row"><div><strong>${Number(item.seats)} seats · ${escapeHtml(item.billingCycle)}</strong><small>Request #${item.id} · submitted ${escapeHtml(formatDate(item.createdAt))}${item.invoiceId ? ` · invoice #${item.invoiceId}` : ''}</small></div><span>${escapeHtml(item.status)}</span>${item.status === 'pending'
+      ? `<div class="record-actions"><button class="button button-primary" type="button" data-request-invoice="${item.id}">Issue invoice</button><button class="button button-quiet" type="button" data-request-reject="${item.id}">Reject</button></div>`
+      : ''}</div>`).join('')
+    : '<p class="muted">No billing change requests recorded.</p>';
 }
 
 async function loadCompanyDetail(companyId) {
@@ -774,6 +779,28 @@ document.getElementById('billing-list').addEventListener('click', async event =>
     const target = document.getElementById('company-detail-error');
     target.textContent = error.message;
     target.classList.remove('hidden');
+  }
+});
+
+document.getElementById('billing-request-list').addEventListener('click', async event => {
+  const invoiceButton = event.target.closest('[data-request-invoice]');
+  const rejectButton = event.target.closest('[data-request-reject]');
+  const button = invoiceButton || rejectButton;
+  if (!button || !activeCompanyDetail) return;
+  const companyId = activeCompanyDetail.company.id;
+  const requestId = button.dataset.requestInvoice || button.dataset.requestReject;
+  const action = invoiceButton ? 'invoice' : 'reject';
+  if (invoiceButton && !window.confirm('Issue an open invoice using this company’s locked subscription price? No payment will be taken automatically.')) return;
+  button.disabled = true;
+  try {
+    await request(`companies/${companyId}/billing-requests/${requestId}/${action}`, { method: 'POST' });
+    await loadCompanyDetail(companyId);
+  } catch (error) {
+    const target = document.getElementById('company-detail-error');
+    target.textContent = error.message;
+    target.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
   }
 });
 

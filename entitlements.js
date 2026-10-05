@@ -73,7 +73,7 @@ function getCompanyAccessState(company, {
     if (trialEnd == null || nowTime > trialEnd) {
       return accessResult('locked', 'trial_ended', 'The trial has ended. Contact your administrator to continue.');
     }
-    return accessResult('full', 'trial_active', 'Trial data may be deleted at any time after the trial ends. Export anything you need. No data retention or backup is guaranteed.');
+    return accessResult('full', 'trial_active', 'Trial access may be limited after expiry. Automatic workspace deletion is disabled.');
   }
 
   return accessResult('full', 'subscription_active', '');

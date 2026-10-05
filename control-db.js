@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 11;
+const CURRENT_SCHEMA_VERSION = 12;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -402,6 +402,26 @@ const CONTROL_MIGRATIONS = [{
       last_number INTEGER NOT NULL DEFAULT 0 CHECK (last_number >= 0)
     )`,
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [11] }
+  ]
+}, {
+  version: 12,
+  statements: [
+    `CREATE TABLE IF NOT EXISTS subscription_change_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      requested_by_user_id INTEGER,
+      requested_seats INTEGER NOT NULL CHECK (requested_seats >= 1),
+      requested_billing_cycle TEXT NOT NULL CHECK (requested_billing_cycle IN ('monthly', 'yearly')),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'invoiced', 'rejected')),
+      invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+      previous_subscription_id INTEGER REFERENCES subscriptions(id) ON DELETE SET NULL,
+      reviewed_by INTEGER REFERENCES super_admins(id) ON DELETE SET NULL,
+      reviewed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    'CREATE INDEX IF NOT EXISTS subscription_change_requests_company_idx ON subscription_change_requests(company_id, created_at)',
+    'CREATE UNIQUE INDEX IF NOT EXISTS subscription_change_requests_one_pending_idx ON subscription_change_requests(company_id) WHERE status = \'pending\'',
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [12] }
   ]
 }];
 

@@ -42,6 +42,11 @@ h2 { margin-bottom: 0; font-size: 19px; }
 .billing-panel > .muted, .manual-payment-note { margin: 17px 22px; }
 .manual-payment-note, .trial-notice { padding: 14px 16px; border-radius: 9px; background: var(--amber-bg); color: var(--amber); font-size: 13px; line-height: 1.6; }
 .trial-notice { margin-bottom: 16px; }
+.billing-change-form { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 18px 22px; }
+.billing-change-form label { color: var(--muted); font-size: 12px; }
+.billing-change-form input, .billing-change-form select { min-height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); font: inherit; }
+#billing-request-message { margin: 0 22px 14px; }
+#billing-request-message.success { border-color: #b8d9c6; background: var(--green-bg); color: var(--green); }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; text-align: left; }
 th, td { padding: 13px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -68,4 +73,5 @@ td { font-size: 13px; }
   .billing-shell { width: 100%; }
   .billing-header > div, .manual-payment-note { display: none; }
   .billing-panel, .billing-card { break-inside: avoid; }
+  .billing-change-form, #billing-request-message { display: none; }
 }

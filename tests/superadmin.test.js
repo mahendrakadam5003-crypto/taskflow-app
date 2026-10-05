@@ -565,6 +565,7 @@ test('super-admin detail, plans, billing, reset, backup, support mode, and compa
     prepare(sql) {
       return {
         async get() {
+          if (sql.includes('COUNT(*) AS count FROM users WHERE active = 1')) return { count: 7 };
           if (sql.includes("WHERE role = 'admin'")) return { ...tenantAdmin };
           if (sql.includes('SELECT username FROM users')) return { username: tenantAdmin.username };
           return null;
@@ -691,6 +692,18 @@ test('super-admin detail, plans, billing, reset, backup, support mode, and compa
     for (const action of ['Company configuration updated', 'Plan created', 'Plan updated', 'Billing note added', 'Billing note marked paid', 'Company admin password reset', 'Company backup created', 'Support mode started']) {
       assert.ok(actions.includes(action), `expected audit record for ${action}`);
     }
+
+    const requestRecord = await controlDb.execute({
+      sql: `INSERT INTO subscription_change_requests
+        (company_id, requested_by_user_id, requested_seats, requested_billing_cycle)
+        VALUES (?, ?, ?, ?)`,
+      args: [1, 9, 7, 'monthly']
+    });
+    const requestInvoice = await fetch(`${baseUrl}/companies/1/billing-requests/${requestRecord.lastInsertRowid}/invoice`, {
+      method: 'POST', headers
+    });
+    assert.equal(requestInvoice.status, 201, await requestInvoice.clone().text());
+    assert.equal((await requestInvoice.json()).status, 'open');
   } finally {
     await new Promise(resolve => server.close(resolve));
     await controlDb.close();

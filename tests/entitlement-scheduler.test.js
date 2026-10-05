@@ -57,7 +57,7 @@ test('daily entitlement maintenance is idempotent and does not schedule tenant p
     assert.equal(first.subscriptionsPastDue, 1);
     assert.equal(second.remindersSent, 0);
     assert.equal(deliveries.length, 1);
-    assert.match(deliveries[0].text, /No data retention or backup is guaranteed/);
+    assert.match(deliveries[0].text, /Automatic workspace deletion is disabled/);
 
     const deletionDates = await client.execute({
       sql: 'SELECT id, delete_after FROM companies WHERE id IN (?, ?, ?) ORDER BY id',
