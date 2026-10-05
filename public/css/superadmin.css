@@ -135,6 +135,11 @@ td { padding: 16px 18px; border-top: 1px solid var(--line); color: #d7e0eb; font
 .record-row small { margin-top: 5px; color: #91a0b4; }
 .record-row > span { flex: 0 0 auto; color: #91a0b4; text-align: right; }
 .record-row .button { min-height: 34px; }
+.record-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.record-actions a { display: inline-flex; align-items: center; text-decoration: none; }
+.restore-candidate-section, .restore-test-section { margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--line); }
+.restore-candidate-section h4, .restore-test-section h4 { margin: 0 0 8px; color: #d7e0eb; font-size: 12px; }
+.restore-candidate-section .footnote { margin: 0 0 8px; line-height: 1.5; }
 .billing-form { display: grid; grid-template-columns: 1fr 2fr auto; align-items: end; gap: 10px; margin-bottom: 16px; }
 .billing-form label { min-width: 0; }
 .billing-form button { align-self: end; }
@@ -190,4 +195,5 @@ td { padding: 16px 18px; border-top: 1px solid var(--line); color: #d7e0eb; font
   .detail-wide > .section-heading { margin: -15px -15px 12px; }
   .record-row { align-items: flex-start; flex-direction: column; }
   .record-row > span { text-align: left; }
+  .record-actions { justify-content: flex-start; }
 }

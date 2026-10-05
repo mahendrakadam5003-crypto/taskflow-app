@@ -3175,7 +3175,11 @@ async function renderAdmin() {
     wrap.innerHTML = `
       <div class="admin-block">
         <h3>Project data import / export</h3>
-        <p class="hint">Import Asana project JSON files; optionally choose the exported Run folder or attachments folder to copy downloaded files onto their tasks. TaskFlow backup includes projects, tasks, comments, task history, and check-ins, but not accounts, reimbursements, or attendance. Project text may contain secrets; store backups securely.</p>
+        <p class="hint">Import Asana project JSON files; optionally choose the exported Run folder or attachments folder to copy downloaded files onto their tasks. The project archive includes projects, tasks, comments, task history, and check-ins, but not accounts, reimbursements, or attendance. Project text may contain secrets; store backups securely.</p>
+        <div class="admin-form-row">
+          <select id="my-data-export-format" aria-label="Download my data format"><option value="json">JSON</option><option value="csv">CSV</option></select>
+          <button class="btn btn-primary" id="download-my-data" type="button">Download my data</button>
+        </div>
         <div class="admin-form-row">
           <input id="asana-project-import-files" type="file" accept=".json,application/json" multiple aria-label="Choose Asana project JSON files">
           <input id="asana-project-import-folder" type="file" webkitdirectory directory multiple aria-label="Choose Asana export or attachments folder">
@@ -3671,6 +3675,33 @@ async function renderAdmin() {
         if (dataToolsStatus) dataToolsStatus.textContent = 'Import stopped because of an error.';
       } finally {
         importProjectsButton.disabled = false;
+      }
+    };
+
+    const downloadMyDataButton = $('#download-my-data');
+    if (downloadMyDataButton) downloadMyDataButton.onclick = async () => {
+      const format = $('#my-data-export-format')?.value === 'csv' ? 'csv' : 'json';
+      downloadMyDataButton.disabled = true;
+      setDataToolsProgress(0, `Preparing ${format.toUpperCase()} task-data export...`, true);
+      try {
+        const response = await fetch(`/api/admin/data-export?format=${format}`, { credentials: 'same-origin' });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || `Export failed (${response.status}).`);
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `taskflow-my-data-${todayISO()}.${format}`;
+        link.click();
+        URL.revokeObjectURL(url);
+        finishDataToolsProgress();
+        dataToolsStatus.textContent = `${format.toUpperCase()} task-data export downloaded.`;
+      } catch (error) {
+        dataToolsStatus.textContent = error.message;
+      } finally {
+        downloadMyDataButton.disabled = false;
       }
     };
 

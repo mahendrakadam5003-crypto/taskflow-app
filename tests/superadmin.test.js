@@ -169,7 +169,7 @@ test('startup bootstrap refuses to overwrite a different super-admin username', 
   assert.equal(rolledBack, true);
 });
 
-async function createApp({ provisionCompany, tenantDatabase, backupDirectory } = {}) {
+async function createApp({ provisionCompany, tenantDatabase, backupDirectory, backupManager } = {}) {
   const controlDb = createClient({ url: 'file::memory:' });
   await migrateControlDatabase(controlDb);
   const passwordHash = await bcrypt.hash('Superadmin-Test-Password-2026!', 4);
@@ -200,7 +200,8 @@ async function createApp({ provisionCompany, tenantDatabase, backupDirectory } =
     secureCookies: false,
     provisionCompany,
     tenantDatabase,
-    backupDirectory
+    backupDirectory,
+    backupManager
   }));
   app.get(['/superadmin', '/superadmin.html'], createSuperAdminPageHandler(path.join(__dirname, 'missing-superadmin.html')));
   app.get('/support-state', (req, res) => res.json({
@@ -395,6 +396,93 @@ test('super-admin can update company status and plan without changing tenant cre
   }
 });
 
+test('cancelling a company schedules deletion in 30 days and reactivation clears the deadline', async () => {
+  const { controlDb, server, baseUrl } = await createApp();
+  try {
+    const login = await fetch(`${baseUrl}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'test owner', password: 'Superadmin-Test-Password-2026!' })
+    });
+    const headers = { Cookie: login.headers.get('set-cookie').split(';', 1)[0], 'Content-Type': 'application/json' };
+    const cancel = await fetch(`${baseUrl}/companies/1`, {
+      method: 'PUT', headers, body: JSON.stringify({ status: 'cancelled', planId: 2 })
+    });
+    assert.equal(cancel.status, 200, await cancel.clone().text());
+    const cancelledCompany = await controlDb.execute({ sql: 'SELECT status, delete_after FROM companies WHERE id = ?', args: [1] });
+    assert.equal(cancelledCompany.rows[0].status, 'cancelled');
+    const remaining = new Date(cancelledCompany.rows[0].delete_after).getTime() - Date.now();
+    assert.ok(remaining <= 30 * 24 * 60 * 60 * 1000);
+    assert.ok(remaining > 29 * 24 * 60 * 60 * 1000);
+
+    const reactivate = await fetch(`${baseUrl}/companies/1`, {
+      method: 'PUT', headers, body: JSON.stringify({ status: 'active', planId: 2 })
+    });
+    assert.equal(reactivate.status, 200, await reactivate.clone().text());
+    const activeCompany = await controlDb.execute({ sql: 'SELECT status, delete_after FROM companies WHERE id = ?', args: [1] });
+    assert.equal(activeCompany.rows[0].status, 'active');
+    assert.equal(activeCompany.rows[0].delete_after, null);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await controlDb.close();
+  }
+});
+
+test('super-admin backup download and restore staging actions require authentication', async () => {
+  const calls = [];
+  const backupManager = {
+    async getBackupArchive(companyId, backupId) {
+      calls.push(['download', companyId, backupId]);
+      return { buffer: Buffer.from(JSON.stringify({ format: 'taskflow-company-backup' })) };
+    },
+    async createRestoreStage(companyId, backupId, adminId) {
+      calls.push(['stage', companyId, backupId, adminId]);
+      return { id: 12, status: 'ready', rowCounts: { users: 1 } };
+    },
+    async activateRestore(companyId, restoreId, adminId) {
+      calls.push(['activate', companyId, restoreId, adminId]);
+      return { companyId, stagingId: restoreId, databaseName: 'restore-one' };
+    },
+    async revertRestore(companyId, restoreId, adminId) {
+      calls.push(['revert', companyId, restoreId, adminId]);
+      return { companyId, stagingId: restoreId, databaseName: 'example' };
+    },
+    async discardRestore(companyId, restoreId, adminId) {
+      calls.push(['discard', companyId, restoreId, adminId]);
+      return { companyId, stagingId: restoreId };
+    }
+  };
+  const { controlDb, server, baseUrl } = await createApp({ backupManager });
+  try {
+    for (const request of [
+      fetch(`${baseUrl}/companies/1/backups/2/download`),
+      fetch(`${baseUrl}/companies/1/backups/2/restore`, { method: 'POST' }),
+      fetch(`${baseUrl}/companies/1/restores/12/activate`, { method: 'POST' }),
+      fetch(`${baseUrl}/companies/1/restores/12/revert`, { method: 'POST' }),
+      fetch(`${baseUrl}/companies/1/restores/12`, { method: 'DELETE' })
+    ]) assert.equal((await request).status, 401);
+
+    const login = await fetch(`${baseUrl}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'test owner', password: 'Superadmin-Test-Password-2026!' })
+    });
+    const headers = { Cookie: login.headers.get('set-cookie').split(';', 1)[0], 'Content-Type': 'application/json' };
+    const download = await fetch(`${baseUrl}/companies/1/backups/2/download`, { headers });
+    assert.equal(download.status, 200);
+    assert.match(download.headers.get('content-disposition'), /attachment/);
+    assert.equal((await download.json()).format, 'taskflow-company-backup');
+    assert.equal((await fetch(`${baseUrl}/companies/1/backups/2/restore`, { method: 'POST', headers })).status, 201);
+    assert.equal((await fetch(`${baseUrl}/companies/1/restores/12/activate`, { method: 'POST', headers })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/companies/1/restores/12/revert`, { method: 'POST', headers })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/companies/1/restores/12`, { method: 'DELETE', headers })).status, 200);
+    assert.deepEqual(calls.map(call => call[0]), ['download', 'stage', 'activate', 'revert', 'discard']);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await controlDb.close();
+  }
+});
+
 test('super-admin detail, plans, billing, reset, backup, support mode, and company route guard work together', async () => {
   const backupDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'taskflow-backups-'));
   const tenantAdmin = { id: 9, name: 'Tenant Admin', username: 'tenant-admin', token_version: 4 };
@@ -507,7 +595,10 @@ test('super-admin detail, plans, billing, reset, backup, support mode, and compa
     assert.equal(backup.status, 201, await backup.clone().text());
     const backupDetails = await backup.json();
     assert.equal(backupDetails.status, 'complete');
-    assert.equal(backupDetails.type, 'tenant-json-v1');
+    assert.equal(backupDetails.type, 'tenant-json-v2');
+    const downloadedBackup = await fetch(`${baseUrl}/companies/1/backups/${backupDetails.id}/download`, { headers: { Cookie: cookie } });
+    assert.equal(downloadedBackup.status, 200);
+    assert.equal((await downloadedBackup.json()).format, 'taskflow-company-backup');
     const backupFiles = await fs.readdir(backupDirectory);
     assert.equal(backupFiles.length, 1);
     const backupPayload = JSON.parse(await fs.readFile(path.join(backupDirectory, backupFiles[0]), 'utf8'));

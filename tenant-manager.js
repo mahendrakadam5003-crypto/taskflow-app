@@ -66,15 +66,16 @@ function createTenantManager({
 
     const controlDatabase = await getControlDatabase();
     const companyResult = await controlDatabase.execute({
-      sql: `SELECT code, tenant_db_url, tenant_db_token_encrypted
-        FROM companies WHERE id = ? AND status IN ('trial', 'active', 'suspended')`,
+      sql: `SELECT code, tenant_db_name, tenant_db_url, tenant_db_token_encrypted
+        FROM companies WHERE id = ? AND status IN ('trial', 'active', 'suspended', 'cancelled')`,
       args: [companyId]
     });
     const company = companyResult.rows?.[0];
     if (!company) throw new Error(`No tenant database is registered for company ID ${companyId}.`);
 
     if (environment.USE_LOCAL_DB === '1') {
-      return clientFactory({ url: localTenantDatabaseUrl(company.code, localTenantRoot) });
+      const databaseName = company.tenant_db_name || company.code;
+      return clientFactory({ url: localTenantDatabaseUrl(databaseName, localTenantRoot) });
     }
     const databaseUrl = String(company.tenant_db_url || '').trim();
     if (!/^libsql:\/\//i.test(databaseUrl) && !/^https:\/\//i.test(databaseUrl)) {
@@ -104,6 +105,16 @@ function createTenantManager({
       });
     }
     return tenantClients.get(tenantId);
+  }
+
+  async function closeTenant(companyId) {
+    const tenantId = normalizeTenantId(companyId);
+    const opening = tenantClients.get(tenantId);
+    if (!opening) return false;
+    tenantClients.delete(tenantId);
+    const client = await opening;
+    if (client !== legacyClient) await client.close?.();
+    return true;
   }
 
   function getCurrentTenantId() {
@@ -207,7 +218,7 @@ function createTenantManager({
   }
 
   const ready = getTenantClient(LEGACY_TENANT_ID);
-  return { closeAll, db, getCurrentTenantId, getTenantClient, ready, runForEachTenant, runWithTenant };
+  return { closeAll, closeTenant, db, getCurrentTenantId, getTenantClient, ready, runForEachTenant, runWithTenant };
 }
 
 module.exports = {

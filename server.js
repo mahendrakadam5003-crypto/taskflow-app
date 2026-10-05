@@ -16,6 +16,7 @@ const { ControlDatabaseSessionStore } = require('./control-session-store');
 const { getControlDatabase } = require('./control-db');
 const { hasControlDatabaseConfiguration } = require('./tenant-manager');
 const { collectUsageSnapshots } = require('./usage-snapshots');
+const { createBackupManager } = require('./backup-manager');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -43,6 +44,43 @@ function verifyUnsafeRequestOrigin(req, res, next) {
 }
 
 const db = require('./db');
+const backupManager = createBackupManager({ tenantDatabase: db });
+let backupMaintenanceRunning = false;
+
+async function runBackupMaintenance() {
+  if (backupMaintenanceRunning) return;
+  backupMaintenanceRunning = true;
+  try {
+    if (hasControlDatabaseConfiguration()) {
+      if (process.env.AUTO_DAILY_BACKUPS === 'true') {
+        try {
+        const dailyResults = await backupManager.runDailyBackups();
+        console.log(`Daily Telegram backup pass finished for ${dailyResults.length} company workspace(s).`);
+        } catch (error) {
+          console.error('Daily Telegram backup pass failed:', error.message);
+        }
+      }
+      try {
+        const restoreTestResults = await backupManager.runMonthlyRestoreTests();
+        if (restoreTestResults.length) console.log(`Monthly backup restore tests finished for ${restoreTestResults.length} company workspace(s).`);
+      } catch (error) {
+        console.error('Monthly backup restore test pass failed:', error.message);
+      }
+    }
+    if (hasControlDatabaseConfiguration()) {
+      try {
+        const deletionResults = await backupManager.processDueCompanyDeletions();
+        if (deletionResults.length) console.log(`Company retirement pass finished for ${deletionResults.length} company workspace(s).`);
+      } catch (error) {
+        console.error('Company retirement pass failed:', error.message);
+      }
+    }
+  } catch (error) {
+    console.error('Scheduled backup maintenance failed:', error.message);
+  } finally {
+    backupMaintenanceRunning = false;
+  }
+}
 
 async function cleanupExpiredSessions() {
   await db.ready;
@@ -408,6 +446,8 @@ const startupPromise = (async () => {
     setInterval(() => collectUsageSnapshots()
       .then(count => console.log(`Collected usage snapshots for ${count} registered company workspace(s).`))
       .catch(err => console.error('Usage snapshot collection failed:', err.message)), 24 * 60 * 60 * 1000);
+    runBackupMaintenance();
+    setInterval(runBackupMaintenance, 24 * 60 * 60 * 1000);
   });
 })().catch(error => {
   console.error('Server startup failed:', error);

@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 6;
+const CURRENT_SCHEMA_VERSION = 7;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -156,6 +156,50 @@ const CONTROL_MIGRATIONS = [{
     'ALTER TABLE companies ADD COLUMN last_login_at TEXT',
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [6] }
   ]
+}, {
+  version: 7,
+  statements: [
+    'ALTER TABLE companies ADD COLUMN tenant_db_name TEXT',
+    'ALTER TABLE companies ADD COLUMN delete_after TEXT',
+    'ALTER TABLE backups ADD COLUMN backup_key TEXT',
+    "ALTER TABLE backups ADD COLUMN backup_kind TEXT NOT NULL DEFAULT 'manual'",
+    "ALTER TABLE backups ADD COLUMN row_counts_json TEXT NOT NULL DEFAULT '{}'",
+    "ALTER TABLE backups ADD COLUMN telegram_message_ids_json TEXT NOT NULL DEFAULT '[]'",
+    'ALTER TABLE backups ADD COLUMN telegram_channel_id TEXT',
+    'ALTER TABLE backups ADD COLUMN checksum TEXT',
+    "ALTER TABLE backups ADD COLUMN file_references_json TEXT NOT NULL DEFAULT '[]'",
+    `CREATE TABLE IF NOT EXISTS company_restore_staging (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      backup_id INTEGER NOT NULL REFERENCES backups(id) ON DELETE CASCADE,
+      tenant_db_name TEXT,
+      tenant_db_url TEXT NOT NULL,
+      tenant_db_token_encrypted TEXT NOT NULL,
+      row_counts_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'activated', 'reverted', 'discarded', 'failed')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      activated_at TEXT,
+      reverted_at TEXT,
+      previous_tenant_db_name TEXT,
+      previous_tenant_db_url TEXT,
+      previous_tenant_db_token_encrypted TEXT
+    )`,
+    `CREATE TABLE IF NOT EXISTS backup_tests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      backup_id INTEGER NOT NULL REFERENCES backups(id) ON DELETE CASCADE,
+      test_month TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('passed', 'failed')),
+      expected_row_counts_json TEXT NOT NULL,
+      actual_row_counts_json TEXT NOT NULL DEFAULT '{}',
+      details TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(company_id, test_month)
+    )`,
+    'CREATE INDEX IF NOT EXISTS backups_company_key_idx ON backups(company_id, backup_key, backup_kind)',
+    'CREATE INDEX IF NOT EXISTS companies_delete_after_idx ON companies(status, delete_after)',
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [7] }
+  ]
 }];
 
 function getControlDatabaseConfig(environment = process.env) {
@@ -213,6 +257,32 @@ async function migrateControlDatabase(client) {
         }
       }
       await client.execute(migration.statements[3]);
+    } else if (migration.version === 7) {
+      for (const statement of migration.statements) {
+        const sql = typeof statement === 'string' ? statement : statement.sql;
+        const alterMatch = sql.match(/^ALTER TABLE (\w+) ADD COLUMN (\w+)/i);
+        if (alterMatch) {
+          const table = alterMatch[1];
+          const column = alterMatch[2];
+          const tableResult = await client.execute({
+            sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            args: [table]
+          });
+          if (!tableResult.rows?.length) continue;
+          const columns = await client.execute(`PRAGMA table_info(${table})`);
+          if (!columns.rows.some(row => row.name === column)) await client.execute(statement);
+          continue;
+        }
+        const indexMatch = sql.match(/^CREATE INDEX IF NOT EXISTS \w+ ON (\w+)/i);
+        if (indexMatch) {
+          const tableResult = await client.execute({
+            sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            args: [indexMatch[1]]
+          });
+          if (!tableResult.rows?.length) continue;
+        }
+        await client.execute(statement);
+      }
     } else {
       await client.batch(migration.statements, 'write');
     }

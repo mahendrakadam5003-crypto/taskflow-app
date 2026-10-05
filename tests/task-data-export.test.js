@@ -18,7 +18,7 @@ const mockDb = {
       all: async () => {
         if (sql.includes('FROM projects ORDER BY name, id')) return [{ id: 10, name: 'Export project', created_by: 1, asana_gid: null, created_at: '2026-01-01' }];
         if (sql.includes('FROM project_members')) return [];
-        if (sql.includes('FROM tasks t LEFT JOIN users assignee')) return [{ id: 50, project_id: 10, title: 'Export task' }];
+        if (sql.includes('FROM tasks t LEFT JOIN users assignee')) return [{ id: 50, project_id: 10, title: '=1+1' }];
         if (sql.includes('FROM telegram_attachments WHERE task_id IN')) return [{ id: 7, file_id: 'telegram-file-reference', message_id: 8, original_name: 'evidence.pdf', mime_type: 'application/pdf', uploaded_by: 1, task_id: 50, created_at: '2026-01-01', deleted_at: null }];
         return [];
       },
@@ -83,4 +83,14 @@ test('admin project backup excludes PIN hashes and includes attachment reference
   assert.equal(Object.hasOwn(project, 'pin_hash'), false);
   assert.equal(backup.projects[0].tasks[0].attachments[0].original_name, 'evidence.pdf');
   assert.equal(backup.projects[0].tasks[0].attachments[0].file_id, 'telegram-file-reference');
+});
+
+test('admin project CSV export quotes fields and neutralizes spreadsheet formulas', async () => {
+  const response = await fetch(`${baseUrl}/api/admin/data-export?format=csv`, { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /text\/csv/);
+  const csv = await response.text();
+  assert.match(csv, /"project","task_id","title"/);
+  assert.match(csv, /"'\=1\+1"/);
+  assert.match(csv, /"evidence\.pdf"/);
 });

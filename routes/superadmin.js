@@ -1,13 +1,13 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const fs = require('node:fs/promises');
 const path = require('node:path');
 const bcrypt = require('bcryptjs');
 const express = require('express');
 const { rateLimit } = require('express-rate-limit');
 const { getControlDatabase } = require('../control-db');
 const { provisionCompany: defaultProvisionCompany, ProvisioningError } = require('../company-provisioning');
+const { createBackupManager } = require('../backup-manager');
 
 const COOKIE_NAME = 'taskflow.superadmin.sid';
 const SESSION_DURATION_MS = 4 * 60 * 60 * 1000;
@@ -62,26 +62,6 @@ function createSuperAdminPageHandler(htmlPath) {
   };
 }
 
-async function collectTenantBackup(tenantDb, companyId, companyCode, backupDirectory) {
-  const tables = await tenantDb.runWithTenant(companyId, () => tenantDb.prepare(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-  ).all());
-  const contents = {};
-  await tenantDb.runWithTenant(companyId, async () => {
-    for (const row of tables) {
-      const tableName = String(row.name || '');
-      if (!/^[A-Za-z0-9_]+$/.test(tableName)) continue;
-      contents[tableName] = await tenantDb.prepare(`SELECT * FROM "${tableName}"`).all();
-    }
-  });
-  await fs.mkdir(backupDirectory, { recursive: true });
-  const backupName = `${companyCode}-${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID()}.json`;
-  const backupPath = path.join(backupDirectory, backupName);
-  const payload = JSON.stringify({ format: 'taskflow-tenant-json-v1', createdAt: new Date().toISOString(), companyCode, tables: contents });
-  await fs.writeFile(backupPath, payload, { flag: 'wx', mode: 0o600 });
-  return { location: path.relative(path.dirname(backupDirectory), backupPath), sizeBytes: Buffer.byteLength(payload) };
-}
-
 function digestSessionToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
@@ -120,7 +100,8 @@ function createSuperAdminRouter({
   secureCookies = process.env.RENDER === 'true',
   provisionCompany = defaultProvisionCompany,
   tenantDatabase,
-  backupDirectory = path.join(__dirname, '..', 'backups')
+  backupDirectory = path.join(__dirname, '..', 'backups'),
+  backupManager
 } = {}) {
   const router = express.Router();
   const loginLimiter = rateLimit({
@@ -135,6 +116,7 @@ function createSuperAdminRouter({
     Promise.resolve(callback(req, res, next)).catch(next);
   };
   const getTenantDatabase = () => tenantDatabase || require('../db');
+  const getBackupManager = () => backupManager || createBackupManager({ getDatabase, tenantDatabase, backupDirectory });
 
   async function getAuthenticatedAdmin(req) {
     const token = readSessionToken(req.get('Cookie'));
@@ -234,8 +216,9 @@ function createSuperAdminRouter({
     const [statusResult, companiesResult, plansResult] = await Promise.all([
       controlDb.execute(`SELECT status, COUNT(*) AS company_count
         FROM companies WHERE status <> 'deleted' GROUP BY status`),
-      controlDb.execute(`SELECT c.id, c.code, c.name, c.owner_name, c.owner_email, c.status, c.plan_id,
-          c.trial_ends_at, c.created_at, p.name AS plan_name, p.max_users, p.storage_limit_mb,
+        controlDb.execute(`SELECT c.id, c.code, c.name, c.owner_name, c.owner_email, c.status, c.plan_id,
+          c.trial_ends_at, c.created_at, c.last_login_at, c.delete_after, c.max_users_override, c.storage_limit_mb_override,
+          p.name AS plan_name, p.max_users, p.storage_limit_mb,
           u.user_count, u.db_bytes, u.files_bytes, u.taken_at AS usage_taken_at
         FROM companies c
         LEFT JOIN plans p ON p.id = c.plan_id
@@ -266,6 +249,7 @@ function createSuperAdminRouter({
       planId: row.plan_id == null ? null : Number(row.plan_id),
       usageTakenAt: row.usage_taken_at,
       lastLoginAt: row.last_login_at,
+      deleteAfter: row.delete_after,
       trialEndsAt: row.trial_ends_at,
       createdAt: row.created_at
     }));
@@ -332,8 +316,8 @@ function createSuperAdminRouter({
 
     const controlDb = await getDatabase();
     const companyResult = await controlDb.execute({
-      sql: `SELECT c.status, c.plan_id, c.max_users_override, c.storage_limit_mb_override,
-          c.notes, p.name AS plan_name
+        sql: `SELECT c.status, c.plan_id, c.max_users_override, c.storage_limit_mb_override,
+          c.notes, c.delete_after, p.name AS plan_name
         FROM companies c LEFT JOIN plans p ON p.id = c.plan_id
         WHERE c.id = ? AND c.status <> 'deleted'`,
       args: [companyId]
@@ -363,6 +347,9 @@ function createSuperAdminRouter({
       || (hasNotes && (typeof notes !== 'string' || notes.length > 4000))) {
       return res.status(400).json({ error: 'Enter valid non-negative limit overrides and notes.' });
     }
+    const deleteAfter = body.status === 'cancelled'
+      ? company.delete_after || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      : null;
 
     const changes = [];
     if (company.status !== body.status) changes.push(`status ${company.status} -> ${body.status}`);
@@ -373,18 +360,20 @@ function createSuperAdminRouter({
     if (currentMaxUsersOverride !== maxUsersOverride) changes.push('user limit override updated');
     if (currentStorageOverride !== storageLimitMbOverride) changes.push('storage limit override updated');
     if (notes !== company.notes) changes.push('company notes updated');
+    if (deleteAfter !== company.delete_after) changes.push(body.status === 'cancelled'
+      ? 'permanent deletion scheduled after 30 days' : 'permanent deletion schedule cleared');
     if (!changes.length) return res.json({ companyId, status: body.status, planId });
 
     const results = await controlDb.batch([
       {
         sql: `UPDATE companies SET status = ?, plan_id = ?, max_users_override = ?,
-            storage_limit_mb_override = ?, notes = ?
+            storage_limit_mb_override = ?, notes = ?, delete_after = ?
           WHERE id = ? AND status <> 'deleted'
             AND (status <> ? OR plan_id IS NOT ? OR max_users_override IS NOT ?
-              OR storage_limit_mb_override IS NOT ? OR notes <> ?)
+              OR storage_limit_mb_override IS NOT ? OR notes <> ? OR delete_after IS NOT ?)
             AND (? IS NULL OR EXISTS (SELECT 1 FROM plans WHERE id = ? AND is_active = 1))`,
-        args: [body.status, planId, maxUsersOverride, storageLimitMbOverride, notes,
-          companyId, body.status, planId, maxUsersOverride, storageLimitMbOverride, notes, planId, planId]
+        args: [body.status, planId, maxUsersOverride, storageLimitMbOverride, notes, deleteAfter,
+          companyId, body.status, planId, maxUsersOverride, storageLimitMbOverride, notes, deleteAfter, planId, planId]
       },
       {
         sql: `INSERT INTO super_admin_audit (super_admin_id, company_id, action, details)
@@ -416,10 +405,10 @@ function createSuperAdminRouter({
     const companyId = Number(req.params.companyId);
     if (!Number.isSafeInteger(companyId) || companyId < 1) return res.status(400).json({ error: 'Choose a valid company.' });
     const controlDb = await getDatabase();
-    const [companyResult, usageResult, backupsResult, billingResult] = await Promise.all([
+    const [companyResult, usageResult, backupsResult, billingResult, restoreResult, restoreTestsResult] = await Promise.all([
       controlDb.execute({
         sql: `SELECT c.id, c.code, c.name, c.owner_name, c.owner_email, c.owner_phone, c.status,
-            c.plan_id, c.trial_ends_at, c.last_login_at, c.max_users_override, c.storage_limit_mb_override,
+            c.plan_id, c.trial_ends_at, c.last_login_at, c.delete_after, c.max_users_override, c.storage_limit_mb_override,
             c.notes, c.created_at, p.name AS plan_name, p.max_users, p.storage_limit_mb
           FROM companies c LEFT JOIN plans p ON p.id = c.plan_id
           WHERE c.id = ? AND c.status <> 'deleted'`,
@@ -431,7 +420,9 @@ function createSuperAdminRouter({
         args: [companyId]
       }),
       controlDb.execute({
-        sql: 'SELECT id, type, location, size_bytes, created_at, status FROM backups WHERE company_id = ? ORDER BY created_at DESC, id DESC LIMIT 100',
+        sql: `SELECT id, type, location, size_bytes, created_at, status, backup_key, backup_kind,
+            row_counts_json, telegram_message_ids_json FROM backups
+          WHERE company_id = ? ORDER BY created_at DESC, id DESC LIMIT 100`,
         args: [companyId]
       }),
       controlDb.execute({
@@ -439,6 +430,17 @@ function createSuperAdminRouter({
             a.name AS marked_by_name FROM billing_notes b
           LEFT JOIN super_admins a ON a.id = b.marked_by
           WHERE b.company_id = ? ORDER BY b.id DESC LIMIT 100`,
+        args: [companyId]
+      }),
+      controlDb.execute({
+        sql: `SELECT id, backup_id, tenant_db_name, previous_tenant_db_name, row_counts_json,
+          status, created_at, activated_at, reverted_at
+          FROM company_restore_staging WHERE source_company_id = ? ORDER BY id DESC LIMIT 20`,
+        args: [companyId]
+      }),
+      controlDb.execute({
+        sql: `SELECT id, backup_id, test_month, status, details, created_at
+          FROM backup_tests WHERE company_id = ? ORDER BY test_month DESC LIMIT 12`,
         args: [companyId]
       })
     ]);
@@ -454,7 +456,8 @@ function createSuperAdminRouter({
         storageLimitMb: row.storage_limit_mb == null ? null : Number(row.storage_limit_mb),
         maxUsersOverride: row.max_users_override == null ? null : Number(row.max_users_override),
         storageLimitMbOverride: row.storage_limit_mb_override == null ? null : Number(row.storage_limit_mb_override),
-        trialEndsAt: row.trial_ends_at, lastLoginAt: row.last_login_at, notes: row.notes, createdAt: row.created_at
+        trialEndsAt: row.trial_ends_at, lastLoginAt: row.last_login_at, deleteAfter: row.delete_after,
+        notes: row.notes, createdAt: row.created_at
       },
       usageHistory: usageResult.rows.map(snapshot => ({
         takenAt: snapshot.taken_at, userCount: Number(snapshot.user_count),
@@ -462,7 +465,20 @@ function createSuperAdminRouter({
       })).reverse(),
       backups: backupsResult.rows.map(backup => ({
         id: Number(backup.id), type: backup.type, location: backup.location,
-        sizeBytes: Number(backup.size_bytes), createdAt: backup.created_at, status: backup.status
+        sizeBytes: Number(backup.size_bytes), createdAt: backup.created_at, status: backup.status,
+        key: backup.backup_key, kind: backup.backup_kind,
+        rowCounts: (() => { try { return JSON.parse(backup.row_counts_json || '{}'); } catch (error) { return {}; } })(),
+        telegramPartCount: (() => { try { return JSON.parse(backup.telegram_message_ids_json || '[]').length; } catch (error) { return 0; } })()
+      })),
+      restoreCandidates: restoreResult.rows.map(restore => ({
+        id: Number(restore.id), backupId: Number(restore.backup_id), databaseName: restore.tenant_db_name,
+        previousDatabaseName: restore.previous_tenant_db_name,
+        rowCounts: (() => { try { return JSON.parse(restore.row_counts_json || '{}'); } catch (error) { return {}; } })(),
+        status: restore.status, createdAt: restore.created_at, activatedAt: restore.activated_at, revertedAt: restore.reverted_at
+      })),
+      restoreTests: restoreTestsResult.rows.map(result => ({
+        id: Number(result.id), backupId: Number(result.backup_id), month: result.test_month,
+        status: result.status, details: result.details, createdAt: result.created_at
       })),
       billingNotes: billingResult.rows.map(note => ({
         id: Number(note.id), amountText: note.amount_text, note: note.note,
@@ -603,26 +619,73 @@ function createSuperAdminRouter({
     if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
     const companyId = Number(req.params.companyId);
     if (!Number.isSafeInteger(companyId) || companyId < 1) return res.status(400).json({ error: 'Choose a valid company.' });
-    const controlDb = await getDatabase();
-    const companyResult = await controlDb.execute({
-      sql: "SELECT id, code FROM companies WHERE id = ? AND status <> 'deleted'",
-      args: [companyId]
-    });
-    const company = companyResult.rows?.[0];
-    if (!company) return res.status(404).json({ error: 'Company not found.' });
-    try {
-      const backup = await collectTenantBackup(getTenantDatabase(), companyId, company.code, backupDirectory);
-      const result = await controlDb.execute({
-        sql: 'INSERT INTO backups (company_id, type, location, size_bytes, status) VALUES (?, ?, ?, ?, ?)',
-        args: [companyId, 'tenant-json-v1', backup.location, backup.sizeBytes, 'complete']
-      });
-      const backupId = Number(result.lastInsertRowid);
-      await writeAudit(controlDb, admin, companyId, 'Company backup created', `Created backup ${backupId} (${backup.sizeBytes} bytes).`);
-      return res.status(201).json({ id: backupId, ...backup, type: 'tenant-json-v1', status: 'complete' });
-    } catch (error) {
-      await writeAudit(controlDb, admin, companyId, 'Company backup failed', String(error.message || 'Backup failed'));
-      throw error;
+    const backup = await getBackupManager().createCompanyBackup(companyId, { kind: 'manual', adminId: admin.id });
+    res.set('Cache-Control', 'no-store');
+    return res.status(201).json(backup);
+  }));
+
+  router.get('/companies/:companyId/backups/:backupId/download', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    const backupId = Number(req.params.backupId);
+    if (!Number.isSafeInteger(companyId) || companyId < 1 || !Number.isSafeInteger(backupId) || backupId < 1) {
+      return res.status(400).json({ error: 'Choose a valid company backup.' });
     }
+    const result = await getBackupManager().getBackupArchive(companyId, backupId);
+    res.set('Cache-Control', 'no-store');
+    res.set('Content-Type', 'application/json; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="taskflow-company-backup-${companyId}-${backupId}.json"`);
+    return res.send(result.buffer);
+  }));
+
+  router.post('/companies/:companyId/backups/:backupId/restore', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    const backupId = Number(req.params.backupId);
+    if (!Number.isSafeInteger(companyId) || companyId < 1 || !Number.isSafeInteger(backupId) || backupId < 1) {
+      return res.status(400).json({ error: 'Choose a valid company backup.' });
+    }
+    const staged = await getBackupManager().createRestoreStage(companyId, backupId, admin.id);
+    res.set('Cache-Control', 'no-store');
+    return res.status(201).json(staged);
+  }));
+
+  router.post('/companies/:companyId/restores/:restoreId/activate', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    const restoreId = Number(req.params.restoreId);
+    if (!Number.isSafeInteger(companyId) || companyId < 1 || !Number.isSafeInteger(restoreId) || restoreId < 1) {
+      return res.status(400).json({ error: 'Choose a valid restore candidate.' });
+    }
+    const activated = await getBackupManager().activateRestore(companyId, restoreId, admin.id);
+    return res.json(activated);
+  }));
+
+  router.post('/companies/:companyId/restores/:restoreId/revert', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    const restoreId = Number(req.params.restoreId);
+    if (!Number.isSafeInteger(companyId) || companyId < 1 || !Number.isSafeInteger(restoreId) || restoreId < 1) {
+      return res.status(400).json({ error: 'Choose a valid restore candidate.' });
+    }
+    const reverted = await getBackupManager().revertRestore(companyId, restoreId, admin.id);
+    return res.json(reverted);
+  }));
+
+  router.delete('/companies/:companyId/restores/:restoreId', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    const restoreId = Number(req.params.restoreId);
+    if (!Number.isSafeInteger(companyId) || companyId < 1 || !Number.isSafeInteger(restoreId) || restoreId < 1) {
+      return res.status(400).json({ error: 'Choose a valid restore candidate.' });
+    }
+    const discarded = await getBackupManager().discardRestore(companyId, restoreId, admin.id);
+    return res.json(discarded);
   }));
 
   router.post('/companies/:companyId/support-mode', handle(async (req, res) => {

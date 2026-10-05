@@ -14,6 +14,7 @@ const { uploadToTelegram, deleteTelegramMessage } = require('../telegram-storage
 const { parseMoneyAmount, parsePaymentAmounts } = require('../lib/money');
 const { businessDate } = require('../lib/business-date');
 const { getPlanUsage, reserveUpload, releaseUpload, requireFeature, StorageLimitError } = require('../limits');
+const { csvValue } = require('../csv');
 
 const router = express.Router();
 wrapAsyncRoutes(router);
@@ -586,6 +587,8 @@ router.get('/project-action-access/me', async (req, res) => {
 
 router.get('/admin/data-export', requireFeature('export'), requireAdmin, async (req, res) => {
   try {
+    const format = String(req.query.format || 'json').toLowerCase();
+    if (!['json', 'csv'].includes(format)) return res.status(400).json({ error: 'Choose JSON or CSV export format.' });
     const projects = await db.prepare('SELECT id, name, created_by, asana_gid, created_at FROM projects ORDER BY name, id').all();
     const exportedProjects = [];
     for (const project of projects || []) {
@@ -629,6 +632,29 @@ router.get('/admin/data-export', requireFeature('export'), requireAdmin, async (
       exported_at: new Date().toISOString(),
       projects: exportedProjects
     };
+    if (format === 'csv') {
+      const columns = [
+        'project', 'task_id', 'title', 'description', 'status', 'assignee', 'due_date',
+        'created_at', 'completed_at', 'invoice_type', 'invoice_number', 'invoice_date',
+        'customer_name', 'total_amount', 'amount_received', 'attachment_references'
+      ];
+      const rows = [columns.map(csvValue).join(',')];
+      for (const item of exportedProjects) {
+        for (const taskEntry of item.tasks) {
+          const task = taskEntry.task;
+          rows.push([
+            item.project.name, task.id, task.title, task.description, task.status,
+            task.assignee_name, task.due_date, task.created_at, task.completed_at,
+            task.invoice_type, task.invoice_number, task.invoice_date, task.customer_name,
+            task.total_amount, task.amount_received,
+            taskEntry.attachments.map(attachment => attachment.original_name || attachment.file_id).join('; ')
+          ].map(csvValue).join(','));
+        }
+      }
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="taskflow-projects-${new Date().toISOString().slice(0, 10)}.csv"`);
+      return res.send(rows.join('\r\n'));
+    }
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="taskflow-projects-${new Date().toISOString().slice(0, 10)}.json"`);
     res.json(backup);

@@ -230,8 +230,22 @@ function renderUsageHistory(history) {
 
 function renderCompanyRecords(detail) {
   document.getElementById('backup-list').innerHTML = detail.backups.length
-    ? detail.backups.map(backup => `<div class="record-row"><div><strong>${escapeHtml(backup.type)}</strong><small>${escapeHtml(backup.location)} · ${escapeHtml(formatBytes(backup.sizeBytes))}</small></div><span>${escapeHtml(formatDate(backup.createdAt))} · ${escapeHtml(backup.status)}</span></div>`).join('')
+    ? detail.backups.map(backup => `<div class="record-row"><div><strong>${escapeHtml(backup.kind || backup.type)} · ${escapeHtml(backup.key || '')}</strong><small>${escapeHtml(backup.location)} · ${escapeHtml(formatBytes(backup.sizeBytes))} · ${Object.keys(backup.rowCounts || {}).length} tables</small></div><span>${escapeHtml(formatDate(backup.createdAt))} · ${escapeHtml(backup.status)}</span><div class="record-actions">${backup.status === 'complete'
+      ? `<a class="button button-quiet" href="/api/superadmin/companies/${detail.company.id}/backups/${backup.id}/download" download>Download</a><button class="button button-quiet" type="button" data-backup-restore="${backup.id}">Restore to new DB</button>`
+      : ''}</div></div>`).join('')
     : '<p class="muted">No backups have been recorded.</p>';
+  document.getElementById('restore-candidate-list').innerHTML = detail.restoreCandidates.length
+    ? detail.restoreCandidates.map(candidate => {
+      const totalRows = Object.values(candidate.rowCounts || {}).reduce((total, count) => total + Number(count || 0), 0);
+      return `<div class="record-row"><div><strong>${escapeHtml(candidate.databaseName)} · ${escapeHtml(candidate.status)}</strong><small>Backup #${candidate.backupId} · ${Object.keys(candidate.rowCounts || {}).length} tables · ${totalRows.toLocaleString()} rows · staged ${escapeHtml(formatDate(candidate.createdAt))}${candidate.previousDatabaseName ? ` · previous DB ${escapeHtml(candidate.previousDatabaseName)}` : ''}</small></div>${candidate.status === 'ready'
+        ? `<div class="record-actions"><button class="button button-primary" type="button" data-restore-activate="${candidate.id}">Switch company to this DB</button><button class="button button-quiet" type="button" data-restore-discard="${candidate.id}">Discard</button></div>`
+        : candidate.status === 'activated' ? `<div class="record-actions"><button class="button button-quiet" type="button" data-restore-revert="${candidate.id}">Revert to previous DB</button></div>`
+        : candidate.activatedAt ? `<span>Switched ${escapeHtml(formatDate(candidate.activatedAt))}</span>` : ''}</div>`;
+    }).join('')
+    : '<p class="muted">No restore candidates. Restores are created separately and do not replace the live database until activated.</p>';
+  document.getElementById('restore-test-list').innerHTML = detail.restoreTests.length
+    ? detail.restoreTests.map(item => `<div class="record-row"><div><strong>${escapeHtml(item.month)} restore test · ${escapeHtml(item.status)}</strong><small>${escapeHtml(item.details)}</small></div><span>${escapeHtml(formatDate(item.createdAt))}</span></div>`).join('')
+    : '<p class="muted">No monthly restore tests recorded.</p>';
   document.getElementById('billing-list').innerHTML = detail.billingNotes.length
     ? detail.billingNotes.map(note => `<div class="record-row"><div><strong>${escapeHtml(note.amountText || 'Amount not specified')}</strong><small>${escapeHtml(note.note)}</small></div>${note.markedPaidAt
       ? `<span>Paid ${escapeHtml(formatDate(note.markedPaidAt))}</span>`
@@ -247,7 +261,8 @@ async function loadCompanyDetail(companyId) {
     activeCompanyDetail = detail;
     const company = detail.company;
     document.getElementById('company-detail-heading').textContent = company.name;
-    document.getElementById('company-detail-meta').textContent = `${company.code} · ${company.ownerEmail || 'No owner email'} · Trial ends ${formatDate(company.trialEndsAt)} · Last login ${formatDate(company.lastLoginAt)}`;
+    const deletionNotice = company.deleteAfter ? ` · Final deletion scheduled ${formatDate(company.deleteAfter)}` : '';
+    document.getElementById('company-detail-meta').textContent = `${company.code} · ${company.ownerEmail || 'No owner email'} · Trial ends ${formatDate(company.trialEndsAt)} · Last login ${formatDate(company.lastLoginAt)}${deletionNotice}`;
     const statusSelect = document.getElementById('detail-status');
     statusSelect.innerHTML = ['trial', 'active', 'suspended', 'cancelled'].map(status =>
       `<option value="${status}"${company.status === status ? ' selected' : ''}>${status[0].toUpperCase()}${status.slice(1)}</option>`).join('');
@@ -371,8 +386,10 @@ document.getElementById('company-detail-form').addEventListener('submit', async 
   if (!activeCompanyDetail) return;
   const company = activeCompanyDetail.company;
   const status = document.getElementById('detail-status').value;
-  if (['suspended', 'cancelled'].includes(status) && status !== company.status
-    && !window.confirm(`Change ${company.name} to ${status}?`)) return;
+  const confirmation = status === 'cancelled'
+    ? `Cancel ${company.name}? Sign-in stops immediately; a final backup and permanent database/file deletion are scheduled after 30 days.`
+    : `Change ${company.name} to ${status}?`;
+  if (['suspended', 'cancelled'].includes(status) && status !== company.status && !window.confirm(confirmation)) return;
   const parseLimit = value => value === '' ? null : Number(value);
   const form = event.currentTarget;
   const submit = form.querySelector('button[type="submit"]');
@@ -444,6 +461,59 @@ document.getElementById('company-backup-now').addEventListener('click', async ev
   try {
     await request(`companies/${activeCompanyDetail.company.id}/backups`, { method: 'POST' });
     await loadCompanyDetail(activeCompanyDetail.company.id);
+  } catch (error) {
+    const target = document.getElementById('company-detail-error');
+    target.textContent = error.message;
+    target.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('backup-list').addEventListener('click', async event => {
+  const button = event.target.closest('[data-backup-restore]');
+  if (!button || !activeCompanyDetail) return;
+  const company = activeCompanyDetail.company;
+  if (!window.confirm(`Create a restore candidate for ${company.name}? The live database will remain unchanged until you activate the candidate.`)) return;
+  button.disabled = true;
+  try {
+    const staged = await request(`companies/${company.id}/backups/${button.dataset.backupRestore}/restore`, { method: 'POST' });
+    managementMessage.textContent = `Restore candidate ${staged.databaseName} is ready. Review its table and row counts before switching.`;
+    managementMessage.classList.remove('hidden');
+    await loadCompanyDetail(company.id);
+  } catch (error) {
+    const target = document.getElementById('company-detail-error');
+    target.textContent = error.message;
+    target.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('restore-candidate-list').addEventListener('click', async event => {
+  const activateButton = event.target.closest('[data-restore-activate]');
+  const discardButton = event.target.closest('[data-restore-discard]');
+  const revertButton = event.target.closest('[data-restore-revert]');
+  if ((!activateButton && !discardButton && !revertButton) || !activeCompanyDetail) return;
+  const button = activateButton || discardButton || revertButton;
+  const company = activeCompanyDetail.company;
+  const restoreId = button.dataset.restoreActivate || button.dataset.restoreDiscard || button.dataset.restoreRevert;
+  const activate = Boolean(activateButton);
+  const revert = Boolean(revertButton);
+  const prompt = activate
+    ? `Switch ${company.name} to this restored database? A fresh backup of the current database will be created first.`
+    : revert
+      ? `Revert ${company.name} to the database that was active before this restore? A fresh backup of the current database will be created first.`
+      : 'Permanently delete this staged restore database?';
+  if (!window.confirm(prompt)) return;
+  button.disabled = true;
+  try {
+    await request(`companies/${company.id}/restores/${restoreId}${activate ? '/activate' : revert ? '/revert' : ''}`, {
+      method: activate || revert ? 'POST' : 'DELETE'
+    });
+    managementMessage.textContent = activate ? 'Company now uses the restored database.' : revert ? 'Company reverted to the previous database.' : 'Staged restore database discarded.';
+    managementMessage.classList.remove('hidden');
+    await Promise.all([loadOverview(), loadCompanyDetail(company.id)]);
   } catch (error) {
     const target = document.getElementById('company-detail-error');
     target.textContent = error.message;

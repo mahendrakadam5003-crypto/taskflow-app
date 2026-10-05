@@ -67,12 +67,14 @@ test('control database migration is versioned, repeatable, and seeds sample plan
     const tables = new Set(tablesResult.rows.map(row => row.name));
     const expectedColumns = {
       web_sessions: ['sid', 'data', 'user_id', 'company_id', 'expires_at'],
-      companies: ['id', 'code', 'name', 'owner_name', 'owner_email', 'owner_phone', 'status', 'plan_id', 'trial_ends_at', 'tenant_db_url', 'tenant_db_token_encrypted', 'notes', 'created_at', 'max_users_override', 'storage_limit_mb_override', 'last_login_at'],
+      companies: ['id', 'code', 'name', 'owner_name', 'owner_email', 'owner_phone', 'status', 'plan_id', 'trial_ends_at', 'tenant_db_url', 'tenant_db_token_encrypted', 'notes', 'created_at', 'max_users_override', 'storage_limit_mb_override', 'last_login_at', 'tenant_db_name', 'delete_after'],
       plans: ['id', 'name', 'max_users', 'storage_limit_mb', 'features_json', 'price_note', 'is_active'],
       super_admins: ['id', 'name', 'username', 'password_hash', 'token_version', 'created_at'],
       super_admin_sessions: ['sid_hash', 'super_admin_id', 'token_version', 'expires_at', 'created_at'],
       usage_snapshots: ['id', 'company_id', 'taken_at', 'user_count', 'db_bytes', 'files_bytes'],
-      backups: ['id', 'company_id', 'type', 'location', 'size_bytes', 'created_at', 'status'],
+      backups: ['id', 'company_id', 'type', 'location', 'size_bytes', 'created_at', 'status', 'backup_key', 'backup_kind', 'row_counts_json', 'telegram_message_ids_json', 'telegram_channel_id', 'checksum', 'file_references_json'],
+      company_restore_staging: ['id', 'source_company_id', 'backup_id', 'tenant_db_name', 'tenant_db_url', 'tenant_db_token_encrypted', 'row_counts_json', 'status', 'created_at', 'activated_at', 'reverted_at', 'previous_tenant_db_name', 'previous_tenant_db_url', 'previous_tenant_db_token_encrypted'],
+      backup_tests: ['id', 'company_id', 'backup_id', 'test_month', 'status', 'expected_row_counts_json', 'actual_row_counts_json', 'details', 'created_at'],
       billing_notes: ['id', 'company_id', 'amount_text', 'note', 'marked_paid_at', 'marked_by'],
       super_admin_audit: ['id', 'super_admin_id', 'company_id', 'action', 'details', 'created_at'],
       control_schema_migrations: ['version', 'applied_at']
@@ -83,7 +85,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       assert.deepEqual(columnResult.rows.map(column => column.name), columns, `expected columns on ${table}`);
     }
     const migrations = await client.execute('SELECT version FROM control_schema_migrations');
-    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, CURRENT_SCHEMA_VERSION]);
+    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, CURRENT_SCHEMA_VERSION]);
   } finally {
     await client.close();
   }

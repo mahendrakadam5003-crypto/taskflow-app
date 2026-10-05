@@ -129,8 +129,8 @@ function createCompanyProvisioner({
       const insertResult = await transaction.execute({
         sql: `INSERT INTO companies (
           code, name, owner_name, owner_email, status, plan_id, trial_ends_at,
-          tenant_db_url, tenant_db_token_encrypted, notes
-        ) VALUES (?, ?, ?, ?, 'trial', ?, ?, ?, ?, ?)`,
+          tenant_db_url, tenant_db_token_encrypted, notes, tenant_db_name
+        ) VALUES (?, ?, ?, ?, 'trial', ?, ?, ?, ?, ?, ?)`,
         args: [
           input.code,
           input.name,
@@ -140,7 +140,8 @@ function createCompanyProvisioner({
           trialEndsAt,
           tenantDatabaseUrl,
           encryptToken(tenantDatabaseToken),
-          'Provisioned from the super-admin company form.'
+          'Provisioned from the super-admin company form.',
+          environment.USE_LOCAL_DB === '1' ? input.code : databaseName
         ]
       });
       const companyId = Number(insertResult.lastInsertRowid);

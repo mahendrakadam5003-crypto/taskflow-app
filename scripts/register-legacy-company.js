@@ -28,6 +28,7 @@ async function registerLegacyCompany({
 
   const code = String(environment.LEGACY_COMPANY_CODE || DEFAULT_COMPANY_CODE).trim().toLowerCase();
   const name = String(environment.LEGACY_COMPANY_NAME || DEFAULT_COMPANY_NAME).trim();
+  const tenantDatabaseName = String(environment.TURSO_DATABASE || environment.LEGACY_TENANT_DATABASE_NAME || '').trim();
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(code)) {
     throw new Error('LEGACY_COMPANY_CODE must be a valid lowercase company code.');
   }
@@ -53,7 +54,7 @@ async function registerLegacyCompany({
     if (matchingDatabase.rows?.[0]) {
       const companyId = Number(matchingDatabase.rows[0].id);
       const currentCompany = await transaction.execute({
-        sql: 'SELECT plan_id FROM companies WHERE id = ? LIMIT 1',
+        sql: 'SELECT plan_id, tenant_db_name FROM companies WHERE id = ? LIMIT 1',
         args: [companyId]
       });
       if (Number(currentCompany.rows?.[0]?.plan_id) !== internalPlanId) {
@@ -64,6 +65,12 @@ async function registerLegacyCompany({
         await transaction.execute({
           sql: 'INSERT INTO super_admin_audit (company_id, action, details) VALUES (?, ?, ?)',
           args: [companyId, 'Internal plan assigned', 'Assigned the existing company the Internal / Unlimited plan.']
+        });
+      }
+      if (!currentCompany.rows?.[0]?.tenant_db_name && tenantDatabaseName) {
+        await transaction.execute({
+          sql: 'UPDATE companies SET tenant_db_name = ? WHERE id = ? AND tenant_db_name IS NULL',
+          args: [tenantDatabaseName, companyId]
         });
       }
       await transaction.commit();
@@ -85,15 +92,16 @@ async function registerLegacyCompany({
 
     const inserted = await transaction.execute({
       sql: `INSERT INTO companies (
-        code, name, status, plan_id, tenant_db_url, tenant_db_token_encrypted, notes
-      ) VALUES (?, ?, 'active', ?, ?, ?, ?)`,
+        code, name, status, plan_id, tenant_db_url, tenant_db_token_encrypted, notes, tenant_db_name
+      ) VALUES (?, ?, 'active', ?, ?, ?, ?, ?)`,
       args: [
         code,
         name,
         internalPlanId,
         database.url,
         encryptedToken,
-        'Existing TaskFlow workspace registered without moving or changing company data.'
+        'Existing TaskFlow workspace registered without moving or changing company data.',
+        tenantDatabaseName || code
       ]
     });
     const companyId = Number(inserted.lastInsertRowid);
