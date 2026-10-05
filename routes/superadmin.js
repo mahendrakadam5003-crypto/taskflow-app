@@ -547,12 +547,18 @@ function createSuperAdminRouter({
     const [statusResult, companiesResult, plansResult, subscriptionsResult, invoicesResult, demoRequestsResult] = await Promise.all([
       controlDb.execute(`SELECT status, COUNT(*) AS company_count
         FROM companies WHERE status <> 'deleted' GROUP BY status`),
-        controlDb.execute(`SELECT c.id, c.code, c.name, c.owner_name, c.owner_email, c.status, c.plan_id,
+      controlDb.execute(`SELECT c.id, c.code, c.name, c.owner_name, c.owner_email, c.status, c.plan_id,
           c.trial_ends_at, c.created_at, c.last_login_at, c.delete_after, c.max_users_override, c.storage_limit_mb_override,
           p.name AS plan_name, p.max_users, p.storage_limit_mb,
-          u.user_count, u.db_bytes, u.files_bytes, u.taken_at AS usage_taken_at
+          u.user_count, u.db_bytes, u.files_bytes, u.taken_at AS usage_taken_at,
+          s.billing_cycle, s.status AS subscription_status, s.current_period_end AS renews_at,
+          s.cancel_at_period_end
         FROM companies c
         LEFT JOIN plans p ON p.id = c.plan_id
+        LEFT JOIN subscriptions s ON s.id = (
+          SELECT latest.id FROM subscriptions latest
+          WHERE latest.company_id = c.id ORDER BY latest.id DESC LIMIT 1
+        )
         LEFT JOIN usage_snapshots u ON u.id = (
           SELECT latest.id FROM usage_snapshots latest
           WHERE latest.company_id = c.id ORDER BY latest.taken_at DESC, latest.id DESC LIMIT 1
@@ -588,6 +594,10 @@ function createSuperAdminRouter({
       lastLoginAt: row.last_login_at,
       deleteAfter: row.delete_after,
       trialEndsAt: row.trial_ends_at,
+      billingCycle: row.billing_cycle,
+      subscriptionStatus: row.subscription_status,
+      renewsAt: row.renews_at,
+      cancelAtPeriodEnd: Number(row.cancel_at_period_end) === 1,
       createdAt: row.created_at
     }));
     const statusCounts = Object.fromEntries(statusResult.rows.map(row => [row.status, Number(row.company_count)]));

@@ -105,6 +105,23 @@ test('super-admin overview displays the requested company, revenue, invoice, and
   assert.match(script, /formatCurrencyAmounts/);
 });
 
+test('super-admin companies table supports attention filters, seat limits, billing details, and sorting', async () => {
+  const page = await fs.readFile(path.join(__dirname, '..', 'public', 'superadmin.html'), 'utf8');
+  assert.match(page, /data-company-quick-filter="attention"/);
+  assert.match(page, /<option value="past_due">Past due<\/option>/);
+  assert.match(page, /data-company-sort="name"/);
+  assert.match(page, /data-company-sort="status"/);
+  assert.match(page, /data-company-sort="seats"/);
+  assert.match(page, /data-company-sort="trialEnd"/);
+  assert.match(page, /data-company-sort="lastLogin"/);
+  assert.match(page, /<th scope="col">Billing cycle<\/th><th scope="col">Renews on<\/th>/);
+  const script = await fs.readFile(path.join(__dirname, '..', 'public', 'js', 'superadmin.js'), 'utf8');
+  assert.match(script, /company\.userCount >= company\.maxUsers/);
+  assert.match(script, /usedBytes > limitBytes \* 0\.9/);
+  assert.match(script, /percentage >= 100 \? 'danger' : percentage >= 90 \? 'warning'/);
+  assert.match(script, /function compareCompanyValues/);
+});
+
 test('startup bootstrap creates and can privately reset only the configured super-admin', async () => {
   let storedAdmin = null;
   const auditEntries = [];
@@ -373,6 +390,9 @@ test('super-admin login uses an isolated hashed session and protects the read-on
     assert.equal(data.companies[0].planName, 'Team');
     assert.equal(data.companies[0].userCount, 7);
     assert.equal(data.companies[0].planId, 2);
+    assert.equal(data.companies[0].billingCycle, 'yearly');
+    assert.equal(data.companies[0].subscriptionStatus, 'active');
+    assert.equal(data.companies[0].renewsAt, '2027-10-01');
     assert.deepEqual(data.plans.map(plan => plan.name), ['Solo', 'Team', 'Business', 'Internal / Unlimited', 'Trial']);
 
     await fetch(`${baseUrl}/logout`, {

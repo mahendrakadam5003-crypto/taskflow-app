@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#101a2b">
   <title>Super Admin | TaskFlow</title>
-  <link rel="stylesheet" href="/css/superadmin.css">
+  <link rel="stylesheet" href="/css/superadmin.css?v=20261006-2">
 </head>
 <body>
   <main class="shell">
@@ -112,10 +112,14 @@
           <label class="status-filter" for="company-status-filter">Status
             <select id="company-status-filter" class="company-setting">
               <option value="">All statuses</option><option value="trial">Trial</option>
-              <option value="active">Active</option><option value="suspended">Suspended</option>
+              <option value="active">Active</option><option value="past_due">Past due</option><option value="suspended">Suspended</option>
               <option value="cancelled">Cancelled</option>
             </select>
           </label>
+        </div>
+        <div id="company-quick-filters" class="company-quick-filters" role="group" aria-label="Quick company filters">
+          <button type="button" class="filter-chip active" data-company-quick-filter="all" aria-pressed="true">All companies</button>
+          <button type="button" class="filter-chip" data-company-quick-filter="attention" aria-pressed="false">Needs attention</button>
         </div>
         <div id="empty-state" class="empty-state hidden">
           <div class="empty-icon" aria-hidden="true">⌂</div>
@@ -125,7 +129,16 @@
         <div id="company-table-wrap" class="table-wrap hidden">
           <table>
             <thead>
-              <tr><th>Company</th><th>Plan</th><th>Status</th><th>Users</th><th>Storage</th><th>Trial ends</th><th>Last login</th><th></th></tr>
+              <tr>
+                <th scope="col" data-sort-header="name" aria-sort="ascending"><button type="button" class="sort-button" data-company-sort="name">Company</button></th>
+                <th scope="col">Plan</th>
+                <th scope="col" data-sort-header="status" aria-sort="none"><button type="button" class="sort-button" data-company-sort="status">Status</button></th>
+                <th scope="col" data-sort-header="seats" aria-sort="none"><button type="button" class="sort-button" data-company-sort="seats">Seats</button></th>
+                <th scope="col">Storage</th><th scope="col">Billing cycle</th><th scope="col">Renews on</th>
+                <th scope="col" data-sort-header="trialEnd" aria-sort="none"><button type="button" class="sort-button" data-company-sort="trialEnd">Trial ends</button></th>
+                <th scope="col" data-sort-header="lastLogin" aria-sort="none"><button type="button" class="sort-button" data-company-sort="lastLogin">Last login</button></th>
+                <th scope="col"></th>
+              </tr>
             </thead>
             <tbody id="company-rows"></tbody>
           </table>
@@ -318,6 +331,6 @@
     </section>
     <footer>TaskFlow Control <span>•</span> Separate from your company workspace</footer>
   </main>
-  <script src="/js/superadmin.js?v=20261006-2" defer></script>
+  <script src="/js/superadmin.js?v=20261006-4" defer></script>
 </body>
 </html>

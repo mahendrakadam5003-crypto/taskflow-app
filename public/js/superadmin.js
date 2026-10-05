@@ -14,6 +14,8 @@ let overviewData = null;
 let activeCompanyDetail = null;
 let planRecords = [];
 let demoRequests = [];
+let companyQuickFilter = 'all';
+let companySort = { key: 'name', direction: 1 };
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -197,13 +199,71 @@ async function activateControlPage(page, { updateHash = true } = {}) {
   }
 }
 
+function getCompanyDisplayStatus(company) {
+  if (company.subscriptionStatus === 'past_due' && !['suspended', 'cancelled'].includes(company.status)) return 'past_due';
+  return company.status;
+}
+
+function getCompanyDate(value) {
+  if (!value) return null;
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T23:59:59.999Z` : value;
+  const timestamp = new Date(normalized).getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function isCompanyEndingTrialSoon(company) {
+  if (company.status !== 'trial') return false;
+  const trialEnd = getCompanyDate(company.trialEndsAt);
+  const now = Date.now();
+  return trialEnd !== null && trialEnd >= now && trialEnd <= now + 7 * 24 * 60 * 60 * 1000;
+}
+
+function needsCompanyAttention(company) {
+  if (getCompanyDisplayStatus(company) === 'past_due' || isCompanyEndingTrialSoon(company)) return true;
+  if (company.maxUsers !== null && company.userCount !== null && company.userCount >= company.maxUsers) return true;
+  if (company.storageLimitMb !== null && company.dbBytes !== null && company.filesBytes !== null) {
+    const usedBytes = company.dbBytes + company.filesBytes;
+    const limitBytes = company.storageLimitMb * 1024 * 1024;
+    if (limitBytes >= 0 && usedBytes > limitBytes * 0.9) return true;
+  }
+  return false;
+}
+
+function compareCompanyValues(left, right, key, direction) {
+  if (key === 'name') return String(left.name).localeCompare(String(right.name), undefined, { sensitivity: 'base' }) * direction;
+  if (key === 'status') return getCompanyDisplayStatus(left).localeCompare(getCompanyDisplayStatus(right)) * direction;
+  const valueFor = company => {
+    if (key === 'seats') return company.userCount;
+    if (key === 'trialEnd') return getCompanyDate(company.trialEndsAt);
+    return getCompanyDate(company.lastLoginAt);
+  };
+  const leftValue = valueFor(left);
+  const rightValue = valueFor(right);
+  if (leftValue == null) return rightValue == null ? 0 : 1;
+  if (rightValue == null) return -1;
+  return (leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0) * direction;
+}
+
 function getFilteredCompanies() {
   if (!overviewData) return [];
   const search = document.getElementById('company-search').value.trim().toLowerCase();
   const status = document.getElementById('company-status-filter').value;
   const companies = overviewData.companies.filter(company => {
     const matchesSearch = !search || `${company.name} ${company.code} ${company.ownerName || ''}`.toLowerCase().includes(search);
-    return matchesSearch && (!status || company.status === status);
+    return matchesSearch && (!status || getCompanyDisplayStatus(company) === status)
+      && (companyQuickFilter !== 'attention' || needsCompanyAttention(company));
+  }).sort((left, right) => {
+    const compared = compareCompanyValues(left, right, companySort.key, companySort.direction);
+    return compared || left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
+  });
+  document.querySelectorAll('[data-sort-header]').forEach(header => {
+    header.setAttribute('aria-sort', header.dataset.sortHeader === companySort.key
+      ? (companySort.direction === 1 ? 'ascending' : 'descending') : 'none');
+  });
+  document.querySelectorAll('[data-company-quick-filter]').forEach(button => {
+    const selected = button.dataset.companyQuickFilter === companyQuickFilter;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
   });
   const empty = document.getElementById('empty-state');
   const table = document.getElementById('company-table-wrap');
@@ -212,29 +272,45 @@ function getFilteredCompanies() {
   table.classList.toggle('hidden', companies.length === 0);
   if (companies.length === 0) {
     empty.classList.remove('hidden');
-    const hasFilters = Boolean(search || status);
+    const hasFilters = Boolean(search || status || companyQuickFilter !== 'all');
     empty.querySelector('h3').textContent = hasFilters ? 'No matching companies' : 'No companies registered yet';
     empty.querySelector('p').textContent = hasFilters
-      ? 'Adjust the search or status filter to see more companies.'
+      ? 'Adjust the search, status, or quick filter to see more companies.'
       : 'Your existing company appears here once its workspace is registered in the control database.';
   }
   renderCompanyRows(companies);
   return companies;
 }
 
+function renderSeatUsage(company) {
+  if (company.userCount === null) {
+    return `— / ${company.maxUsers === null ? 'Unlimited' : company.maxUsers.toLocaleString()}`;
+  }
+  if (company.maxUsers === null) return `${company.userCount.toLocaleString()} / Unlimited`;
+  const percentage = company.maxUsers === 0 ? 100 : Math.min(100, Math.round(company.userCount / company.maxUsers * 100));
+  const severity = percentage >= 100 ? 'danger' : percentage >= 90 ? 'warning' : '';
+  const used = company.userCount.toLocaleString();
+  const allowed = company.maxUsers.toLocaleString();
+  return `<div class="seat-usage"><span>${escapeHtml(used)} / ${escapeHtml(allowed)}</span>
+    <div class="seat-progress ${severity}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percentage}" aria-label="${escapeHtml(used)} of ${escapeHtml(allowed)} seats used"><span style="width: ${percentage}%"></span></div></div>`;
+}
+
 function renderCompanyRows(companies) {
   const rows = document.getElementById('company-rows');
   rows.innerHTML = companies.map(company => {
-    const usageAvailable = company.userCount !== null;
+    const usageAvailable = company.userCount !== null && company.dbBytes !== null && company.filesBytes !== null;
     const storage = usageAvailable ? formatBytes(company.dbBytes + company.filesBytes) : '—';
-    const userLimit = company.maxUsers === null ? 'unlimited' : company.maxUsers.toLocaleString();
     const storageLimit = company.storageLimitMb === null ? 'unlimited' : formatBytes(company.storageLimitMb * 1024 * 1024);
+    const status = getCompanyDisplayStatus(company);
+    const statusLabel = status === 'past_due' ? 'Past due' : status;
     return `<tr>
       <td><div class="company-name">${escapeHtml(company.name)}</div><div class="company-code">${escapeHtml(company.code)}</div></td>
       <td>${escapeHtml(company.planName || 'No plan')}</td>
-      <td><span class="status status-${escapeHtml(company.status)}">${escapeHtml(company.status)}</span></td>
-      <td>${usageAvailable ? `${escapeHtml(company.userCount.toLocaleString())} / ${escapeHtml(userLimit)}` : '—'}</td>
+      <td><span class="status status-${escapeHtml(status.replace(/_/g, '-'))}">${escapeHtml(statusLabel)}</span></td>
+      <td>${renderSeatUsage(company)}</td>
       <td>${escapeHtml(storage)} / ${escapeHtml(storageLimit)}</td>
+      <td>${escapeHtml(company.billingCycle || '—')}</td>
+      <td>${escapeHtml(company.renewsAt ? formatDate(company.renewsAt) : '—')}</td>
       <td>${escapeHtml(formatDate(company.trialEndsAt))}</td>
       <td>${escapeHtml(formatDate(company.lastLoginAt))}</td>
       <td><button class="button button-quiet company-open" type="button" data-company-open="${company.id}" aria-label="Open ${escapeHtml(company.name)}">Manage</button></td>
@@ -795,6 +871,22 @@ window.addEventListener('hashchange', () => {
 
 document.getElementById('company-search').addEventListener('input', getFilteredCompanies);
 document.getElementById('company-status-filter').addEventListener('change', getFilteredCompanies);
+document.getElementById('company-quick-filters').addEventListener('click', event => {
+  const button = event.target.closest('[data-company-quick-filter]');
+  if (!button) return;
+  companyQuickFilter = button.dataset.companyQuickFilter;
+  getFilteredCompanies();
+});
+document.getElementById('company-table-wrap').addEventListener('click', event => {
+  const button = event.target.closest('[data-company-sort]');
+  if (!button) return;
+  const key = button.dataset.companySort;
+  companySort = {
+    key,
+    direction: companySort.key === key ? -companySort.direction : 1
+  };
+  getFilteredCompanies();
+});
 document.getElementById('user-error-refresh').addEventListener('click', () => loadUserErrors());
 document.getElementById('user-error-list').addEventListener('click', async event => {
   const button = event.target.closest('[data-error-resolve]');
