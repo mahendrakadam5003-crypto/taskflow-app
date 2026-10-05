@@ -5,7 +5,7 @@ const { rateLimit } = require('express-rate-limit');
 const { getControlDatabase } = require('../control-db');
 const { hasControlDatabaseConfiguration } = require('../tenant-manager');
 const { getPricing } = require('../pricing-service');
-const { calculateInvoiceAmounts } = require('../lib/pricing');
+const { calculateInvoiceAmounts, calculateTierQuote } = require('../lib/pricing');
 
 function createPublicRouter({
   getDatabase = getControlDatabase,
@@ -31,6 +31,56 @@ function createPublicRouter({
       try {
         const controlDb = await getDatabase();
         const pricing = await getPricing(controlDb, currentTime);
+        const quoteTiers = pricing.tiers.length ? pricing.tiers : [{
+          key: 'standard',
+          name: 'Standard',
+          tagline: '',
+          highlights: [],
+          minSeats: 1,
+          maxSeats: null,
+          monthlyPricePaise: pricing.monthlyPricePaise,
+          yearlyPricePaise: pricing.yearlyPricePaise
+        }];
+        const tiers = quoteTiers.map(tier => {
+          const yearlyQuote = calculateTierQuote({
+            tiers: quoteTiers,
+            seats: tier.minSeats,
+            cycle: 'yearly',
+            taxPctTenths: Math.round(pricing.taxPct * 10),
+            taxInclusive: pricing.taxInclusive
+          });
+          return {
+            key: tier.key,
+            name: tier.name,
+            tagline: tier.tagline,
+            highlights: tier.highlights,
+            minSeats: tier.minSeats,
+            maxSeats: tier.maxSeats,
+            monthlyPricePaise: tier.monthlyPricePaise,
+            yearlyPricePaise: tier.yearlyPricePaise,
+            yearlyMonthlyEquivalentPaise: yearlyQuote.monthlyEquivalentPaise
+          };
+        });
+        const quote = (seats, cycle) => {
+          const result = calculateTierQuote({
+            tiers: quoteTiers,
+            seats,
+            cycle,
+            taxPctTenths: Math.round(pricing.taxPct * 10),
+            taxInclusive: pricing.taxInclusive
+          });
+          return {
+            seats,
+            tier: { key: result.tier.key, name: result.tier.name },
+            unitPricePaise: result.unitPricePaise,
+            subtotalPaise: result.subtotalPaise,
+            discountPaise: result.discountPaise,
+            taxPaise: result.taxPaise,
+            totalPaise: result.totalPaise,
+            monthlyEquivalentPaise: result.monthlyEquivalentPaise,
+            yearlySavingsPaise: result.yearlySavingsPaise
+          };
+        };
         const monthlyPreviews = [1, 10, 50].map(seats => ({
           seats,
           ...calculateInvoiceAmounts({
@@ -49,7 +99,36 @@ function createPublicRouter({
             taxInclusive: pricing.taxInclusive
           })
         }));
-        cached = { ...pricing, monthlyPreviews, yearlyPreviews };
+        cached = {
+          versionId: pricing.versionId,
+          monthlyPricePaise: pricing.monthlyPricePaise,
+          yearlyDiscountPct: pricing.yearlyDiscountPct,
+          yearlyPricePaise: pricing.yearlyPricePaise,
+          taxPct: pricing.taxPct,
+          currency: pricing.currency,
+          currencySymbol: pricing.currencySymbol,
+          taxInclusive: pricing.taxInclusive,
+          trialDays: pricing.trialDays,
+          trialMaxUsers: pricing.trialMaxUsers,
+          trialStorageLimitMb: pricing.trialStorageLimitMb,
+          gracePeriodDays: pricing.gracePeriodDays,
+          readOnlyPeriodDays: pricing.readOnlyPeriodDays,
+          minSeats: pricing.minSeats,
+          maxSeats: pricing.maxSeats,
+          defaultStoragePerSeatMb: pricing.defaultStoragePerSeatMb,
+          prorateSeats: pricing.prorateSeats,
+          seatAdditionBilling: pricing.seatAdditionBilling,
+          priceChangeScope: pricing.priceChangeScope,
+          trialApprovalMode: pricing.trialApprovalMode,
+          effectiveFrom: pricing.effectiveFrom,
+          tiers,
+          quotes: {
+            monthly: [1, 10, 11, 50].map(seats => quote(seats, 'monthly')),
+            yearly: [1, 10, 11, 50].map(seats => quote(seats, 'yearly'))
+          },
+          monthlyPreviews,
+          yearlyPreviews
+        };
         cachedAt = currentTime.getTime();
       } catch (error) {
         return res.status(503).json({ error: 'Pricing is temporarily unavailable.' });
