@@ -8,7 +8,7 @@ const originals = new Map(modulePaths.map(moduleName => {
   const modulePath = require.resolve(moduleName);
   return [modulePath, require.cache[modulePath]];
 }));
-const originalEnvironment = Object.fromEntries(['TURSO_PLATFORM_TOKEN', 'TURSO_ORG', 'TURSO_DATABASE'].map(key => [key, process.env[key]]));
+const originalEnvironment = Object.fromEntries(['TURSO_PLATFORM_TOKEN', 'TURSO_ORG', 'TURSO_DATABASE', 'TURSO_DATABASE_URL'].map(key => [key, process.env[key]]));
 process.env.TURSO_PLATFORM_TOKEN = 'test-platform-token';
 process.env.TURSO_ORG = 'taskflow-org';
 process.env.TURSO_DATABASE = 'taskflow';
@@ -113,6 +113,18 @@ test('dashboard retains organization quota when optional Turso endpoints fail', 
 test('dashboard uses the matched plan quota when organization usage is unavailable', async () => {
   failOrganizationUsage = true;
   plansEndpointAvailable = true;
+  const response = await fetch(`${baseUrl}/api/dashboard/summary`, { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+  const summary = await response.json();
+  assert.equal(summary.storage.available, true);
+  assert.equal(summary.storage.total_bytes, 9_000_000_000);
+  assert.equal(summary.storage.source, 'turso');
+});
+
+
+test('dashboard finds the Turso database from its URL when TURSO_DATABASE is unset', async () => {
+  delete process.env.TURSO_DATABASE;
+  process.env.TURSO_DATABASE_URL = 'libsql://taskflow.taskflow-org.turso.io';
   const response = await fetch(`${baseUrl}/api/dashboard/summary`, { headers: { Cookie: cookie } });
   assert.equal(response.status, 200);
   const summary = await response.json();

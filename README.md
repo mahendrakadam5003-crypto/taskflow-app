@@ -26,6 +26,8 @@ npm start
 
 Without `USE_LOCAL_DB=1`, TaskFlow requires both `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` and stops if either is missing or the database is unreachable.
 
+The admin dashboard's Turso storage quota also requires `TURSO_PLATFORM_TOKEN`. `TURSO_ORG` and `TURSO_DATABASE` are optional when the platform token can discover the organization and the database URL identifies the database.
+
 The local server listens on `127.0.0.1:3000`. Open `http://127.0.0.1:3000` on the PC itself. Local installs do not accept connections from other LAN devices.
 
 On an empty database, the app creates the first admin account with username `admin` and a random one-time password printed to the server console. Set `INITIAL_ADMIN_PASSWORD` before first startup to provide your own initial password instead. The admin must change that password at first login. Existing databases are not reseeded.
