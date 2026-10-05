@@ -123,11 +123,6 @@ const reimbursementStatuses = {
   paid: { label: 'Paid', className: 'chip-success', step: 3 },
   rejected: { label: 'Rejected', className: 'chip-danger', step: 0 }
 };
-const dateOfBirth = $('#admin-edit-date-of-birth').value;
-const phone = $('#admin-edit-phone').value.trim();
-if (dateOfBirth) body.date_of_birth = dateOfBirth;
-if (phone) body.phone = phone;
-
 function reimbursementStatus(status) {
   return reimbursementStatuses[status] || { label: String(status || 'Unknown'), className: 'chip-neutral', step: -1 };
 }
@@ -4436,6 +4431,10 @@ function adminEditUser(user, departments) {
       role: isSelf ? role : $('#admin-edit-role').value,
       active: $('#admin-edit-active').value === '1'
     };
+    const dateOfBirth = $('#admin-edit-date-of-birth').value;
+    const phone = $('#admin-edit-phone').value.trim();
+    if (dateOfBirth) body.date_of_birth = dateOfBirth;
+    if (phone) body.phone = phone;
     error.textContent = '';
     if (!body.name || !body.email) { error.textContent = 'Employee name and email are required.'; return; }
     if (password && password.length < 10) { error.textContent = 'Password must be at least 10 characters long.'; return; }
