@@ -2,7 +2,7 @@
 
 const crypto = require('node:crypto');
 const { getControlDatabase } = require('./control-db');
-const { LEGACY_TENANT_ID } = require('./tenant-manager');
+const { hasControlDatabaseConfiguration, LEGACY_TENANT_ID } = require('./tenant-manager');
 
 const COMPANY_CONTEXT_COOKIE = 'taskflow.company.v1';
 const COMPANY_CONTEXT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
@@ -65,22 +65,28 @@ function createCompanyContextMiddleware({
   runWithTenant,
   getDatabase = getControlDatabase,
   secret = process.env.SESSION_SECRET,
-  cookieName = COMPANY_CONTEXT_COOKIE
+  cookieName = COMPANY_CONTEXT_COOKIE,
+  legacyCompanyCode = process.env.LEGACY_COMPANY_CODE || 'existing-company',
+  environment = process.env
 }) {
   if (typeof runWithTenant !== 'function') throw new TypeError('A tenant context runner is required.');
+  if (typeof legacyCompanyCode !== 'string' || !COMPANY_CODE_PATTERN.test(legacyCompanyCode.trim().toLowerCase())) {
+    throw new TypeError('A valid legacy company code is required.');
+  }
+  const defaultCompanyCode = legacyCompanyCode.trim().toLowerCase();
 
   async function resolveCompany(companyCode) {
     const controlDb = await getDatabase();
     const result = await controlDb.execute({
-      sql: `SELECT id, code, name FROM companies
-        WHERE code = ? AND status IN ('trial', 'active') LIMIT 1`,
+      sql: 'SELECT id, code, name, status FROM companies WHERE code = ? LIMIT 1',
       args: [companyCode]
     });
     const company = result.rows?.[0];
     return company ? {
       id: Number(company.id),
       code: company.code,
-      name: company.name
+      name: company.name,
+      status: company.status
     } : null;
   }
 
@@ -93,18 +99,41 @@ function createCompanyContextMiddleware({
     const cookieValue = readCookie(req.get('Cookie'), cookieName);
     const cookieCompanyCode = verifyCompanyCode(cookieValue, secret);
     const companyCode = hasExplicitLoginCode ? explicitCompanyCode : cookieCompanyCode;
+    const isDefaultCompanyLogin = isLogin && (!hasExplicitLoginCode || explicitCompanyCode === '');
+
+    const runLegacyContext = (companyStatus = null) => {
+      req.companyTenantId = LEGACY_TENANT_ID;
+      req.companyCode = null;
+      req.companyStatus = companyStatus;
+      return runWithTenant(LEGACY_TENANT_ID, next);
+    };
+
+    if (isDefaultCompanyLogin) {
+      if (!hasControlDatabaseConfiguration(environment)) return runLegacyContext();
+      return resolveCompany(defaultCompanyCode).then(company => {
+        if (!company) return runLegacyContext();
+        if (!['trial', 'active'].includes(company.status)) {
+          return res.status(403).json({ error: 'This company workspace is not active.' });
+        }
+        req.companyTenantId = company.id;
+        req.companyCode = company.code;
+        req.companyName = company.name;
+        req.companyStatus = company.status;
+        return runWithTenant(company.id, next);
+      }).catch(next);
+    }
 
     if (!companyCode) {
       if (cookieValue && !cookieCompanyCode) clearCompanyContextCookie(res, { secure: req.secure });
-      if (hasExplicitLoginCode && explicitCompanyCode === '' && cookieCompanyCode) {
-        req.clearCompanyContextCookie = true;
-      }
       if (hasExplicitLoginCode && explicitCompanyCode !== '') {
         return res.status(401).json({ error: 'Company code or login credentials are incorrect.' });
       }
-      req.companyTenantId = LEGACY_TENANT_ID;
-      req.companyCode = null;
-      return runWithTenant(LEGACY_TENANT_ID, next);
+      if (!hasControlDatabaseConfiguration(environment)
+        || !req.path.startsWith('/api/')
+        || req.path.startsWith('/api/superadmin')) {
+        return runLegacyContext();
+      }
+      return resolveCompany(defaultCompanyCode).then(company => runLegacyContext(company?.status || null)).catch(next);
     }
 
     if (!COMPANY_CODE_PATTERN.test(companyCode)) {
@@ -115,13 +144,17 @@ function createCompanyContextMiddleware({
       if (!company) {
         if (isLogin) return res.status(401).json({ error: 'Company code or login credentials are incorrect.' });
         clearCompanyContextCookie(res, { secure: req.secure });
-        req.companyTenantId = LEGACY_TENANT_ID;
-        req.companyCode = null;
-        return runWithTenant(LEGACY_TENANT_ID, next);
+        return runLegacyContext();
+      }
+      if (!['trial', 'active'].includes(company.status)) {
+        if (isLogin) return res.status(401).json({ error: 'Company code or login credentials are incorrect.' });
+        clearCompanyContextCookie(res, { secure: req.secure });
+        return runLegacyContext(company.status);
       }
       req.companyTenantId = company.id;
       req.companyCode = company.code;
       req.companyName = company.name;
+      req.companyStatus = company.status;
       return runWithTenant(company.id, next);
     }).catch(next);
   };

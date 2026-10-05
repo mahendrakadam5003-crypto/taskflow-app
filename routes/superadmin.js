@@ -9,6 +9,7 @@ const { getControlDatabase } = require('../control-db');
 const COOKIE_NAME = 'taskflow.superadmin.sid';
 const SESSION_DURATION_MS = 4 * 60 * 60 * 1000;
 const DUMMY_PASSWORD_HASH = bcrypt.hashSync(crypto.randomBytes(32).toString('hex'), 10);
+const COMPANY_STATUSES = new Set(['trial', 'active', 'suspended', 'cancelled']);
 
 function digestSessionToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -152,10 +153,10 @@ function createSuperAdminRouter({ getDatabase = getControlDatabase, secureCookie
     const admin = await getAuthenticatedAdmin(req);
     if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
     const controlDb = await getDatabase();
-    const [statusResult, companiesResult] = await Promise.all([
+    const [statusResult, companiesResult, plansResult] = await Promise.all([
       controlDb.execute(`SELECT status, COUNT(*) AS company_count
         FROM companies GROUP BY status`),
-      controlDb.execute(`SELECT c.id, c.code, c.name, c.owner_name, c.owner_email, c.status,
+      controlDb.execute(`SELECT c.id, c.code, c.name, c.owner_name, c.owner_email, c.status, c.plan_id,
           c.trial_ends_at, c.created_at, p.name AS plan_name, p.max_users, p.storage_limit_mb,
           u.user_count, u.db_bytes, u.files_bytes, u.taken_at AS usage_taken_at
         FROM companies c
@@ -165,7 +166,9 @@ function createSuperAdminRouter({ getDatabase = getControlDatabase, secureCookie
           WHERE latest.company_id = c.id ORDER BY latest.taken_at DESC, latest.id DESC LIMIT 1
         )
         WHERE c.status <> 'deleted'
-        ORDER BY c.created_at DESC, c.id DESC`)
+        ORDER BY c.created_at DESC, c.id DESC`),
+      controlDb.execute(`SELECT id, name, max_users, storage_limit_mb
+        FROM plans WHERE is_active = 1 ORDER BY id`)
     ]);
     const companies = companiesResult.rows.map(row => ({
       id: Number(row.id),
@@ -180,6 +183,7 @@ function createSuperAdminRouter({ getDatabase = getControlDatabase, secureCookie
       userCount: row.user_count == null ? null : Number(row.user_count),
       dbBytes: row.db_bytes == null ? null : Number(row.db_bytes),
       filesBytes: row.files_bytes == null ? null : Number(row.files_bytes),
+      planId: row.plan_id == null ? null : Number(row.plan_id),
       usageTakenAt: row.usage_taken_at,
       trialEndsAt: row.trial_ends_at,
       createdAt: row.created_at
@@ -198,8 +202,92 @@ function createSuperAdminRouter({ getDatabase = getControlDatabase, secureCookie
         totalStorageBytes: latestUsage.reduce((total, company) => total + company.dbBytes + company.filesBytes, 0)
       },
       companies,
+      plans: plansResult.rows.map(row => ({
+        id: Number(row.id),
+        name: row.name,
+        maxUsers: row.max_users == null ? null : Number(row.max_users),
+        storageLimitMb: row.storage_limit_mb == null ? null : Number(row.storage_limit_mb)
+      })),
       registeredCompaniesOnly: true
     });
+  }));
+
+  router.put('/companies/:companyId', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+
+    const companyId = Number(req.params.companyId);
+    const body = req.body;
+    if (!Number.isSafeInteger(companyId) || companyId < 1
+      || !body || typeof body !== 'object' || Array.isArray(body)
+      || !Object.prototype.hasOwnProperty.call(body, 'status')
+      || !Object.prototype.hasOwnProperty.call(body, 'planId')) {
+      return res.status(400).json({ error: 'A valid company ID, status, and plan are required.' });
+    }
+    if (typeof body.status !== 'string' || !COMPANY_STATUSES.has(body.status)) {
+      return res.status(400).json({ error: 'Choose a valid company status.' });
+    }
+    const planId = body.planId === null ? null : Number(body.planId);
+    if (body.planId !== null && (!Number.isSafeInteger(planId) || planId < 1)) {
+      return res.status(400).json({ error: 'Choose a valid plan.' });
+    }
+
+    const controlDb = await getDatabase();
+    const companyResult = await controlDb.execute({
+      sql: `SELECT c.status, c.plan_id, p.name AS plan_name
+        FROM companies c LEFT JOIN plans p ON p.id = c.plan_id
+        WHERE c.id = ? AND c.status <> 'deleted'`,
+      args: [companyId]
+    });
+    const company = companyResult.rows?.[0];
+    if (!company) return res.status(404).json({ error: 'Company not found.' });
+
+    let planName = null;
+    if (planId !== null) {
+      const planResult = await controlDb.execute({
+        sql: 'SELECT name FROM plans WHERE id = ? AND is_active = 1',
+        args: [planId]
+      });
+      if (!planResult.rows?.[0]) return res.status(400).json({ error: 'Choose an active plan.' });
+      planName = planResult.rows[0].name;
+    }
+
+    const changes = [];
+    if (company.status !== body.status) changes.push(`status ${company.status} -> ${body.status}`);
+    const currentPlanId = company.plan_id == null ? null : Number(company.plan_id);
+    if (currentPlanId !== planId) changes.push(`plan ${company.plan_name || 'none'} -> ${planName || 'none'}`);
+    if (!changes.length) return res.json({ companyId, status: body.status, planId });
+
+    const results = await controlDb.batch([
+      {
+        sql: `UPDATE companies SET status = ?, plan_id = ?
+          WHERE id = ? AND status <> 'deleted'
+            AND (status <> ? OR plan_id IS NOT ?)
+            AND (? IS NULL OR EXISTS (SELECT 1 FROM plans WHERE id = ? AND is_active = 1))`,
+        args: [body.status, planId, companyId, body.status, planId, planId, planId]
+      },
+      {
+        sql: `INSERT INTO super_admin_audit (super_admin_id, company_id, action, details)
+          SELECT ?, ?, ?, ? WHERE changes() = 1`,
+        args: [admin.id, companyId, 'Company configuration updated', changes.join('; ')]
+      }
+    ], 'write');
+    if (Number(results[0]?.rowsAffected) !== 1) {
+      const currentCompany = await controlDb.execute({
+        sql: "SELECT id FROM companies WHERE id = ? AND status <> 'deleted'",
+        args: [companyId]
+      });
+      if (!currentCompany.rows?.[0]) return res.status(404).json({ error: 'Company not found.' });
+      if (planId !== null) {
+        const currentPlan = await controlDb.execute({
+          sql: 'SELECT id FROM plans WHERE id = ? AND is_active = 1',
+          args: [planId]
+        });
+        if (!currentPlan.rows?.[0]) return res.status(400).json({ error: 'Choose an active plan.' });
+      }
+      return res.status(409).json({ error: 'Company settings changed while saving. Refresh and try again.' });
+    }
+    return res.json({ companyId, status: body.status, planId });
   }));
 
   return router;

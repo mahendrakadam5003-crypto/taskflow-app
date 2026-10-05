@@ -43,11 +43,12 @@
         <div>
           <p class="eyebrow">PLATFORM OVERVIEW</p>
           <h1>Good to see you, <span id="admin-name">Admin</span></h1>
-          <p class="muted">A read-only view of companies currently registered in TaskFlow.</p>
+          <p class="muted">Manage company status and plan assignments. These registry settings do not move or modify company data.</p>
         </div>
-        <span class="read-only-pill"><span class="secure-dot"></span> Read only</span>
+        <span class="read-only-pill"><span class="secure-dot"></span> Control access</span>
       </div>
       <p id="overview-error" class="message error hidden" role="alert"></p>
+      <p id="management-message" class="message success hidden" role="status"></p>
       <div id="summary-cards" class="summary-grid"></div>
       <section class="companies-panel">
         <div class="section-heading">
@@ -65,13 +66,14 @@
         <div id="company-table-wrap" class="table-wrap hidden">
           <table>
             <thead>
-              <tr><th>Company</th><th>Status</th><th>Plan</th><th>Users</th><th>Storage</th></tr>
+              <tr><th>Company</th><th>Status</th><th>Plan</th><th>Users</th><th>Storage</th><th>Actions</th></tr>
             </thead>
             <tbody id="company-rows"></tbody>
           </table>
         </div>
       </section>
       <p class="footnote">Usage values are from the latest daily snapshot. File usage includes local attachments only; Telegram-hosted files are excluded. A dash means no snapshot is available yet.</p>
+      <p class="footnote">Suspending or cancelling a company blocks company-code sign-in. Plan assignment is registry metadata and does not currently enforce limits.</p>
     </section>
     <footer>TaskFlow Control <span>•</span> Separate from your company workspace</footer>
   </main>

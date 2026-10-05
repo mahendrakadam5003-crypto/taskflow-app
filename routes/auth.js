@@ -91,6 +91,9 @@ async function requireAuth(req, res, next) {
   if (!req.session || !req.session.userId) {
     return res.status(401).json({ error: 'Not logged in' });
   }
+  if (req.companyStatus && !['trial', 'active'].includes(req.companyStatus)) {
+    return res.status(403).json({ error: 'This company workspace is not active.' });
+  }
   if (req.companyTenantId !== undefined
     && String(req.session.companyId ?? LEGACY_TENANT_ID) !== String(req.companyTenantId)) {
     return rejectInvalidSession(req, res);

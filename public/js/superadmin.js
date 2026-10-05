@@ -5,6 +5,7 @@ const overviewView = document.getElementById('overview-view');
 const loginForm = document.getElementById('login-form');
 const loginError = document.getElementById('login-error');
 const overviewError = document.getElementById('overview-error');
+const managementMessage = document.getElementById('management-message');
 const logoutButton = document.getElementById('logout-button');
 
 function escapeHtml(value) {
@@ -80,7 +81,7 @@ function renderSummary(summary) {
     </article>`).join('');
 }
 
-function renderCompanies(companies) {
+function renderCompanies(companies, plans) {
   const emptyState = document.getElementById('empty-state');
   const table = document.getElementById('company-table-wrap');
   document.getElementById('company-total').textContent = `${companies.length} ${companies.length === 1 ? 'company' : 'companies'}`;
@@ -89,12 +90,26 @@ function renderCompanies(companies) {
   document.getElementById('company-rows').innerHTML = companies.map(company => {
     const usageAvailable = company.userCount !== null;
     const storage = usageAvailable ? formatBytes(company.dbBytes + company.filesBytes) : '—';
+    const statusOptions = ['trial', 'active', 'suspended', 'cancelled'].map(status =>
+      `<option value="${status}"${company.status === status ? ' selected' : ''}>${status[0].toUpperCase()}${status.slice(1)}</option>`
+    ).join('');
+    const planOptions = [
+      `<option value=""${company.planId === null ? ' selected' : ''}>No plan</option>`,
+      ...plans.map(plan => {
+        const userLimit = plan.maxUsers === null ? 'Unlimited users' : `${plan.maxUsers} users`;
+        const storageLimit = plan.storageLimitMb === null
+          ? 'Unlimited storage'
+          : `${formatBytes(plan.storageLimitMb * 1024 * 1024)} storage`;
+        return `<option value="${plan.id}"${company.planId === plan.id ? ' selected' : ''}>${escapeHtml(`${plan.name} (${userLimit}, ${storageLimit})`)}</option>`;
+      })
+    ].join('');
     return `<tr>
       <td><div class="company-name">${escapeHtml(company.name)}</div><div class="company-code">${escapeHtml(company.code)}</div></td>
-      <td><span class="status status-${escapeHtml(company.status)}">${escapeHtml(company.status)}</span></td>
-      <td>${escapeHtml(company.planName || '—')}</td>
+      <td><select class="company-setting" data-company-status="${company.id}" aria-label="Status for ${escapeHtml(company.name)}">${statusOptions}</select></td>
+      <td><select class="company-setting" data-company-plan="${company.id}" aria-label="Plan for ${escapeHtml(company.name)}">${planOptions}</select></td>
       <td>${usageAvailable ? escapeHtml(company.userCount.toLocaleString()) : '—'}</td>
       <td>${escapeHtml(storage)}</td>
+      <td><button class="button button-quiet company-save" type="button" data-company-save="${company.id}">Save</button></td>
     </tr>`;
   }).join('');
 }
@@ -104,7 +119,7 @@ async function loadOverview() {
     const data = await request('overview');
     document.getElementById('admin-name').textContent = data.admin.name;
     renderSummary(data.summary);
-    renderCompanies(data.companies);
+    renderCompanies(data.companies, data.plans);
     overviewError.classList.add('hidden');
     showOverview();
   } catch (error) {
@@ -114,6 +129,38 @@ async function loadOverview() {
     showOverview();
   }
 }
+
+document.getElementById('company-rows').addEventListener('click', async event => {
+  const button = event.target.closest('[data-company-save]');
+  if (!button) return;
+  const companyId = button.dataset.companySave;
+  const statusSelect = document.querySelector(`[data-company-status="${companyId}"]`);
+  const planSelect = document.querySelector(`[data-company-plan="${companyId}"]`);
+  if (!statusSelect || !planSelect) return;
+  if (['suspended', 'cancelled'].includes(statusSelect.value)
+    && !window.confirm(`Change this company to ${statusSelect.value}? Company-code sign-in will be blocked.`)) return;
+
+  button.disabled = true;
+  overviewError.classList.add('hidden');
+  managementMessage.classList.add('hidden');
+  try {
+    await request(`companies/${encodeURIComponent(companyId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        status: statusSelect.value,
+        planId: planSelect.value ? Number(planSelect.value) : null
+      })
+    });
+    managementMessage.textContent = 'Company settings saved.';
+    managementMessage.classList.remove('hidden');
+    await loadOverview();
+  } catch (error) {
+    overviewError.textContent = error.message;
+    overviewError.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+  }
+});
 
 loginForm.addEventListener('submit', async event => {
   event.preventDefault();

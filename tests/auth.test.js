@@ -90,7 +90,7 @@ require.cache[auditPath] = {
   exports: { logActivity: async () => {} }
 };
 
-const { router } = require('../routes/auth');
+const { router, requireAuth } = require('../routes/auth');
 const app = express();
 app.set('trust proxy', 'loopback');
 app.use(express.json());
@@ -101,6 +101,10 @@ app.use(session({
   saveUninitialized: false,
   cookie: { httpOnly: true, sameSite: 'lax' }
 }));
+app.get('/api/company-status-probe', (req, res, next) => {
+  req.companyStatus = 'suspended';
+  next();
+}, requireAuth, (req, res) => res.json({ ok: true }));
 app.use('/api/auth', router);
 app.use((error, req, res, next) => {
   const status = Number(error.statusCode || error.status);
@@ -199,6 +203,15 @@ test('password change invalidates the other browser session', async () => {
     body: { username: 'employee', password: 'replacement-password-456' }
   });
   assert.equal(replacementLogin.status, 200);
+});
+
+test('inactive company status blocks authenticated requests', async () => {
+  const cookie = await login('replacement-password-456');
+  const response = await fetch(`${baseUrl}/api/company-status-probe`, {
+    headers: { Cookie: cookie, 'X-Forwarded-For': nextIp() }
+  });
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { error: 'This company workspace is not active.' });
 });
 
 test('employee sessions receive 403 from every admin-only auth route', async () => {

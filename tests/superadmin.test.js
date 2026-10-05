@@ -252,6 +252,8 @@ test('super-admin login uses an isolated hashed session and protects the read-on
     assert.equal(data.companies[0].name, 'Test Company');
     assert.equal(data.companies[0].planName, 'Team');
     assert.equal(data.companies[0].userCount, 7);
+    assert.equal(data.companies[0].planId, 2);
+    assert.deepEqual(data.plans.map(plan => plan.name), ['Solo', 'Team', 'Business']);
 
     await fetch(`${baseUrl}/logout`, {
       method: 'POST',
@@ -259,6 +261,99 @@ test('super-admin login uses an isolated hashed session and protects the read-on
     });
     const afterLogout = await fetch(`${baseUrl}/overview`, { headers: { Cookie: cookieHeader.split(';')[0] } });
     assert.equal(afterLogout.status, 401);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await controlDb.close();
+  }
+});
+
+test('super-admin can update company status and plan without changing tenant credentials', async () => {
+  const { controlDb, server, baseUrl } = await createApp();
+  try {
+    const unauthorized = await fetch(`${baseUrl}/companies/1`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'suspended', planId: 1 })
+    });
+    assert.equal(unauthorized.status, 401);
+
+    const login = await fetch(`${baseUrl}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'test owner', password: 'Superadmin-Test-Password-2026!' })
+    });
+    const cookie = login.headers.get('set-cookie').split(';', 1)[0];
+    const invalidStatus = await fetch(`${baseUrl}/companies/1`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'deleted', planId: 1 })
+    });
+    assert.equal(invalidStatus.status, 400);
+
+    const invalidPlan = await fetch(`${baseUrl}/companies/1`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'suspended', planId: 999 })
+    });
+    assert.equal(invalidPlan.status, 400);
+
+    const deletedCompany = await controlDb.execute({
+      sql: `INSERT INTO companies (code, name, status, plan_id, tenant_db_url, tenant_db_token_encrypted)
+        VALUES (?, ?, ?, ?, ?, ?)`,
+      args: ['deleted-company', 'Deleted Company', 'deleted', 2, 'libsql://deleted.example', 'unchanged-token']
+    });
+    const deletedCompanyId = Number(deletedCompany.lastInsertRowid);
+    const deletedUpdate = await fetch(`${baseUrl}/companies/${deletedCompanyId}`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'active', planId: 1 })
+    });
+    assert.equal(deletedUpdate.status, 404);
+
+    const update = await fetch(`${baseUrl}/companies/1`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'suspended', planId: 1 })
+    });
+    assert.equal(update.status, 200, await update.clone().text());
+    assert.deepEqual(await update.json(), { companyId: 1, status: 'suspended', planId: 1 });
+
+    const company = await controlDb.execute({
+      sql: 'SELECT status, plan_id, tenant_db_url, tenant_db_token_encrypted FROM companies WHERE id = ?',
+      args: [1]
+    });
+    assert.deepEqual(company.rows[0], {
+      status: 'suspended',
+      plan_id: 1,
+      tenant_db_url: 'libsql://tenant.example',
+      tenant_db_token_encrypted: 'encrypted-token'
+    });
+    const audit = await controlDb.execute({
+      sql: 'SELECT action, details FROM super_admin_audit WHERE company_id = ?',
+      args: [1]
+    });
+    assert.equal(audit.rows.length, 1);
+    assert.equal(audit.rows[0].action, 'Company configuration updated');
+    assert.match(audit.rows[0].details, /status active -> suspended/);
+    assert.match(audit.rows[0].details, /plan Team -> Solo/);
+
+    const noOpUpdate = await fetch(`${baseUrl}/companies/1`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'suspended', planId: 1 })
+    });
+    assert.equal(noOpUpdate.status, 200);
+    const auditAfterNoOp = await controlDb.execute({
+      sql: 'SELECT COUNT(*) AS count FROM super_admin_audit WHERE company_id = ?',
+      args: [1]
+    });
+    assert.equal(Number(auditAfterNoOp.rows[0].count), 1);
+
+    const overview = await fetch(`${baseUrl}/overview`, { headers: { Cookie: cookie } });
+    const overviewData = await overview.json();
+    assert.equal(overviewData.summary.suspendedCount, 1);
+    assert.equal(overviewData.companies[0].status, 'suspended');
+    assert.equal(overviewData.companies[0].planName, 'Solo');
   } finally {
     await new Promise(resolve => server.close(resolve));
     await controlDb.close();

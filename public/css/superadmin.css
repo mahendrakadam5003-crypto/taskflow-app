@@ -55,6 +55,7 @@ input:focus { border-color: #45d6c4; box-shadow: 0 0 0 3px rgba(69, 214, 196, .1
 .help-text { margin: 20px 0 0; color: #75869e; font-size: 11px; text-align: center; }
 .message { padding: 11px 13px; border-radius: 8px; font-size: 12px; line-height: 1.5; }
 .error { border: 1px solid rgba(255, 131, 131, .22); background: rgba(148, 51, 51, .13); color: #ffadad; }
+.success { border: 1px solid rgba(69, 214, 196, .24); background: rgba(69, 214, 196, .09); color: #9aeee2; }
 .hidden { display: none !important; }
 footer { padding: 20px 0 26px; color: #74859a; font-size: 11px; text-align: center; }
 footer span { padding: 0 6px; color: var(--accent); }
@@ -81,6 +82,9 @@ footer span { padding: 0 6px; color: var(--accent); }
 table { width: 100%; border-collapse: collapse; text-align: left; }
 th { padding: 13px 18px; color: #8394a9; font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .09em; }
 td { padding: 16px 18px; border-top: 1px solid var(--line); color: #d7e0eb; font-size: 12px; white-space: nowrap; }
+.company-setting { min-height: 34px; max-width: 160px; padding: 0 28px 0 10px; border: 1px solid var(--line); border-radius: 7px; background: #111d2e; color: #d7e0eb; font-size: 11px; }
+.company-setting:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.company-save { min-height: 34px; padding: 0 12px; }
 .company-name { font-weight: 650; }
 .company-code { margin-top: 4px; color: #8192a8; font-size: 10px; }
 .status { display: inline-flex; align-items: center; padding: 5px 9px; border-radius: 100px; background: rgba(69, 214, 196, .1); color: #6de0d0; font-size: 10px; text-transform: capitalize; }
