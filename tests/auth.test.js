@@ -15,6 +15,10 @@ const user = {
   id: 1,
   name: 'Test Employee',
   username: 'employee',
+  email: null,
+  email_verified: 0,
+  google_sub: null,
+  auth_provider: 'password',
   department: 'Testing',
   role: 'employee',
   active: 1,
@@ -26,6 +30,10 @@ const otherUser = {
   id: 2,
   name: 'Second Employee',
   username: 'second',
+  email: null,
+  email_verified: 0,
+  google_sub: null,
+  auth_provider: 'password',
   department: 'Testing',
   role: 'employee',
   active: 1,
@@ -42,6 +50,10 @@ const mockDb = {
       get: async (...args) => {
         if (sql.includes('FROM users WHERE username = ?')) {
           const found = [...users.values()].find(row => row.username === args[0]);
+          return found ? { ...found } : null;
+        }
+        if (sql.includes('lower(trim(email)) = ?')) {
+          const found = [...users.values()].find(row => row.email_verified === 1 && row.email?.trim().toLowerCase() === args[0]);
           return found ? { ...found } : null;
         }
         if (sql.includes('FROM users WHERE id')) {
@@ -88,18 +100,26 @@ const mockDb = {
           target.role = args[0];
           return { changes: 1 };
         }
+        if (sql.includes('UPDATE users SET email = ?')) {
+          const target = users.get(Number(args.at(-1)));
+          target.email = args[0];
+          target.email_verified = 0;
+          target.google_sub = null;
+          return { changes: 1 };
+        }
         return { changes: 0 };
       }
     };
   },
   async batch(statements) {
     const statement = statements[0];
-    const [name, username, passwordHash, department, role, limit] = statement.args;
+    const [name, username, passwordHash, department, role, email, limit] = statement.args;
     const activeCount = [...users.values()].filter(row => Number(row.active) === 1).length;
     if (limit !== null && activeCount >= Number(limit)) return [{ rowsAffected: 0 }, { rows: [] }];
     const id = Math.max(...users.keys()) + 1;
     users.set(id, {
       id, name, username, password_hash: passwordHash, department, role, active: 1,
+      email, email_verified: 0, google_sub: null, auth_provider: 'password',
       must_change_password: 0, token_version: 0
     });
     return [{ rowsAffected: 1 }, { rows: [{ id }] }];
@@ -399,5 +419,59 @@ test('user seats are enforced for creation and reactivation, and deactivation fr
     Object.assign(otherUser, originalUsers.get(otherUser.id));
     users.set(user.id, user);
     users.set(otherUser.id, otherUser);
+  }
+});
+
+test('verified email works as a password login alias while unverified email does not', async () => {
+  const originalPasswordHash = user.password_hash;
+  const originalEmail = user.email;
+  const originalVerified = user.email_verified;
+  user.password_hash = await bcrypt.hash('email-login-password-123', 4);
+  user.email = 'employee@example.test';
+  user.email_verified = 0;
+  try {
+    const unverified = await request('/login', {
+      method: 'POST',
+      body: { username: user.email, password: 'email-login-password-123' }
+    });
+    assert.equal(unverified.status, 401);
+
+    user.email_verified = 1;
+    const verified = await request('/login', {
+      method: 'POST',
+      body: { username: user.email, password: 'email-login-password-123' }
+    });
+    assert.equal(verified.status, 200);
+    assert.equal((await verified.json()).username, user.username);
+  } finally {
+    user.password_hash = originalPasswordHash;
+    user.email = originalEmail;
+    user.email_verified = originalVerified;
+  }
+});
+
+test('admin email changes require reverification and remove the previous Google link', async () => {
+  const snapshot = { ...user };
+  try {
+    user.role = 'admin';
+    user.email = 'old@example.test';
+    user.email_verified = 1;
+    user.google_sub = 'old-google-sub';
+    user.password_hash = await bcrypt.hash('admin-email-test-password', 4);
+    const adminCookie = await login('admin-email-test-password');
+    const response = await request('/users/1', {
+      method: 'PUT',
+      cookie: adminCookie,
+      body: { email: ' New.Address@example.test ' }
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.emailVerificationSent, false);
+    assert.match(result.emailVerificationError, /Email delivery is not configured/);
+    assert.equal(user.email, 'new.address@example.test');
+    assert.equal(user.email_verified, 0);
+    assert.equal(user.google_sub, null);
+  } finally {
+    Object.assign(user, snapshot);
   }
 });

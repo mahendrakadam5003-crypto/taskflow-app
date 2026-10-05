@@ -672,6 +672,20 @@ const loginForm = $('#login-form');
 if (loginForm) {
   const companyField = $('#login-company-code');
   if (companyField) companyField.value = localStorage.getItem('taskflow.companyCode') || '';
+  const authReason = new URLSearchParams(location.hash.slice(1)).get('auth');
+  const authMessages = {
+    google_unavailable: 'Google sign-in is not configured for this TaskFlow service.',
+    google_cancelled: 'Google sign-in was cancelled.',
+    google_suspended: 'This company workspace is suspended. Contact support.',
+    google_billing_required: 'This workspace is locked. Contact your administrator.',
+    google_account_unavailable: 'No active TaskFlow account is linked to that verified Google email. Ask your administrator to add and verify your email first.',
+    google_failed: 'Google sign-in could not be completed. Try again.'
+  };
+  if (authReason && authMessages[authReason]) {
+    const errorEl = $('#login-error');
+    if (errorEl) errorEl.textContent = authMessages[authReason];
+    history.replaceState(null, document.title, `${location.pathname}${location.search}`);
+  }
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const errorEl = $('#login-error');
@@ -697,6 +711,40 @@ if (loginForm) {
       else enterApp();
     } catch (err) {
       if (errorEl) errorEl.textContent = err.message;
+    }
+  });
+
+  $('#google-login-button')?.addEventListener('click', () => {
+    const companyCode = companyField?.value.trim() || '';
+    if (companyCode) localStorage.setItem('taskflow.companyCode', companyCode);
+    else localStorage.removeItem('taskflow.companyCode');
+    const query = companyCode ? `?company_code=${encodeURIComponent(companyCode)}` : '';
+    location.assign(`/api/auth/google/start${query}`);
+  });
+
+  const resetRequestForm = $('#password-reset-request-form');
+  $('#forgot-password-button')?.addEventListener('click', () => {
+    resetRequestForm?.classList.toggle('hidden');
+    $('#password-reset-email')?.focus();
+  });
+  resetRequestForm?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const status = $('#password-reset-request-status');
+    if (!status) return;
+    status.textContent = '';
+    try {
+      const result = await api('/auth/password-reset/request', {
+        method: 'POST',
+        body: {
+          email: $('#password-reset-email').value.trim(),
+          company_code: companyField?.value.trim() || ''
+        }
+      });
+      status.textContent = result.message;
+      status.classList.remove('form-error');
+    } catch (error) {
+      status.textContent = error.message;
+      status.classList.add('form-error');
     }
   });
 }
@@ -3306,6 +3354,7 @@ async function renderAdmin() {
         <div class="admin-form-row" style="margin-bottom: 20px;">
           <input id="u-name" placeholder="Full name">
           <input id="u-username" placeholder="Username">
+          <input id="u-email" type="email" placeholder="Email (optional)" autocomplete="email">
           <select id="u-department"><option value="">No department</option>${departmentOptions}</select>
           <input id="u-password" placeholder="Password (10 characters minimum)" type="password" minlength="10">
           <select id="u-role">
@@ -3320,6 +3369,7 @@ async function renderAdmin() {
             <tr style="text-align:left; border-bottom:2px solid #ddd; background:#f8f9fa;">
               <th style="padding:10px;">Name</th>
               <th style="padding:10px;">Username</th>
+              <th style="padding:10px;">Email &amp; verification</th>
               <th style="padding:10px;">Department</th>
               <th style="padding:10px;">Role</th>
               <th style="padding:10px;">Status</th>
@@ -3801,6 +3851,7 @@ async function renderAdmin() {
         tr.innerHTML = `
           <td style="padding:10px;"><b>${escapeHtml(u.name || u.NAME)}</b></td>
           <td style="padding:10px;">${escapeHtml(u.username || u.USERNAME)}</td>
+          <td style="padding:10px;">${escapeHtml(u.email || 'Not set')}<br><small>${u.email ? (Number(u.email_verified) === 1 ? 'Verified' : 'Unverified') : ''}</small>${u.email && Number(u.email_verified) !== 1 ? '<br><button class="btn btn-secondary btn-sm admin-send-email-verification" type="button">Send verification</button>' : ''}</td>
           <td style="padding:10px;">${escapeHtml(u.department || u.DEPARTMENT || 'No department')}</td>
           <td style="padding:10px;">${escapeHtml(u.role || u.ROLE)}</td>
           <td style="padding:10px;"><span class="badge" style="background:${Number(u.active ?? u.ACTIVE) === 1 ? '#c8e6c9' : '#eeeeee'}; color:${Number(u.active ?? u.ACTIVE) === 1 ? '#25602a' : '#555'}; padding:4px 8px; border-radius:4px; font-size:12px;">${Number(u.active ?? u.ACTIVE) === 1 ? 'Active' : 'Disabled'}</span></td>
@@ -3809,6 +3860,18 @@ async function renderAdmin() {
         `;
         tbody.appendChild(tr);
         tr.querySelector('.admin-edit-user').onclick = () => adminEditUser(u, departments);
+        tr.querySelector('.admin-send-email-verification')?.addEventListener('click', async event => {
+          const button = event.currentTarget;
+          button.disabled = true;
+          try {
+            await api(`/auth/users/${Number(u.id)}/send-verification`, { method: 'POST' });
+            showAppNotification('Email verification link sent.');
+          } catch (error) {
+            showAppNotification(error.message);
+          } finally {
+            button.disabled = false;
+          }
+        });
       });
     }
 
@@ -4090,6 +4153,7 @@ async function renderAdmin() {
       const name = $('#u-name').value.trim();
       const username = $('#u-username').value.trim();
       const department = $('#u-department').value.trim();
+      const email = $('#u-email').value.trim();
       const password = $('#u-password').value.trim();
       const role = $('#u-role').value;
 
@@ -4097,8 +4161,11 @@ async function renderAdmin() {
       if (password.length < 10) return showAppNotification('Password must be at least 10 characters long.');
 
       try {
-        await api('/auth/users', { method: 'POST', body: { name, username, password, department, role } });
-        reloadWithActionMessage('admin', 'Employee added successfully.');
+        const result = await api('/auth/users', { method: 'POST', body: { name, username, password, department, role, email } });
+        const notice = email
+          ? (result.emailVerificationSent ? ' Employee email verification link sent.' : ` ${result.emailVerificationError || 'Email remains unverified until an administrator sends a verification link.'}`)
+          : '';
+        reloadWithActionMessage('admin', `Employee added successfully.${notice}`);
       } catch (err) { showAppNotification(err.message); }
     };
 
@@ -4257,6 +4324,7 @@ function adminEditUser(user, departments) {
       <div class="user-edit-fields">
         <label class="user-edit-field">Employee name<input id="admin-edit-name" value="${escapeHtml(user.name || user.NAME || '')}" autocomplete="name"></label>
         <label class="user-edit-field">Username<input id="admin-edit-username" value="${escapeHtml(user.username || user.USERNAME || '')}" autocomplete="username"></label>
+        <label class="user-edit-field">Email address<input id="admin-edit-email" type="email" value="${escapeHtml(user.email || '')}" autocomplete="email"></label>
         <label class="user-edit-field">Department<select id="admin-edit-department"><option value="">No department</option>${departments.map(item => {
         const name = item.name || item.NAME || '';
         return `<option value="${escapeHtml(name)}" ${name === department ? 'selected' : ''}>${escapeHtml(name)}</option>`;
@@ -4279,6 +4347,7 @@ function adminEditUser(user, departments) {
     const body = {
       name: $('#admin-edit-name').value.trim(),
       username: $('#admin-edit-username').value.trim(),
+      email: $('#admin-edit-email').value.trim(),
       department: $('#admin-edit-department').value,
       role: isSelf ? role : $('#admin-edit-role').value,
       active: $('#admin-edit-active').value === '1'
@@ -4288,9 +4357,13 @@ function adminEditUser(user, departments) {
     if (password && password.length < 10) { error.textContent = 'Password must be at least 10 characters long.'; return; }
     if (password) body.password = password;
     try {
-      await api(`/auth/users/${userId}`, { method: 'PUT', body });
+      const result = await api(`/auth/users/${userId}`, { method: 'PUT', body });
       closeModal();
-      showAppNotification('Employee details updated.');
+      showAppNotification(result.emailVerificationSent === false
+        ? (result.emailVerificationError || 'Email address saved but not verified; send a verification link.')
+        : result.emailVerificationSent === true
+          ? 'Employee details updated. Email verification link sent.'
+          : 'Employee details updated.');
       await renderAdmin();
     } catch (err) { error.textContent = err.message; }
   };

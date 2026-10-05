@@ -1,0 +1,27 @@
+:root {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #1b2430;
+  background: #f4f7f4;
+}
+* { box-sizing: border-box; }
+body { min-width: 320px; min-height: 100vh; margin: 0; padding: 24px; display: grid; place-items: center; }
+.account-card { width: min(100%, 440px); padding: 34px; border: 1px solid #dce4df; border-radius: 12px; background: #fff; box-shadow: 0 16px 48px rgba(20,33,61,.08); }
+.brand { display: inline-flex; align-items: center; gap: 9px; margin-bottom: 38px; color: #14213d; font-size: 20px; font-weight: 750; letter-spacing: -.04em; text-decoration: none; }
+.brand img { width: 30px; height: 30px; }
+.eyebrow { margin: 0 0 10px; color: #286347; font-size: 10px; font-weight: 800; letter-spacing: .14em; }
+h1 { margin: 0 0 14px; color: #14213d; font-size: 29px; letter-spacing: -.04em; }
+p { color: #667286; font-size: 13px; line-height: 1.65; }
+label { display: block; margin-top: 17px; color: #435066; font-size: 12px; font-weight: 700; }
+input { width: 100%; min-height: 44px; margin-top: 7px; padding: 9px 11px; border: 1px solid #d5ded8; border-radius: 7px; font: inherit; font-size: 14px; }
+input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid #81b89b; outline-offset: 3px; }
+.button { width: 100%; min-height: 45px; display: inline-flex; align-items: center; justify-content: center; margin-top: 17px; border: 0; border-radius: 7px; background: #3d8361; color: #fff; font: inherit; font-size: 13px; font-weight: 700; text-decoration: none; cursor: pointer; }
+.button:hover { background: #286347; }
+.account-login-link { display: inline-block; margin-top: 20px; color: #286347; font-size: 12px; }
+.hidden { display: none !important; }
+#account-status { min-height: 20px; }
+#account-status.error { color: #9c3128; }
+@media (max-width: 480px) {
+  body { padding: 14px; }
+  .account-card { padding: 25px 21px; }
+  .brand { margin-bottom: 29px; }
+}

@@ -9,9 +9,12 @@ const { clearCompanyContextCookie } = require('../company-context');
 const { logActivity } = require('../audit');
 const { asyncHandler, logRequestEvent, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { getPlan, getPlanUsage } = require('../limits');
+const { createIdentityAuthRouter, normalizeEmail, validEmail } = require('./identity-auth');
 
 const router = express.Router();
 wrapAsyncRoutes(router);
+const identityAuth = createIdentityAuthRouter();
+router.use(identityAuth.router);
 const passwordMinLength = 10;
 const sessionCookieName = 'taskflow.sid.v2';
 const dummyPasswordHash = bcrypt.hash(crypto.randomBytes(32).toString('hex'), 10);
@@ -178,7 +181,11 @@ router.post('/login', loginIpLimiter, loginUsernameLimiter, loginCompanyLimiter,
     }
 
     const normalizedUsername = username.trim().toLowerCase();
-    const user = await db.prepare('SELECT * FROM users WHERE username = ?').get(normalizedUsername);
+    let user = await db.prepare('SELECT * FROM users WHERE username = ?').get(normalizedUsername);
+    if (!user && validEmail(normalizedUsername)) {
+      user = await db.prepare(`SELECT * FROM users WHERE lower(trim(email)) = ?
+        AND email_verified = 1 LIMIT 1`).get(normalizedUsername);
+    }
     const passwordHash = user?.password_hash || await dummyPasswordHash;
     const passwordMatches = await bcrypt.compare(password, passwordHash);
     if (!user || Number(user.active) !== 1 || !user.password_hash || !passwordMatches) {
@@ -286,6 +293,7 @@ router.post('/change-password', requireAuth, async (req, res) => {
     const passwordHashNext = await bcrypt.hash(new_password, 10);
     await db.prepare('UPDATE users SET password_hash=?, must_change_password=0, token_version=token_version+1 WHERE id=?')
       .run(passwordHashNext, req.session.userId);
+    await db.prepare("DELETE FROM email_auth_tokens WHERE user_id = ? AND purpose = 'password_reset'").run(req.session.userId);
     await logActivity(req, 'Password changed', 'user', req.session.userId, 'Your password was changed', req.session.userId);
     await deleteUserSessions(req.session.userId, req.session.companyId);
     const updatedUser = await db.prepare('SELECT id, name, role, token_version FROM users WHERE id=?').get(req.session.userId);
@@ -298,13 +306,15 @@ router.post('/change-password', requireAuth, async (req, res) => {
 
 router.get('/me', requireAuth, async (req, res) => {
   try {
-    const user = await db.prepare('SELECT id, name, username, department, role, must_change_password FROM users WHERE id = ?').get(req.session.userId);
+    const user = await db.prepare('SELECT id, name, username, email, email_verified, department, role, must_change_password FROM users WHERE id = ?').get(req.session.userId);
     if (!user) return res.status(401).json({ error: 'User record not found' });
     const planUsage = await getPlanUsage(req);
     res.json({
       id: user.id,
       name: user.name,
       username: user.username,
+      email: user.email,
+      email_verified: Number(user.email_verified) === 1,
       department: user.department,
       role: user.role,
       must_change_password: mustChangePassword(user),
@@ -326,7 +336,7 @@ router.get('/me', requireAuth, async (req, res) => {
 // ---- Admin: user management endpoints ----
 router.get('/users', requireAdmin, async (req, res) => {
   try {
-    const users = await db.prepare('SELECT id, name, username, department, role, active, created_at FROM users ORDER BY name').all();
+    const users = await db.prepare('SELECT id, name, username, email, email_verified, department, role, active, created_at FROM users ORDER BY name').all();
     res.json(users);
   } catch (err) {
     sendInternalError(res, err, 'User list request failed');
@@ -393,23 +403,26 @@ router.post('/users', requireAdmin, async (req, res) => {
     if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
       return res.status(400).json({ error: 'User details must be provided as an object.' });
     }
-    const { name, username, password, department, role } = req.body;
+    const { name, username, password, department, role, email } = req.body;
     if (typeof name !== 'string' || typeof username !== 'string' || typeof password !== 'string'
+      || (email !== undefined && typeof email !== 'string')
       || (department !== undefined && typeof department !== 'string')
       || (role !== undefined && !['admin', 'employee'].includes(role))) {
       return res.status(400).json({ error: 'Name, username, password, department, or role has an invalid type or value.' });
     }
     const normalizedName = name.trim();
     const normalizedUsername = username.trim().toLowerCase();
+    const normalizedEmail = email === undefined ? '' : normalizeEmail(email);
     if (!normalizedName || !normalizedUsername) return res.status(400).json({ error: 'Name and username are required.' });
+    if (normalizedEmail && !validEmail(normalizedEmail)) return res.status(400).json({ error: 'Enter a valid email address.' });
     if (password.length < passwordMinLength) return res.status(400).json({ error: `Password must be at least ${passwordMinLength} characters.` });
 
     const plan = await getPlan(req);
     const hash = await bcrypt.hash(password, 10);
     const inserted = await db.batch([
       {
-        sql: `INSERT INTO users (name, username, password_hash, department, role)
-          SELECT ?, ?, ?, ?, ?
+        sql: `INSERT INTO users (name, username, password_hash, department, role, email)
+          SELECT ?, ?, ?, ?, ?, ?
           WHERE ? IS NULL OR (SELECT COUNT(*) FROM users WHERE active = 1) < ?`,
         args: [
           normalizedName,
@@ -417,6 +430,7 @@ router.post('/users', requireAdmin, async (req, res) => {
           hash,
           (department || '').trim(),
           role === 'admin' ? 'admin' : 'employee',
+          normalizedEmail || null,
           plan?.maxUsers ?? null,
           plan?.maxUsers ?? null
         ]
@@ -429,9 +443,15 @@ router.post('/users', requireAdmin, async (req, res) => {
     const userId = Number(inserted?.[1]?.rows?.[0]?.id);
     if (!Number.isSafeInteger(userId) || userId < 1) throw new Error('New user record was not returned after insert.');
     await logActivity(req, 'Employee added', 'user', userId, `${normalizedName} (${normalizedUsername})`, userId);
-    res.json({ id: userId });
+    const verification = normalizedEmail
+      ? await identityAuth.sendVerificationEmail(req, { id: userId, email: normalizedEmail })
+      : { sent: false, error: null };
+    res.json({ id: userId, emailVerificationSent: verification.sent, emailVerificationError: verification.error });
   } catch (e) {
     if (/unique constraint/i.test(String(e.message))) {
+      if (/users_email_lower_unique|users\.email/i.test(String(e.message))) {
+        return res.status(409).json({ error: 'That email address is already attached to another user.' });
+      }
       return res.status(409).json({ error: 'That username is already in use.' });
     }
     sendInternalError(res, e, 'User creation failed');
@@ -452,6 +472,7 @@ router.put('/users/:id/reset-password', requireAdmin, async (req, res) => {
     if (Number(target.active) !== 1) return res.status(400).json({ error: 'Cannot reset a deactivated user account.' });
     const hash = await bcrypt.hash(password, 10);
     await db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1, token_version = token_version + 1 WHERE id = ?').run(hash, id);
+    await db.prepare("DELETE FROM email_auth_tokens WHERE user_id = ? AND purpose = 'password_reset'").run(id);
     await deleteUserSessions(id, req.session.companyId);
     await logActivity(req, 'Employee password changed', 'user', id, target.name, id);
     res.json({ ok: true });
@@ -460,13 +481,31 @@ router.put('/users/:id/reset-password', requireAdmin, async (req, res) => {
   }
 });
 
+router.post('/users/:id/send-verification', requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'Invalid user id.' });
+    const user = await db.prepare('SELECT id, email, email_verified, active FROM users WHERE id = ?').get(id);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+    if (Number(user.active) !== 1) return res.status(400).json({ error: 'Cannot verify an inactive user account.' });
+    if (!user.email) return res.status(400).json({ error: 'Add an email address before sending a verification link.' });
+    if (Number(user.email_verified) === 1) return res.status(400).json({ error: 'This email address is already verified.' });
+    const result = await identityAuth.sendVerificationEmail(req, user);
+    if (!result.sent) return res.status(503).json({ error: result.error });
+    return res.json({ sent: true });
+  } catch (error) {
+    sendInternalError(res, error, 'Verification email could not be sent');
+  }
+});
+
 router.put('/users/:id', requireAdmin, async (req, res) => {
   try {
-    const { name, username, department, role, active, password } = req.body || {};
+    const { name, username, department, role, active, password, email } = req.body || {};
     const id = Number(req.params.id);
     if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'Invalid user id.' });
     if ((name !== undefined && typeof name !== 'string')
       || (username !== undefined && typeof username !== 'string')
+      || (email !== undefined && typeof email !== 'string')
       || (department !== undefined && typeof department !== 'string')
       || (role !== undefined && !['admin', 'employee'].includes(role))
       || (active !== undefined && ![true, false, 0, 1].includes(active))) {
@@ -475,7 +514,7 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
     if (password !== undefined && password !== '' && typeof password !== 'string') {
       return res.status(400).json({ error: 'Password must be a string.' });
     }
-    const target = await db.prepare('SELECT name, username, department, role, active FROM users WHERE id = ?').get(id);
+    const target = await db.prepare('SELECT name, username, email, email_verified, department, role, active FROM users WHERE id = ?').get(id);
     if (!target) return res.status(404).json({ error: 'User not found.' });
     const nextActive = active === undefined ? undefined : active === true || Number(active) === 1;
     const nextRole = role === undefined ? undefined : role;
@@ -490,11 +529,18 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
     if (password && password.length < passwordMinLength) return res.status(400).json({ error: `Password must be at least ${passwordMinLength} characters.` });
     const nextName = name === undefined ? undefined : name.trim();
     const nextUsername = username === undefined ? undefined : username.trim().toLowerCase();
+    const nextEmail = email === undefined ? undefined : normalizeEmail(email);
+    const emailChanged = nextEmail !== undefined && nextEmail !== normalizeEmail(target.email);
     if (nextName === '') return res.status(400).json({ error: 'Employee name cannot be empty.' });
     if (nextUsername === '') return res.status(400).json({ error: 'Username cannot be empty.' });
+    if (nextEmail && !validEmail(nextEmail)) return res.status(400).json({ error: 'Enter a valid email address.' });
     if (nextUsername !== undefined) {
       const duplicate = await db.prepare('SELECT id FROM users WHERE username = ? AND id <> ?').get(nextUsername, id);
       if (duplicate) return res.status(409).json({ error: 'That username is already in use.' });
+    }
+    if (emailChanged && nextEmail) {
+      const duplicate = await db.prepare('SELECT id FROM users WHERE lower(trim(email)) = ? AND id <> ?').get(nextEmail, id);
+      if (duplicate) return res.status(409).json({ error: 'That email address is already attached to another user.' });
     }
 
     if (activeChanged && nextActive) {
@@ -509,6 +555,12 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
     
     if (nextName !== undefined) await db.prepare('UPDATE users SET name = ? WHERE id = ?').run(nextName, id);
     if (nextUsername !== undefined) await db.prepare('UPDATE users SET username = ? WHERE id = ?').run(nextUsername, id);
+    if (emailChanged) {
+      await db.prepare(`UPDATE users SET email = ?, email_verified = 0, google_sub = NULL
+        WHERE id = ?`).run(nextEmail || null, id);
+      await db.prepare('DELETE FROM email_auth_tokens WHERE user_id = ?').run(id);
+      await logActivity(req, 'Email address changed', 'user', id, target.name, id);
+    }
     if (department !== undefined) {
       const nextDepartment = department.trim();
       await db.prepare('UPDATE users SET department = ? WHERE id = ?').run(nextDepartment, id);
@@ -524,16 +576,28 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
     if (password) {
       const hash = await bcrypt.hash(password, 10);
       await db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1, token_version = token_version + 1 WHERE id = ?').run(hash, id);
+      await db.prepare("DELETE FROM email_auth_tokens WHERE user_id = ? AND purpose = 'password_reset'").run(id);
     } else if (roleChanged || activeChanged) {
       await db.prepare('UPDATE users SET token_version = token_version + 1 WHERE id = ?').run(id);
     }
+    if (activeChanged && !nextActive) await db.prepare('DELETE FROM email_auth_tokens WHERE user_id = ?').run(id);
     if (password || roleChanged || activeChanged) await deleteUserSessions(id, req.session.companyId);
     if ((password || roleChanged || activeChanged) && id === Number(req.session.userId) && nextActive !== false) {
       const updatedUser = await db.prepare('SELECT id, name, role, token_version FROM users WHERE id = ?').get(id);
       await setAuthenticatedSession(req, updatedUser);
     }
-    res.json({ ok: true });
+    const verification = emailChanged && nextEmail
+      ? await identityAuth.sendVerificationEmail(req, { id, email: nextEmail })
+      : null;
+    res.json({
+      ok: true,
+      emailVerificationSent: verification?.sent ?? null,
+      emailVerificationError: verification?.error ?? null
+    });
   } catch (error) {
+    if (/users_email_lower_unique/i.test(String(error.message))) {
+      return res.status(409).json({ error: 'That email address is already attached to another user.' });
+    }
     sendInternalError(res, error, 'User update failed');
   }
 });
@@ -545,6 +609,7 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
     if (!target) return res.status(404).json({ error: 'User not found.' });
     await db.prepare('UPDATE users SET active = 0 WHERE id = ?').run(req.params.id);
     await db.prepare('UPDATE users SET token_version = token_version + 1 WHERE id = ?').run(req.params.id);
+    await db.prepare('DELETE FROM email_auth_tokens WHERE user_id = ?').run(req.params.id);
     await deleteUserSessions(req.params.id, req.session.companyId);
     await logActivity(req, 'Employee access removed', 'user', req.params.id, target.name, Number(req.params.id));
     res.json({ ok: true, archived: true });

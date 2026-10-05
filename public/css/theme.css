@@ -115,6 +115,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 input::placeholder, textarea::placeholder { color: #9CA3AF; }
 label { color: var(--ink-2); }
 .form-error { color: var(--red); font-size: 13px; font-weight: 500; }
+.login-provider-actions { display: grid; gap: 10px; margin-top: 14px; }
+.login-provider-actions .link-btn { justify-self: center; }
+#password-reset-request-form { margin-top: 14px; }
+#password-reset-request-status { min-height: 18px; margin: 0; }
 
 /* ---------- 5. Login ---------- */
 .login-screen {

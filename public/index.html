@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="/icons/taskflow.svg">
 <link rel="icon" href="/icons/taskflow.svg">
 <link rel="stylesheet" href="/css/style.css?v=20260930-12">
-<link rel="stylesheet" href="/css/theme.css?v=6">
+<link rel="stylesheet" href="/css/theme.css?v=7">
 <link rel="preload" href="/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
 </head>
 <body>
@@ -54,14 +54,25 @@
       <label>Company code <span class="login-optional">(optional for the existing workspace)</span>
         <input type="text" id="login-company-code" autocomplete="organization" maxlength="63" autocapitalize="none" spellcheck="false">
       </label>
-      <label>Username
-        <input type="text" id="login-username" autocomplete="username" required>
+      <label>Username or verified email
+        <input type="text" id="login-username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
       </label>
       <label>Password
         <input type="password" id="login-password" autocomplete="current-password" required>
       </label>
       <div id="login-error" class="form-error"></div>
       <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+    </form>
+    <div class="login-provider-actions">
+      <button type="button" class="btn btn-secondary btn-block" id="google-login-button">Continue with Google</button>
+      <button type="button" class="link-btn" id="forgot-password-button">Forgot password?</button>
+    </div>
+    <form id="password-reset-request-form" class="hidden">
+      <label>Email address
+        <input type="email" id="password-reset-email" autocomplete="email" maxlength="254" required>
+      </label>
+      <p id="password-reset-request-status" class="form-error" role="status" aria-live="polite"></p>
+      <button type="submit" class="btn btn-secondary btn-block">Send reset link</button>
     </form>
   </div>
 </div>
@@ -384,6 +395,6 @@
   <div class="modal" id="modal" role="dialog" aria-modal="true" tabindex="-1"></div>
 </div>
 
-<script src="/js/app.js?v=20261005-2"></script>
+<script src="/js/app.js?v=20261005-3"></script>
 </body>
 </html>

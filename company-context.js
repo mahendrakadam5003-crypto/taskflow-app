@@ -7,6 +7,13 @@ const { hasControlDatabaseConfiguration, LEGACY_TENANT_ID } = require('./tenant-
 const COMPANY_CONTEXT_COOKIE = 'taskflow.company.v1';
 const COMPANY_CONTEXT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const COMPANY_CODE_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const PUBLIC_AUTH_COMPANY_CONTEXT_PATHS = new Set([
+  '/api/auth/google/start',
+  '/api/auth/google/callback',
+  '/api/auth/email/verify',
+  '/api/auth/password-reset/request',
+  '/api/auth/password-reset/complete'
+]);
 
 function signCompanyCode(companyCode, secret = process.env.SESSION_SECRET) {
   if (!COMPANY_CODE_PATTERN.test(companyCode)) throw new TypeError('A valid company code is required.');
@@ -119,13 +126,34 @@ function createCompanyContextMiddleware({
     }
 
     const isLogin = req.method === 'POST' && req.path === '/api/auth/login';
-    const hasExplicitLoginCode = isLogin && Object.prototype.hasOwnProperty.call(req.body || {}, 'company_code');
-    const explicitCompanyCode = hasExplicitLoginCode
-      ? (typeof req.body.company_code === 'string' ? req.body.company_code.trim().toLowerCase() : null)
-      : null;
-    const isDefaultCompanyLogin = isLogin && (!hasExplicitLoginCode || explicitCompanyCode === '');
+    const isPublicAuthRequest = PUBLIC_AUTH_COMPANY_CONTEXT_PATHS.has(req.path);
+    const isCompanySelectionRequest = isLogin || isPublicAuthRequest;
 
-    if (!isLogin && req.session?.companyId != null) {
+    if (req.path === '/api/auth/google/callback' && req.session?.googleOAuth?.companyId != null) {
+      const companyId = req.session.googleOAuth.companyId;
+      if (String(companyId) === LEGACY_TENANT_ID) return runLegacyContext(req, next);
+      const normalizedCompanyId = Number(companyId);
+      if (!Number.isSafeInteger(normalizedCompanyId) || normalizedCompanyId < 1) {
+        return res.status(401).json({ error: 'Company workspace could not be resolved.' });
+      }
+      return resolveCompanyById(normalizedCompanyId).then(company => {
+        if (!company || company.status === 'deleted') {
+          return res.status(401).json({ error: 'Company workspace could not be resolved.' });
+        }
+        return runCompanyContext(company, next, req);
+      }).catch(next);
+    }
+
+    const hasExplicitLoginCode = isCompanySelectionRequest
+      && (Object.prototype.hasOwnProperty.call(req.body || {}, 'company_code')
+        || Object.prototype.hasOwnProperty.call(req.query || {}, 'company_code'));
+    const rawCompanyCode = req.body?.company_code ?? req.query?.company_code;
+    const explicitCompanyCode = hasExplicitLoginCode
+      ? (typeof rawCompanyCode === 'string' ? rawCompanyCode.trim().toLowerCase() : null)
+      : null;
+    const isDefaultCompanyLogin = isCompanySelectionRequest && (!hasExplicitLoginCode || explicitCompanyCode === '');
+
+    if (!isCompanySelectionRequest && req.session?.companyId != null) {
       if (String(req.session.companyId) === LEGACY_TENANT_ID) return runLegacyContext(req, next);
       const companyId = Number(req.session.companyId);
       if (!Number.isSafeInteger(companyId) || companyId < 1) {
@@ -160,7 +188,7 @@ function createCompanyContextMiddleware({
       return res.status(401).json({ error: 'Company code or login credentials are incorrect.' });
     }
 
-    if (!isLogin || !explicitCompanyCode) {
+    if (!isCompanySelectionRequest || !explicitCompanyCode) {
       return runLegacyContext(req, next);
     }
 

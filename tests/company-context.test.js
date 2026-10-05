@@ -63,6 +63,16 @@ test('legacy and registered-company sign-in preserve existing credentials and is
     if (req.companyCode) setCompanyContextCookie(res, req.companyCode, { secret: sessionSecret });
     return res.json({ user: req.body.username, marker: user.marker });
   });
+  app.post('/api/auth/password-reset/request', (req, res) => {
+    res.json({ tenantId: manager.getCurrentTenantId() });
+  });
+  app.get('/api/auth/google/start', (req, res) => {
+    req.session.googleOAuth = { companyId: req.companyTenantId };
+    res.json({ tenantId: manager.getCurrentTenantId() });
+  });
+  app.get('/api/auth/google/callback', (req, res) => {
+    res.json({ tenantId: manager.getCurrentTenantId() });
+  });
   app.get('/api/context', (req, res) => {
     res.json({ tenantId: manager.getCurrentTenantId(), companyStatus: req.companyStatus || null });
   });
@@ -146,6 +156,21 @@ test('legacy and registered-company sign-in preserve existing credentials and is
       })
     });
     assert.equal(wrongCompanyLogin.status, 401);
+
+    const resetRequest = await fetch(`${baseUrl}/api/auth/password-reset/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'person@example.test', company_code: 'second-company' })
+    });
+    assert.deepEqual(await resetRequest.json(), { tenantId: 202 });
+
+    const googleStart = await fetch(`${baseUrl}/api/auth/google/start?company_code=second-company`);
+    assert.deepEqual(await googleStart.json(), { tenantId: 202 });
+    const googleSession = getCookies(googleStart).find(cookie => cookie.startsWith('connect.sid='));
+    const googleCallback = await fetch(`${baseUrl}/api/auth/google/callback`, {
+      headers: { Cookie: googleSession }
+    });
+    assert.deepEqual(await googleCallback.json(), { tenantId: 202 });
 
     const secondLogin = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',

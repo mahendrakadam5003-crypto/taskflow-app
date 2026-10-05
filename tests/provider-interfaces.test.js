@@ -38,17 +38,36 @@ test('manual payment provider reports manual handling and rejects webhook verifi
   assert.deepEqual(await provider.verifyWebhook({ body: {} }), { verified: false, event: null });
 });
 
-test('console mailer logs recipient metadata but never message contents', async () => {
+test('SMTP mailer sends configured messages without logging recipients or message contents', async () => {
   const logs = [];
-  const mailer = createMailer({ logger: entry => logs.push(entry) });
+  const messages = [];
+  const mailer = createMailer({
+    environment: {
+      SMTP_HOST: 'smtp.example.test',
+      SMTP_PORT: '587',
+      SMTP_USER: 'smtp-user',
+      SMTP_PASSWORD: 'smtp-secret',
+      SMTP_FROM: 'TaskFlow <noreply@example.test>'
+    },
+    logger: entry => logs.push(entry),
+    createTransport: options => {
+      assert.equal(options.requireTLS, true);
+      assert.equal(options.tls.rejectUnauthorized, true);
+      return { async sendMail(message) { messages.push(message); return { accepted: [message.to] }; } };
+    }
+  });
   const result = await mailer.send({
     to: 'person@example.test',
     subject: 'Password reset',
-    text: 'reset_token=private password=private'
+    text: 'reset_token=private'
   });
 
-  assert.deepEqual(result, { accepted: false, previewed: true });
-  assert.equal(logs.length, 1);
-  assert.match(logs[0], /person@example\.test/);
-  assert.doesNotMatch(logs[0], /reset_token|password=private/);
+  assert.deepEqual(result, { accepted: true, previewed: false });
+  assert.equal(mailer.isConfigured(), true);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].to, 'person@example.test');
+  assert.doesNotMatch(JSON.stringify(logs), /person@example\.test|reset_token|smtp-secret/);
+  await assert.rejects(createMailer({ environment: {} }).send({
+    to: 'person@example.test', subject: 'Reset', text: 'token'
+  }), /SMTP email delivery is not configured/);
 });

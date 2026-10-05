@@ -32,6 +32,16 @@ const isRender = process.env.RENDER === 'true';
 const isTailscaleServe = process.env.TAILSCALE_SERVE === 'true';
 const bindAddress = isRender ? '0.0.0.0' : '127.0.0.1';
 const sessionMaxAgeMs = 14 * 24 * 60 * 60 * 1000;
+const anonymousAuthRequests = new Set([
+  'POST /api/auth/login',
+  'POST /api/auth/logout',
+  'POST /api/auth/end-support',
+  'GET /api/auth/google/start',
+  'GET /api/auth/google/callback',
+  'POST /api/auth/email/verify',
+  'POST /api/auth/password-reset/request',
+  'POST /api/auth/password-reset/complete'
+]);
 if (isRender || isTailscaleServe) app.set('trust proxy', 1);
 
 const nativeAppOrigins = new Set(['capacitor://localhost', 'http://localhost', 'https://localhost', 'ionic://localhost']);
@@ -402,7 +412,7 @@ app.use((req, res, next) => {
     || req.path === '/api/public/demo-requests'
     || req.path === '/api/superadmin'
     || req.path.startsWith('/api/superadmin/')) return next();
-  if (req.method === 'POST' && ['/api/auth/login', '/api/auth/logout', '/api/auth/end-support'].includes(req.path)) return next();
+  if (anonymousAuthRequests.has(`${req.method} ${req.path}`)) return next();
   return requireAuth(req, res, next);
 });
 app.use(entitlementMiddleware);

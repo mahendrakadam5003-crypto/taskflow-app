@@ -116,6 +116,13 @@ function createEntitlementService({
 
 function createEntitlementMiddleware({ getCompanyAccessState }) {
   if (typeof getCompanyAccessState !== 'function') throw new TypeError('An entitlement state resolver is required.');
+  const accountRecoveryPaths = new Set([
+    'GET /api/auth/google/start',
+    'GET /api/auth/google/callback',
+    'POST /api/auth/email/verify',
+    'POST /api/auth/password-reset/request',
+    'POST /api/auth/password-reset/complete'
+  ]);
   return (req, res, next) => {
     if (!req.path.startsWith('/api/') || req.path.startsWith('/api/public/')
       || req.path === '/api/superadmin' || req.path.startsWith('/api/superadmin/')) return next();
@@ -130,6 +137,7 @@ function createEntitlementMiddleware({ getCompanyAccessState }) {
       const logoutOrPassword = req.method === 'POST'
         && ['/api/auth/logout', '/api/auth/change-password', '/auth/logout', '/auth/change-password'].includes(req.path);
       if (logoutOrPassword) return next();
+      if (accountRecoveryPaths.has(`${req.method} ${req.path}`)) return next();
       if (req.method === 'POST' && req.path === '/api/auth/login') return next();
 
       const adminBillingPath = req.session?.role === 'admin'

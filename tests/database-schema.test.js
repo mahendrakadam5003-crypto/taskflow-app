@@ -61,7 +61,10 @@ test('tenant identity schema upgrade preserves existing users and is repeatable'
       [77, 'Legacy Employee', 'legacy.employee', 'existing-password-hash', null, 0, null, 'password']
     ]);
     const version = await client.execute('SELECT MAX(version) AS version FROM schema_version');
-    assert.equal(Number(version.rows[0].version), 4);
+    assert.equal(Number(version.rows[0].version), 5);
+    const tokenTable = await client.execute('PRAGMA table_info(email_auth_tokens)');
+    assert.ok(tokenTable.rows.some(row => row.name === 'token_hash'));
+    assert.ok(tokenTable.rows.some(row => row.name === 'expires_at'));
 
     await client.execute({
       sql: 'INSERT INTO users (name, username, password_hash, email, google_sub) VALUES (?, ?, ?, ?, ?)',

@@ -38,6 +38,18 @@ test('public root serves landing page and /app preserves the workspace login', a
   assert.equal(privacy.status, 200);
   assert.match(await privacy.text(), /Demo request privacy notice/);
 
+  const verifyPage = await fetch(`${baseUrl}/verify-email.html`);
+  assert.equal(verifyPage.status, 200);
+  assert.match(await verifyPage.text(), /noindex,nofollow/);
+
+  const resetPage = await fetch(`${baseUrl}/password-reset.html`);
+  assert.equal(resetPage.status, 200);
+  assert.match(await resetPage.text(), /id="password-reset-form"/);
+
+  const robots = await (await fetch(`${baseUrl}/robots.txt`)).text();
+  assert.match(robots, /Disallow: \/app/);
+  assert.match(robots, /Disallow: \/superadmin/);
+
   const manifest = await (await fetch(`${baseUrl}/manifest.webmanifest`)).json();
   assert.equal(manifest.start_url, '/app');
 });

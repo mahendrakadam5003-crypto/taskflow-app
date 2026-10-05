@@ -745,6 +745,20 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_unique ON users(google_sub) WHERE google_sub IS NOT NULL');
       await markSchemaVersion(4);
     }
+    if (schemaVersion < 5) {
+      await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS email_auth_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        purpose TEXT NOT NULL CHECK (purpose IN ('verify_email', 'password_reset')),
+        email TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS email_auth_tokens_user_purpose_idx ON email_auth_tokens(user_id, purpose)');
+      await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS email_auth_tokens_expiry_idx ON email_auth_tokens(expires_at)');
+      await markSchemaVersion(5);
+    }
     console.log('Database schema and default settings are ready.');
   } catch (err) {
     console.error(JSON.stringify({ event: 'tenant_database_initialization_failed', company_id: companyId ?? null }));
