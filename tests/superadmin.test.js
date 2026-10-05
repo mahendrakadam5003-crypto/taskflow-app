@@ -266,6 +266,12 @@ test('super-admin login uses an isolated hashed session and protects the read-on
     assert.equal(session.status, 200);
     assert.deepEqual((await session.json()).admin, { id: 1, name: 'Test Owner', username: 'test owner' });
 
+    await controlDb.execute({
+      sql: `INSERT INTO subscriptions (
+        company_id, billing_cycle, seats, unit_price_paise, status, current_period_start, current_period_end
+      ) VALUES (1, 'monthly', 3, 19900, 'active', '2026-10-01', '2026-11-01')`,
+      args: []
+    });
     const overview = await fetch(`${baseUrl}/overview`, { headers: { Cookie: cookieHeader.split(';')[0] } });
     assert.equal(overview.status, 200);
     const data = await overview.json();
@@ -273,10 +279,16 @@ test('super-admin login uses an isolated hashed session and protects the read-on
       companyCount: 1,
       trialCount: 0,
       activeCount: 1,
+      activePaidCount: 1,
+      trialEndingSoonCount: 0,
       suspendedCount: 0,
       cancelledCount: 0,
+      paidSeats: 3,
+      monthlyRecurringRevenuePaise: 59700,
+      annualRecurringRevenuePaise: 716400,
       totalUsers: 7,
-      totalStorageBytes: 6144
+      totalStorageBytes: 6144,
+      allocatedStorageBytes: 10737418240
     });
     assert.equal(data.companies[0].name, 'Test Company');
     assert.equal(data.companies[0].planName, 'Team');
@@ -420,6 +432,65 @@ test('cancelling a company retains its data and does not schedule automatic dele
     const activeCompany = await controlDb.execute({ sql: 'SELECT status, delete_after FROM companies WHERE id = ?', args: [1] });
     assert.equal(activeCompany.rows[0].status, 'active');
     assert.equal(activeCompany.rows[0].delete_after, null);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await controlDb.close();
+  }
+});
+
+test('live storage refresh measures tenant bytes, records a fresh snapshot, and audits the action', async () => {
+  let scopedCompanyId = null;
+  const tenantDatabase = {
+    async runWithTenant(companyId, callback) {
+      scopedCompanyId = companyId;
+      return callback();
+    },
+    prepare(sql) {
+      return {
+        async get() {
+          if (sql.includes('COUNT(*) AS count FROM users')) return { count: 5 };
+          if (sql.includes('PRAGMA page_count')) return { page_count: 10 };
+          if (sql.includes('PRAGMA page_size')) return { page_size: 4096 };
+          if (sql.includes('FROM file_usage')) return { bytes: 1_000_000 };
+          assert.fail(`Unexpected tenant usage query: ${sql}`);
+        }
+      };
+    }
+  };
+  const { controlDb, server, baseUrl } = await createApp({ tenantDatabase });
+  try {
+    await controlDb.execute({
+      sql: 'UPDATE companies SET storage_limit_mb_override = 1 WHERE id = 1',
+      args: []
+    });
+    const login = await fetch(`${baseUrl}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'test owner', password: 'Superadmin-Test-Password-2026!' })
+    });
+    const headers = { Cookie: login.headers.get('set-cookie').split(';', 1)[0] };
+    const refreshed = await fetch(`${baseUrl}/companies/1/storage/refresh`, { method: 'POST', headers });
+    assert.equal(refreshed.status, 200, await refreshed.clone().text());
+    const result = await refreshed.json();
+    assert.equal(scopedCompanyId, 1);
+    assert.equal(result.allocatedBytes, 1_048_576);
+    assert.equal(result.databaseBytes, 40_960);
+    assert.equal(result.fileBytes, 1_000_000);
+    assert.equal(result.usedBytes, 1_040_960);
+    assert.equal(result.remainingBytes, 7_616);
+    assert.equal(result.percentUsed, 99.3);
+    assert.ok(result.updatedAt);
+
+    const snapshot = await controlDb.execute({
+      sql: 'SELECT user_count, db_bytes, files_bytes FROM usage_snapshots WHERE company_id = 1 ORDER BY id DESC LIMIT 1',
+      args: []
+    });
+    assert.deepEqual(snapshot.rows[0], { user_count: 5, db_bytes: 40_960, files_bytes: 1_000_000 });
+    const audit = await controlDb.execute({
+      sql: "SELECT action FROM super_admin_audit WHERE company_id = 1 AND action = 'Live storage refreshed'",
+      args: []
+    });
+    assert.equal(audit.rows.length, 1);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await controlDb.close();

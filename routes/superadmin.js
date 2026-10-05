@@ -406,7 +406,7 @@ function createSuperAdminRouter({
     const admin = await getAuthenticatedAdmin(req);
     if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
     const controlDb = await getDatabase();
-    const [statusResult, companiesResult, plansResult] = await Promise.all([
+    const [statusResult, companiesResult, plansResult, subscriptionsResult] = await Promise.all([
       controlDb.execute(`SELECT status, COUNT(*) AS company_count
         FROM companies WHERE status <> 'deleted' GROUP BY status`),
         controlDb.execute(`SELECT c.id, c.code, c.name, c.owner_name, c.owner_email, c.status, c.plan_id,
@@ -422,7 +422,9 @@ function createSuperAdminRouter({
         WHERE c.status <> 'deleted'
         ORDER BY c.created_at DESC, c.id DESC`),
       controlDb.execute(`SELECT id, name, max_users, storage_limit_mb
-        FROM plans WHERE is_active = 1 ORDER BY id`)
+        FROM plans WHERE is_active = 1 ORDER BY id`),
+      controlDb.execute(`SELECT company_id, billing_cycle, seats, unit_price_paise
+        FROM subscriptions WHERE status = 'active'`)
     ]);
     const companies = companiesResult.rows.map(row => ({
       id: Number(row.id),
@@ -448,6 +450,39 @@ function createSuperAdminRouter({
     }));
     const statusCounts = Object.fromEntries(statusResult.rows.map(row => [row.status, Number(row.company_count)]));
     const latestUsage = companies.filter(company => company.userCount !== null);
+    let monthlyRecurringRevenuePaise = 0n;
+    let paidSeats = 0;
+    const paidCompanyIds = new Set();
+    for (const subscription of subscriptionsResult.rows || []) {
+      const seats = Number(subscription.seats);
+      const unitPricePaise = Number(subscription.unit_price_paise);
+      if (!Number.isSafeInteger(seats) || seats < 1
+        || !Number.isSafeInteger(unitPricePaise) || unitPricePaise < 0) {
+        throw new Error('An active subscription has invalid seat or price data.');
+      }
+      const periodRevenue = BigInt(unitPricePaise) * BigInt(seats);
+      monthlyRecurringRevenuePaise += subscription.billing_cycle === 'yearly'
+        ? (periodRevenue * 2n + 12n) / 24n
+        : periodRevenue;
+      paidSeats += seats;
+      paidCompanyIds.add(Number(subscription.company_id));
+    }
+    const annualRecurringRevenuePaise = monthlyRecurringRevenuePaise * 12n;
+    if (monthlyRecurringRevenuePaise > BigInt(Number.MAX_SAFE_INTEGER)
+      || annualRecurringRevenuePaise > BigInt(Number.MAX_SAFE_INTEGER)
+      || !Number.isSafeInteger(paidSeats)) {
+      throw new Error('Active subscription totals exceed the supported range.');
+    }
+    const twoDaysFromNow = Date.now() + 2 * 24 * 60 * 60 * 1000;
+    const trialEndingSoonCount = companies.filter(company => {
+      if (company.status !== 'trial' || !company.trialEndsAt) return false;
+      const end = new Date(/^\d{4}-\d{2}-\d{2}$/.test(company.trialEndsAt)
+        ? `${company.trialEndsAt}T23:59:59.999Z` : company.trialEndsAt).getTime();
+      return Number.isFinite(end) && end >= Date.now() && end <= twoDaysFromNow;
+    }).length;
+    const storageAllocationUnlimited = companies.some(company => company.storageLimitMb === null);
+    const allocatedStorageBytes = storageAllocationUnlimited ? null
+      : companies.reduce((total, company) => total + company.storageLimitMb * 1024 * 1024, 0);
     res.set('Cache-Control', 'no-store');
     return res.json({
       admin: { name: admin.name, username: admin.username },
@@ -455,10 +490,16 @@ function createSuperAdminRouter({
         companyCount: companies.length,
         trialCount: statusCounts.trial || 0,
         activeCount: statusCounts.active || 0,
+        activePaidCount: paidCompanyIds.size,
+        trialEndingSoonCount,
         suspendedCount: statusCounts.suspended || 0,
         cancelledCount: statusCounts.cancelled || 0,
+        paidSeats,
+        monthlyRecurringRevenuePaise: Number(monthlyRecurringRevenuePaise),
+        annualRecurringRevenuePaise: Number(annualRecurringRevenuePaise),
         totalUsers: latestUsage.reduce((total, company) => total + company.userCount, 0),
-        totalStorageBytes: latestUsage.reduce((total, company) => total + company.dbBytes + company.filesBytes, 0)
+        totalStorageBytes: latestUsage.reduce((total, company) => total + company.dbBytes + company.filesBytes, 0),
+        allocatedStorageBytes
       },
       companies,
       plans: plansResult.rows.map(row => ({
@@ -599,8 +640,10 @@ function createSuperAdminRouter({
       controlDb.execute({
         sql: `SELECT c.id, c.code, c.name, c.owner_name, c.owner_email, c.owner_phone, c.status,
             c.plan_id, c.trial_ends_at, c.last_login_at, c.delete_after, c.max_users_override, c.storage_limit_mb_override,
+            c.trial_policy_version, ps.trial_storage_limit_mb,
             c.notes, c.created_at, p.name AS plan_name, p.max_users, p.storage_limit_mb
           FROM companies c LEFT JOIN plans p ON p.id = c.plan_id
+          LEFT JOIN pricing_settings ps ON ps.id = 1
           WHERE c.id = ? AND c.status <> 'deleted'`,
         args: [companyId]
       }),
@@ -636,6 +679,13 @@ function createSuperAdminRouter({
     ]);
     const row = companyResult.rows?.[0];
     if (!row) return res.status(404).json({ error: 'Company not found.' });
+    let effectiveStorageLimitMb = row.storage_limit_mb_override == null
+      ? (row.storage_limit_mb == null ? null : Number(row.storage_limit_mb))
+      : Number(row.storage_limit_mb_override);
+    if (row.status === 'trial' && Number(row.trial_policy_version) === 1) {
+      const trialLimit = Number(row.trial_storage_limit_mb ?? 1024);
+      effectiveStorageLimitMb = effectiveStorageLimitMb == null ? trialLimit : Math.min(effectiveStorageLimitMb, trialLimit);
+    }
     res.set('Cache-Control', 'no-store');
     return res.json({
       company: {
@@ -644,6 +694,7 @@ function createSuperAdminRouter({
         planId: row.plan_id == null ? null : Number(row.plan_id), planName: row.plan_name,
         maxUsers: row.max_users == null ? null : Number(row.max_users),
         storageLimitMb: row.storage_limit_mb == null ? null : Number(row.storage_limit_mb),
+        effectiveStorageLimitMb,
         maxUsersOverride: row.max_users_override == null ? null : Number(row.max_users_override),
         storageLimitMbOverride: row.storage_limit_mb_override == null ? null : Number(row.storage_limit_mb_override),
         trialEndsAt: row.trial_ends_at, lastLoginAt: row.last_login_at, deleteAfter: row.delete_after,
@@ -674,6 +725,90 @@ function createSuperAdminRouter({
         id: Number(note.id), amountText: note.amount_text, note: note.note,
         markedPaidAt: note.marked_paid_at, markedByName: note.marked_by_name, createdAt: null
       }))
+    });
+  }));
+
+  router.post('/companies/:companyId/storage/refresh', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    if (!Number.isSafeInteger(companyId) || companyId < 1) return res.status(400).json({ error: 'Choose a valid company.' });
+    const controlDb = await getDatabase();
+    const companyResult = await controlDb.execute({
+      sql: `SELECT c.id, c.status, c.trial_policy_version, c.storage_limit_mb_override,
+          p.storage_limit_mb, ps.trial_storage_limit_mb
+        FROM companies c LEFT JOIN plans p ON p.id = c.plan_id
+        LEFT JOIN pricing_settings ps ON ps.id = 1
+        WHERE c.id = ? AND c.status <> 'deleted' LIMIT 1`,
+      args: [companyId]
+    });
+    const company = companyResult.rows?.[0];
+    if (!company) return res.status(404).json({ error: 'Company not found.' });
+
+    const database = getTenantDatabase();
+    if (typeof database.runWithTenant !== 'function') {
+      return res.status(503).json({ error: 'Live tenant usage is unavailable.' });
+    }
+    const usage = await database.runWithTenant(companyId, async () => {
+      const [activeUsers, pageCount, pageSize, fileUsage] = await Promise.all([
+        database.prepare('SELECT COUNT(*) AS count FROM users WHERE active = 1').get(),
+        database.prepare('PRAGMA page_count').get(),
+        database.prepare('PRAGMA page_size').get(),
+        database.prepare('SELECT COALESCE(SUM(bytes), 0) AS bytes FROM file_usage').get()
+      ]);
+      const userCount = Number(activeUsers?.count ?? activeUsers?.COUNT);
+      const pages = Number(pageCount?.page_count ?? pageCount?.PAGE_COUNT);
+      const bytesPerPage = Number(pageSize?.page_size ?? pageSize?.PAGE_SIZE);
+      const fileBytes = Number(fileUsage?.bytes ?? fileUsage?.BYTES);
+      if (!Number.isSafeInteger(userCount) || userCount < 0
+        || !Number.isSafeInteger(pages) || pages < 0
+        || !Number.isSafeInteger(bytesPerPage) || bytesPerPage < 1
+        || !Number.isSafeInteger(fileBytes) || fileBytes < 0) {
+        throw new Error('Tenant usage query returned invalid storage values.');
+      }
+      const databaseBytes = pages * bytesPerPage;
+      const storageBytes = databaseBytes + fileBytes;
+      if (!Number.isSafeInteger(databaseBytes) || !Number.isSafeInteger(storageBytes)) {
+        throw new Error('Tenant usage exceeds the supported byte range.');
+      }
+      return { userCount, databaseBytes, fileBytes, storageBytes };
+    });
+
+    let storageLimitMb = company.storage_limit_mb_override == null
+      ? (company.storage_limit_mb == null ? null : Number(company.storage_limit_mb))
+      : Number(company.storage_limit_mb_override);
+    if (company.status === 'trial' && Number(company.trial_policy_version) === 1) {
+      const trialLimit = Number(company.trial_storage_limit_mb ?? 1024);
+      storageLimitMb = storageLimitMb == null ? trialLimit : Math.min(storageLimitMb, trialLimit);
+    }
+    if (storageLimitMb !== null && (!Number.isSafeInteger(storageLimitMb) || storageLimitMb < 0)) {
+      throw new Error('The assigned company plan has an invalid storage limit.');
+    }
+    const allocatedBytes = storageLimitMb === null ? null : storageLimitMb * 1024 * 1024;
+    if (allocatedBytes !== null && !Number.isSafeInteger(allocatedBytes)) {
+      throw new Error('The assigned company plan storage limit exceeds the supported byte range.');
+    }
+    const percentUsed = allocatedBytes === null ? null
+      : allocatedBytes === 0 ? (usage.storageBytes === 0 ? 0 : 100)
+        : Number(((usage.storageBytes / allocatedBytes) * 100).toFixed(1));
+    const remainingBytes = allocatedBytes === null ? null : Math.max(0, allocatedBytes - usage.storageBytes);
+    const updatedAt = new Date().toISOString();
+    await controlDb.execute({
+      sql: 'INSERT INTO usage_snapshots (company_id, user_count, db_bytes, files_bytes, taken_at) VALUES (?, ?, ?, ?, ?)',
+      args: [companyId, usage.userCount, usage.databaseBytes, usage.fileBytes, updatedAt]
+    });
+    await writeAudit(controlDb, admin, companyId, 'Live storage refreshed',
+      `Measured ${usage.storageBytes} bytes used against ${allocatedBytes == null ? 'an unlimited allocation' : `${allocatedBytes} allocated bytes`}.`);
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      companyId,
+      allocatedBytes,
+      databaseBytes: usage.databaseBytes,
+      fileBytes: usage.fileBytes,
+      usedBytes: usage.storageBytes,
+      remainingBytes,
+      percentUsed,
+      updatedAt
     });
   }));
 

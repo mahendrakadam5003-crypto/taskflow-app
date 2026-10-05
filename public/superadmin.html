@@ -228,6 +228,13 @@
           </section>
         </div>
         <section class="detail-panel detail-wide">
+          <div class="section-heading">
+            <div><p class="eyebrow">LIVE USAGE</p><h3>Storage</h3></div>
+            <button id="storage-refresh" type="button" class="button button-quiet">Refresh now</button>
+          </div>
+          <div id="company-storage-usage" class="storage-usage-content" aria-live="polite"></div>
+        </section>
+        <section class="detail-panel detail-wide">
           <div class="section-heading"><div><p class="eyebrow">USAGE</p><h3>Usage history</h3></div></div>
           <canvas id="usage-history-chart" height="180" aria-label="Company users and storage history"></canvas>
           <p class="chart-legend"><span class="legend-users">Users</span><span class="legend-storage">Database and files</span></p>

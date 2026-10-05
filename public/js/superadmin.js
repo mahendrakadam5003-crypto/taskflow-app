@@ -69,15 +69,23 @@ function formatBytes(value) {
     size /= 1024;
     unit += 1;
   }
-  return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[unit]}`;
+  return `${size.toFixed(2)} ${units[unit]}`;
 }
 
 function renderSummary(summary) {
   const cards = [
     { label: 'Registered companies', value: summary.companyCount, caption: 'In the control database' },
-    { label: 'Companies by status', value: summary.activeCount, caption: `${summary.trialCount} trial · ${summary.suspendedCount} suspended · ${summary.cancelledCount} cancelled` },
-    { label: 'Recorded users', value: summary.totalUsers.toLocaleString(), caption: 'Latest available snapshots' },
-    { label: 'Recorded storage', value: formatBytes(summary.totalStorageBytes), caption: 'Database and local files; excludes Telegram' }
+    { label: 'Trials running', value: summary.trialCount, caption: `${summary.trialEndingSoonCount} ending within 2 days` },
+    { label: 'Active paid', value: summary.activePaidCount, caption: `${summary.paidSeats.toLocaleString()} paid seats` },
+    { label: 'Suspended', value: summary.suspendedCount, caption: 'Company workspaces' },
+    { label: 'Cancelled', value: summary.cancelledCount, caption: 'Company workspaces' },
+    { label: 'MRR', value: formatPaise(summary.monthlyRecurringRevenuePaise, 'INR'), caption: 'From active subscriptions' },
+    { label: 'ARR', value: formatPaise(summary.annualRecurringRevenuePaise, 'INR'), caption: 'Monthly recurring revenue × 12' },
+    {
+      label: 'Storage used / allocated',
+      value: `${formatBytes(summary.totalStorageBytes)} / ${summary.allocatedStorageBytes == null ? 'Unlimited' : formatBytes(summary.allocatedStorageBytes)}`,
+      caption: `${summary.totalUsers.toLocaleString()} recorded active users · latest snapshots`
+    }
   ];
   document.getElementById('summary-cards').innerHTML = cards.map(card => `
     <article class="summary-card">
@@ -339,6 +347,61 @@ function renderUsageHistory(history) {
   context.fillText(lastDate, width - padding.right, height - 7);
 }
 
+function renderLiveStorage(storage) {
+  const target = document.getElementById('company-storage-usage');
+  const usedBytes = Number(storage.usedBytes);
+  const allocatedBytes = storage.allocatedBytes == null ? null : Number(storage.allocatedBytes);
+  const percent = storage.percentUsed == null ? null : Number(storage.percentUsed);
+  const tone = percent == null ? 'unlimited' : percent > 95 ? 'high' : percent >= 80 ? 'warning' : 'normal';
+  const barWidth = percent == null ? 0 : Math.min(100, Math.max(0, percent));
+  target.innerHTML = `
+    <div class="storage-usage-grid">
+      <div><span>Allocated</span><strong>${allocatedBytes == null ? 'Unlimited' : `${formatBytes(allocatedBytes)} (${allocatedBytes.toLocaleString()} bytes)`}</strong></div>
+      <div><span>Used</span><strong>${formatBytes(usedBytes)} (${usedBytes.toLocaleString()} bytes)</strong><small>${Number(storage.databaseBytes).toLocaleString()} B database · ${Number(storage.fileBytes).toLocaleString()} B files</small></div>
+      <div><span>Remaining</span><strong>${storage.remainingBytes == null ? 'Unlimited' : `${formatBytes(Number(storage.remainingBytes))} (${Number(storage.remainingBytes).toLocaleString()} bytes)`}</strong></div>
+      <div><span>Used</span><strong>${percent == null ? 'Unlimited' : `${percent.toFixed(1)}%`}</strong><small>Updated ${escapeHtml(formatDate(storage.updatedAt))}</small></div>
+    </div>
+    ${percent == null ? '<p class="storage-unlimited-note">This company has no storage limit.</p>' : `<div class="storage-progress ${tone}" role="progressbar" aria-label="Storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.min(100, Math.max(0, percent))}"><span style="width:${barWidth}%"></span></div>`}`;
+}
+
+function renderCompanyStorage(detail) {
+  const latest = detail.usageHistory.at(-1);
+  const storageLimitBytes = detail.company.effectiveStorageLimitMb == null
+    ? null : detail.company.effectiveStorageLimitMb * 1024 * 1024;
+  if (!latest) {
+    document.getElementById('company-storage-usage').innerHTML =
+      '<p class="muted">No usage snapshot is available. Refresh now to measure live storage.</p>';
+    return;
+  }
+  const usedBytes = latest.dbBytes + latest.filesBytes;
+  renderLiveStorage({
+    allocatedBytes: storageLimitBytes,
+    databaseBytes: latest.dbBytes,
+    fileBytes: latest.filesBytes,
+    usedBytes,
+    remainingBytes: storageLimitBytes == null ? null : Math.max(0, storageLimitBytes - usedBytes),
+    percentUsed: storageLimitBytes == null ? null
+      : storageLimitBytes === 0 ? (usedBytes === 0 ? 0 : 100)
+        : Number(((usedBytes / storageLimitBytes) * 100).toFixed(1)),
+    updatedAt: latest.takenAt
+  });
+}
+
+async function refreshCompanyStorage(companyId) {
+  const button = document.getElementById('storage-refresh');
+  button.disabled = true;
+  try {
+    const result = await request(`companies/${encodeURIComponent(companyId)}/storage/refresh`, { method: 'POST' });
+    renderLiveStorage(result);
+  } catch (error) {
+    const target = document.getElementById('company-detail-error');
+    target.textContent = error.message;
+    target.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderCompanyRecords(detail) {
   document.getElementById('backup-list').innerHTML = detail.backups.length
     ? detail.backups.map(backup => `<div class="record-row"><div><strong>${escapeHtml(backup.kind || backup.type)} · ${escapeHtml(backup.key || '')}</strong><small>${escapeHtml(backup.location)} · ${escapeHtml(formatBytes(backup.sizeBytes))} · ${Object.keys(backup.rowCounts || {}).length} tables</small></div><span>${escapeHtml(formatDate(backup.createdAt))} · ${escapeHtml(backup.status)}</span><div class="record-actions">${backup.status === 'complete'
@@ -372,8 +435,8 @@ async function loadCompanyDetail(companyId) {
     activeCompanyDetail = detail;
     const company = detail.company;
     document.getElementById('company-detail-heading').textContent = company.name;
-    const deletionNotice = company.deleteAfter ? ` · Final deletion scheduled ${formatDate(company.deleteAfter)}` : '';
-    document.getElementById('company-detail-meta').textContent = `${company.code} · ${company.ownerEmail || 'No owner email'} · Trial ends ${formatDate(company.trialEndsAt)} · Last login ${formatDate(company.lastLoginAt)}${deletionNotice}`;
+    document.getElementById('company-detail-meta').textContent =
+      `${company.code} · ${company.ownerEmail || 'No owner email'} · Trial ends ${formatDate(company.trialEndsAt)} · Last login ${formatDate(company.lastLoginAt)} · Automatic deletion disabled`;
     const statusSelect = document.getElementById('detail-status');
     statusSelect.innerHTML = ['trial', 'active', 'suspended', 'cancelled'].map(status =>
       `<option value="${status}"${company.status === status ? ' selected' : ''}>${status[0].toUpperCase()}${status.slice(1)}</option>`).join('');
@@ -385,6 +448,7 @@ async function loadCompanyDetail(companyId) {
     document.getElementById('detail-storage-override').value = company.storageLimitMbOverride ?? '';
     document.getElementById('detail-notes').value = company.notes || '';
     renderUsageHistory(detail.usageHistory);
+    renderCompanyStorage(detail);
     renderCompanyRecords(detail);
     showControlPage('detail');
   } catch (error) {
@@ -453,6 +517,10 @@ document.getElementById('company-rows').addEventListener('click', event => {
 document.getElementById('company-detail-back').addEventListener('click', () => {
   showControlPage('overview');
   document.getElementById('company-search').focus();
+});
+
+document.getElementById('storage-refresh').addEventListener('click', () => {
+  if (activeCompanyDetail) refreshCompanyStorage(activeCompanyDetail.company.id);
 });
 
 document.getElementById('plan-rows').addEventListener('click', event => {
