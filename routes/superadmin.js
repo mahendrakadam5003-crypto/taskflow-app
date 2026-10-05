@@ -61,6 +61,38 @@ function safeLimitOverride(value) {
   return Number.isSafeInteger(limit) && limit >= 0 ? limit : undefined;
 }
 
+async function measureTenantUsage(database, companyId) {
+  if (typeof database.runWithTenant !== 'function') {
+    const error = new Error('Live tenant usage is unavailable.');
+    error.code = 'TENANT_USAGE_UNAVAILABLE';
+    throw error;
+  }
+  return database.runWithTenant(companyId, async () => {
+    const [activeUsers, pageCount, pageSize, fileUsage] = await Promise.all([
+      database.prepare('SELECT COUNT(*) AS count FROM users WHERE active = 1').get(),
+      database.prepare('PRAGMA page_count').get(),
+      database.prepare('PRAGMA page_size').get(),
+      database.prepare('SELECT COALESCE(SUM(bytes), 0) AS bytes FROM file_usage').get()
+    ]);
+    const userCount = Number(activeUsers?.count ?? activeUsers?.COUNT);
+    const pages = Number(pageCount?.page_count ?? pageCount?.PAGE_COUNT);
+    const bytesPerPage = Number(pageSize?.page_size ?? pageSize?.PAGE_SIZE);
+    const fileBytes = Number(fileUsage?.bytes ?? fileUsage?.BYTES);
+    if (!Number.isSafeInteger(userCount) || userCount < 0
+      || !Number.isSafeInteger(pages) || pages < 0
+      || !Number.isSafeInteger(bytesPerPage) || bytesPerPage < 1
+      || !Number.isSafeInteger(fileBytes) || fileBytes < 0) {
+      throw new Error('Tenant usage query returned invalid storage values.');
+    }
+    const databaseBytes = pages * bytesPerPage;
+    const storageBytes = databaseBytes + fileBytes;
+    if (!Number.isSafeInteger(databaseBytes) || !Number.isSafeInteger(storageBytes)) {
+      throw new Error('Tenant usage exceeds the supported byte range.');
+    }
+    return { userCount, databaseBytes, fileBytes, storageBytes };
+  });
+}
+
 function createSuperAdminPageHandler(htmlPath) {
   return (req, res) => {
     if (req.session?.userId) return res.status(403).send('Super-admin access is separate from company accounts.');
@@ -632,8 +664,11 @@ function createSuperAdminRouter({
     const controlDb = await getDatabase();
     const companyResult = await controlDb.execute({
         sql: `SELECT c.status, c.plan_id, c.max_users_override, c.storage_limit_mb_override,
-          c.notes, c.delete_after, p.name AS plan_name
+          c.notes, c.delete_after, c.trial_policy_version, p.name AS plan_name,
+          p.max_users AS plan_max_users, p.storage_limit_mb AS plan_storage_limit_mb,
+          ps.trial_max_users, ps.trial_storage_limit_mb
         FROM companies c LEFT JOIN plans p ON p.id = c.plan_id
+        LEFT JOIN pricing_settings ps ON ps.id = 1
         WHERE c.id = ? AND c.status <> 'deleted'`,
       args: [companyId]
     });
@@ -641,13 +676,17 @@ function createSuperAdminRouter({
     if (!company) return res.status(404).json({ error: 'Company not found.' });
 
     let planName = null;
+    let planMaxUsers = null;
+    let planStorageLimitMb = null;
     if (planId !== null) {
       const planResult = await controlDb.execute({
-        sql: 'SELECT name FROM plans WHERE id = ? AND is_active = 1',
+        sql: 'SELECT name, max_users, storage_limit_mb FROM plans WHERE id = ? AND is_active = 1',
         args: [planId]
       });
       if (!planResult.rows?.[0]) return res.status(400).json({ error: 'Choose an active plan.' });
       planName = planResult.rows[0].name;
+      planMaxUsers = planResult.rows[0].max_users == null ? null : Number(planResult.rows[0].max_users);
+      planStorageLimitMb = planResult.rows[0].storage_limit_mb == null ? null : Number(planResult.rows[0].storage_limit_mb);
     }
     const hasMaxUsersOverride = Object.prototype.hasOwnProperty.call(body, 'maxUsersOverride');
     const hasStorageOverride = Object.prototype.hasOwnProperty.call(body, 'storageLimitMbOverride');
@@ -662,6 +701,56 @@ function createSuperAdminRouter({
       || (hasNotes && (typeof notes !== 'string' || notes.length > 4000))) {
       return res.status(400).json({ error: 'Enter valid non-negative limit overrides and notes.' });
     }
+    const trialLimitApplies = Number(company.trial_policy_version) === 1;
+    const resolvedLimit = (override, planLimit, trialLimit, status) => {
+      let limit = override == null ? planLimit : override;
+      if (trialLimitApplies && status === 'trial') {
+        limit = limit == null ? trialLimit : Math.min(limit, trialLimit);
+      }
+      return limit == null ? null : Number(limit);
+    };
+    const currentMaxUsers = resolvedLimit(
+      company.max_users_override == null ? null : Number(company.max_users_override),
+      company.plan_max_users == null ? null : Number(company.plan_max_users),
+      Number(company.trial_max_users ?? 3),
+      company.status
+    );
+    const currentStorageMb = resolvedLimit(
+      company.storage_limit_mb_override == null ? null : Number(company.storage_limit_mb_override),
+      company.plan_storage_limit_mb == null ? null : Number(company.plan_storage_limit_mb),
+      Number(company.trial_storage_limit_mb ?? 1024),
+      company.status
+    );
+    const targetMaxUsers = resolvedLimit(
+      maxUsersOverride, planMaxUsers, Number(company.trial_max_users ?? 3), body.status
+    );
+    const targetStorageMb = resolvedLimit(
+      storageLimitMbOverride, planStorageLimitMb, Number(company.trial_storage_limit_mb ?? 1024), body.status
+    );
+    const maxUsersLimitChanged = targetMaxUsers !== currentMaxUsers;
+    const storageLimitChanged = targetStorageMb !== currentStorageMb;
+    let liveUsage = null;
+    if ((maxUsersLimitChanged && targetMaxUsers !== null)
+      || (storageLimitChanged && targetStorageMb !== null)) {
+      try {
+        liveUsage = await measureTenantUsage(getTenantDatabase(), companyId);
+      } catch (error) {
+        if (error.code === 'TENANT_USAGE_UNAVAILABLE') return res.status(503).json({ error: error.message });
+        throw error;
+      }
+      if (maxUsersLimitChanged && targetMaxUsers !== null && targetMaxUsers < liveUsage.userCount) {
+        return res.status(409).json({
+          error: `The ${targetMaxUsers}-user limit is below the ${liveUsage.userCount} active users in this workspace.`
+        });
+      }
+      const targetStorageBytes = targetStorageMb * 1024 * 1024;
+      if (!Number.isSafeInteger(targetStorageBytes)) throw new Error('The requested storage limit exceeds the supported byte range.');
+      if (storageLimitChanged && targetStorageMb !== null && targetStorageBytes < liveUsage.storageBytes) {
+        return res.status(409).json({
+          error: `The ${targetStorageMb} MB limit is below the ${liveUsage.storageBytes} bytes currently used.`
+        });
+      }
+    }
     const deleteAfter = body.status === 'cancelled' ? company.delete_after : null;
 
     const changes = [];
@@ -670,8 +759,12 @@ function createSuperAdminRouter({
     if (currentPlanId !== planId) changes.push(`plan ${company.plan_name || 'none'} -> ${planName || 'none'}`);
     const currentMaxUsersOverride = company.max_users_override == null ? null : Number(company.max_users_override);
     const currentStorageOverride = company.storage_limit_mb_override == null ? null : Number(company.storage_limit_mb_override);
-    if (currentMaxUsersOverride !== maxUsersOverride) changes.push('user limit override updated');
-    if (currentStorageOverride !== storageLimitMbOverride) changes.push('storage limit override updated');
+    if (currentMaxUsersOverride !== maxUsersOverride) {
+      changes.push(`user limit override ${currentMaxUsersOverride ?? 'plan default'} -> ${maxUsersOverride ?? 'plan default'}`);
+    }
+    if (currentStorageOverride !== storageLimitMbOverride) {
+      changes.push(`storage limit override ${currentStorageOverride ?? 'plan default'} MB -> ${storageLimitMbOverride ?? 'plan default'}`);
+    }
     if (notes !== company.notes) changes.push('company notes updated');
     if (deleteAfter !== company.delete_after) changes.push('permanent deletion schedule cleared');
     if (!changes.length) return res.json({ companyId, status: body.status, planId });
@@ -846,30 +939,7 @@ function createSuperAdminRouter({
     if (typeof database.runWithTenant !== 'function') {
       return res.status(503).json({ error: 'Live tenant usage is unavailable.' });
     }
-    const usage = await database.runWithTenant(companyId, async () => {
-      const [activeUsers, pageCount, pageSize, fileUsage] = await Promise.all([
-        database.prepare('SELECT COUNT(*) AS count FROM users WHERE active = 1').get(),
-        database.prepare('PRAGMA page_count').get(),
-        database.prepare('PRAGMA page_size').get(),
-        database.prepare('SELECT COALESCE(SUM(bytes), 0) AS bytes FROM file_usage').get()
-      ]);
-      const userCount = Number(activeUsers?.count ?? activeUsers?.COUNT);
-      const pages = Number(pageCount?.page_count ?? pageCount?.PAGE_COUNT);
-      const bytesPerPage = Number(pageSize?.page_size ?? pageSize?.PAGE_SIZE);
-      const fileBytes = Number(fileUsage?.bytes ?? fileUsage?.BYTES);
-      if (!Number.isSafeInteger(userCount) || userCount < 0
-        || !Number.isSafeInteger(pages) || pages < 0
-        || !Number.isSafeInteger(bytesPerPage) || bytesPerPage < 1
-        || !Number.isSafeInteger(fileBytes) || fileBytes < 0) {
-        throw new Error('Tenant usage query returned invalid storage values.');
-      }
-      const databaseBytes = pages * bytesPerPage;
-      const storageBytes = databaseBytes + fileBytes;
-      if (!Number.isSafeInteger(databaseBytes) || !Number.isSafeInteger(storageBytes)) {
-        throw new Error('Tenant usage exceeds the supported byte range.');
-      }
-      return { userCount, databaseBytes, fileBytes, storageBytes };
-    });
+    const usage = await measureTenantUsage(database, companyId);
 
     let storageLimitMb = company.storage_limit_mb_override == null
       ? (company.storage_limit_mb == null ? null : Number(company.storage_limit_mb))

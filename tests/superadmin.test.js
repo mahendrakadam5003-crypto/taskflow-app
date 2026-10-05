@@ -309,12 +309,29 @@ test('super-admin login uses an isolated hashed session and protects the read-on
 });
 
 test('super-admin can update company status and plan without changing tenant credentials', async () => {
-  const { controlDb, server, baseUrl } = await createApp();
+  const tenantDatabase = {
+    runWithTenant(companyId, callback) {
+      assert.equal(companyId, 1);
+      return callback();
+    },
+    prepare(sql) {
+      return {
+        async get() {
+          if (sql.includes('COUNT(*) AS count FROM users WHERE active = 1')) return { count: 7 };
+          if (sql.includes('PRAGMA page_count')) return { page_count: 1 };
+          if (sql.includes('PRAGMA page_size')) return { page_size: 4096 };
+          if (sql.includes('SUM(bytes)')) return { bytes: 2048 };
+          return null;
+        }
+      };
+    }
+  };
+  const { controlDb, server, baseUrl } = await createApp({ tenantDatabase });
   try {
     const unauthorized = await fetch(`${baseUrl}/companies/1`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'suspended', planId: 1 })
+      body: JSON.stringify({ status: 'suspended', planId: 3 })
     });
     assert.equal(unauthorized.status, 401);
 
@@ -351,18 +368,42 @@ test('super-admin can update company status and plan without changing tenant cre
     });
     assert.equal(deletedUpdate.status, 404);
 
+    const belowPlanSeats = await fetch(`${baseUrl}/companies/1`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'active', planId: 1 })
+    });
+    assert.equal(belowPlanSeats.status, 409);
+    assert.match((await belowPlanSeats.json()).error, /1-user limit is below the 7 active users/);
+
+    const belowUsers = await fetch(`${baseUrl}/companies/1`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'active', planId: 2, maxUsersOverride: 6 })
+    });
+    assert.equal(belowUsers.status, 409);
+    assert.match((await belowUsers.json()).error, /7 active users/);
+
+    const belowStorage = await fetch(`${baseUrl}/companies/1`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'active', planId: 2, storageLimitMbOverride: 0 })
+    });
+    assert.equal(belowStorage.status, 409);
+    assert.match((await belowStorage.json()).error, /bytes currently used/);
+
     const update = await fetch(`${baseUrl}/companies/1`, {
       method: 'PUT',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'suspended', planId: 1 })
+      body: JSON.stringify({ status: 'suspended', planId: 3, maxUsersOverride: 8, storageLimitMbOverride: 20 })
     });
     assert.equal(update.status, 200, await update.clone().text());
     assert.deepEqual(await update.json(), {
       companyId: 1,
       status: 'suspended',
-      planId: 1,
-      maxUsersOverride: null,
-      storageLimitMbOverride: null,
+      planId: 3,
+      maxUsersOverride: 8,
+      storageLimitMbOverride: 20,
       notes: ''
     });
 
@@ -372,7 +413,7 @@ test('super-admin can update company status and plan without changing tenant cre
     });
     assert.deepEqual(company.rows[0], {
       status: 'suspended',
-      plan_id: 1,
+      plan_id: 3,
       tenant_db_url: 'libsql://tenant.example',
       tenant_db_token_encrypted: 'encrypted-token'
     });
@@ -383,12 +424,14 @@ test('super-admin can update company status and plan without changing tenant cre
     assert.equal(audit.rows.length, 1);
     assert.equal(audit.rows[0].action, 'Company configuration updated');
     assert.match(audit.rows[0].details, /status active -> suspended/);
-    assert.match(audit.rows[0].details, /plan Team -> Solo/);
+    assert.match(audit.rows[0].details, /user limit override plan default -> 8/);
+    assert.match(audit.rows[0].details, /storage limit override plan default MB -> 20/);
+    assert.match(audit.rows[0].details, /plan Team -> Business/);
 
     const noOpUpdate = await fetch(`${baseUrl}/companies/1`, {
       method: 'PUT',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'suspended', planId: 1 })
+      body: JSON.stringify({ status: 'suspended', planId: 3 })
     });
     assert.equal(noOpUpdate.status, 200);
     const auditAfterNoOp = await controlDb.execute({
@@ -401,7 +444,7 @@ test('super-admin can update company status and plan without changing tenant cre
     const overviewData = await overview.json();
     assert.equal(overviewData.summary.suspendedCount, 1);
     assert.equal(overviewData.companies[0].status, 'suspended');
-    assert.equal(overviewData.companies[0].planName, 'Solo');
+    assert.equal(overviewData.companies[0].planName, 'Business');
   } finally {
     await new Promise(resolve => server.close(resolve));
     await controlDb.close();
@@ -566,6 +609,9 @@ test('super-admin detail, plans, billing, reset, backup, support mode, and compa
       return {
         async get() {
           if (sql.includes('COUNT(*) AS count FROM users WHERE active = 1')) return { count: 7 };
+          if (sql.includes('PRAGMA page_count')) return { page_count: 1 };
+          if (sql.includes('PRAGMA page_size')) return { page_size: 4096 };
+          if (sql.includes('SUM(bytes)')) return { bytes: 2048 };
           if (sql.includes("WHERE role = 'admin'")) return { ...tenantAdmin };
           if (sql.includes('SELECT username FROM users')) return { username: tenantAdmin.username };
           return null;
