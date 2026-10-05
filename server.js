@@ -398,9 +398,11 @@ let server;
 const startupPromise = (async () => {
   await db.ready;
   try {
-    if (await bootstrapConfiguredSuperAdmin()) {
-      console.log('Initial super-admin account created from configured bootstrap credentials. Remove SUPERADMIN_PASSWORD from the environment.');
-    }
+    const superAdminBootstrap = await bootstrapConfiguredSuperAdmin();
+    if (superAdminBootstrap === 'created') console.log('Initial super-admin account created. Remove SUPERADMIN_PASSWORD from the environment.');
+    else if (superAdminBootstrap === 'updated') console.log('Super-admin credentials updated. Remove SUPERADMIN_PASSWORD from the environment.');
+    else if (superAdminBootstrap === 'unchanged') console.log('Configured super-admin account is ready. Remove SUPERADMIN_PASSWORD from the environment.');
+    else console.log('Super-admin bootstrap skipped; SUPERADMIN_USERNAME and SUPERADMIN_PASSWORD are not configured.');
   } catch (error) {
     console.error(`Super-admin bootstrap failed; the company workspace will continue without it: ${error.message}`);
   }

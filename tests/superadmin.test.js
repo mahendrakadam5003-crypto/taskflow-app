@@ -58,23 +58,39 @@ test('super-admin bootstrap rejects weak or missing password before database acc
   assert.equal(opened, false);
 });
 
-test('startup bootstrap creates only the first configured account and ignores credentials afterwards', async () => {
+test('startup bootstrap creates and can privately reset only the configured super-admin', async () => {
   let storedAdmin = null;
+  const auditEntries = [];
   const controlDb = {
-    async execute(statement) {
-      assert.equal(statement, 'SELECT COUNT(*) AS count FROM super_admins');
-      return { rows: [{ count: storedAdmin ? 1 : 0 }] };
-    },
     async transaction() {
       return {
         async execute(statement) {
-          if (typeof statement === 'string') return { rows: [{ count: storedAdmin ? 1 : 0 }] };
-          assert.equal(statement.sql, 'INSERT INTO super_admins (name, username, password_hash) VALUES (?, ?, ?)');
-          storedAdmin = {
-            name: statement.args[0],
-            username: statement.args[1],
-            password_hash: statement.args[2]
-          };
+          if (statement === 'SELECT COUNT(*) AS count FROM super_admins') {
+            return { rows: [{ count: storedAdmin ? 1 : 0 }] };
+          }
+          if (statement.sql.startsWith('SELECT id, password_hash')) {
+            return { rows: storedAdmin && storedAdmin.username === statement.args[0] ? [{
+              id: storedAdmin.id,
+              password_hash: storedAdmin.password_hash
+            }] : [] };
+          }
+          if (statement.sql.startsWith('INSERT INTO super_admins')) {
+            storedAdmin = {
+              id: 1,
+              name: statement.args[0],
+              username: statement.args[1],
+              password_hash: statement.args[2],
+              token_version: 0
+            };
+          } else if (statement.sql.startsWith('UPDATE super_admins')) {
+            storedAdmin.name = statement.args[0];
+            storedAdmin.password_hash = statement.args[1];
+            storedAdmin.token_version += 1;
+          } else if (statement.sql.startsWith('INSERT INTO super_admin_audit')) {
+            auditEntries.push(statement.args);
+          } else {
+            assert.fail(`Unexpected SQL in bootstrap test: ${statement.sql}`);
+          }
           return { rows: [] };
         },
         async commit() {},
@@ -88,13 +104,24 @@ test('startup bootstrap creates only the first configured account and ignores cr
     return controlDb;
   };
 
-  assert.equal(await bootstrapConfiguredSuperAdmin(bootstrapEnvironment, getDatabase), true);
-  const originalHash = storedAdmin.password_hash;
+  assert.equal(await bootstrapConfiguredSuperAdmin(bootstrapEnvironment, getDatabase), 'created');
+  const initialHash = storedAdmin.password_hash;
   assert.equal(storedAdmin.username, 'first owner');
-  assert.equal(await bcrypt.compare(bootstrapEnvironment.SUPERADMIN_PASSWORD, originalHash), true);
-  assert.equal(await bootstrapConfiguredSuperAdmin(bootstrapEnvironment, getDatabase), false);
-  assert.equal(storedAdmin.password_hash, originalHash);
-  assert.equal(databaseOpenCount, 2);
+  assert.equal(await bcrypt.compare(bootstrapEnvironment.SUPERADMIN_PASSWORD, initialHash), true);
+  assert.equal(await bootstrapConfiguredSuperAdmin(bootstrapEnvironment, getDatabase), 'unchanged');
+  assert.equal(storedAdmin.password_hash, initialHash);
+
+  const updatedEnvironment = {
+    ...bootstrapEnvironment,
+    SUPERADMIN_PASSWORD: 'A-New-Private-Password-2026!'
+  };
+  assert.equal(await bootstrapConfiguredSuperAdmin(updatedEnvironment, getDatabase), 'updated');
+  assert.notEqual(storedAdmin.password_hash, initialHash);
+  assert.equal(await bcrypt.compare(updatedEnvironment.SUPERADMIN_PASSWORD, storedAdmin.password_hash), true);
+  assert.equal(await bcrypt.compare(bootstrapEnvironment.SUPERADMIN_PASSWORD, storedAdmin.password_hash), false);
+  assert.equal(storedAdmin.token_version, 1);
+  assert.equal(auditEntries.length, 2);
+  assert.equal(databaseOpenCount, 3);
 });
 
 test('startup bootstrap does not require control database unless credentials are configured', async () => {
@@ -111,6 +138,31 @@ test('startup bootstrap does not require control database unless credentials are
     /Both SUPERADMIN_USERNAME and SUPERADMIN_PASSWORD/
   );
   assert.equal(opened, false);
+});
+
+test('startup bootstrap refuses to overwrite a different super-admin username', async () => {
+  let insertAttempted = false;
+  let rolledBack = false;
+  const controlDb = {
+    async transaction() {
+      return {
+        async execute(statement) {
+          if (statement.sql?.startsWith('SELECT id, password_hash')) return { rows: [] };
+          if (statement === 'SELECT COUNT(*) AS count FROM super_admins') return { rows: [{ count: 1 }] };
+          if (statement.sql?.startsWith('INSERT INTO super_admins')) insertAttempted = true;
+          return { rows: [] };
+        },
+        async commit() {},
+        async rollback() { rolledBack = true; }
+      };
+    }
+  };
+  await assert.rejects(
+    bootstrapConfiguredSuperAdmin(bootstrapEnvironment, async () => controlDb),
+    /different super-admin username already exists/
+  );
+  assert.equal(insertAttempted, false);
+  assert.equal(rolledBack, true);
 });
 
 async function createApp() {
