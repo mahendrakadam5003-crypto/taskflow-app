@@ -35,6 +35,21 @@ async function createInitialSuperAdmin(environment = process.env, getDatabase = 
   }
 }
 
+async function bootstrapConfiguredSuperAdmin(environment = process.env, getDatabase = getControlDatabase) {
+  const username = String(environment.SUPERADMIN_USERNAME || '').trim();
+  const password = String(environment.SUPERADMIN_PASSWORD || '');
+  if (!username && !password) return false;
+  if (!username || !password) {
+    throw new Error('Both SUPERADMIN_USERNAME and SUPERADMIN_PASSWORD must be set for initial account bootstrap.');
+  }
+
+  const controlDb = await getDatabase();
+  const admins = await controlDb.execute('SELECT COUNT(*) AS count FROM super_admins');
+  if (Number(admins.rows?.[0]?.count || 0) > 0) return false;
+  await createInitialSuperAdmin(environment, async () => controlDb);
+  return true;
+}
+
 if (require.main === module) {
   createInitialSuperAdmin()
     .then(() => console.log('Initial super-admin account created. Sign in at /superadmin.'))
@@ -45,4 +60,4 @@ if (require.main === module) {
     .finally(closeControlDatabase);
 }
 
-module.exports = { createInitialSuperAdmin };
+module.exports = { bootstrapConfiguredSuperAdmin, createInitialSuperAdmin };

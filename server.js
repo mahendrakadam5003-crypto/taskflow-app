@@ -92,6 +92,7 @@ if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 
 const { router: authRouter } = require('./routes/auth');
 const { createSuperAdminRouter } = require('./routes/superadmin');
+const { bootstrapConfiguredSuperAdmin } = require('./scripts/create-superadmin');
 const tasksRouter = require('./routes/tasks');
 const attendanceRouter = require('./routes/attendance');
 const reimbursementsRouter = require('./routes/reimbursements');
@@ -396,6 +397,13 @@ app.use((error, req, res, next) => {
 let server;
 const startupPromise = (async () => {
   await db.ready;
+  try {
+    if (await bootstrapConfiguredSuperAdmin()) {
+      console.log('Initial super-admin account created from configured bootstrap credentials. Remove SUPERADMIN_PASSWORD from the environment.');
+    }
+  } catch (error) {
+    console.error(`Super-admin bootstrap failed; the company workspace will continue without it: ${error.message}`);
+  }
   await cleanupExpiredSessions();
   server = app.listen(PORT, bindAddress, () => {
     console.log(`TaskFlow operational server running on ${bindAddress}:${PORT}`);

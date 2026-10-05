@@ -7,7 +7,7 @@ const { createClient } = require('@libsql/client');
 const { test } = require('node:test');
 const { COOKIE_NAME, createSuperAdminRouter } = require('../routes/superadmin');
 const { migrateControlDatabase } = require('../control-db');
-const { createInitialSuperAdmin } = require('../scripts/create-superadmin');
+const { bootstrapConfiguredSuperAdmin, createInitialSuperAdmin } = require('../scripts/create-superadmin');
 
 const bootstrapEnvironment = {
   SUPERADMIN_NAME: 'First Owner',
@@ -54,6 +54,61 @@ test('super-admin bootstrap rejects weak or missing password before database acc
       throw new Error('Database should not be opened');
     }),
     /between 10 and 72 UTF-8 bytes/
+  );
+  assert.equal(opened, false);
+});
+
+test('startup bootstrap creates only the first configured account and ignores credentials afterwards', async () => {
+  let storedAdmin = null;
+  const controlDb = {
+    async execute(statement) {
+      assert.equal(statement, 'SELECT COUNT(*) AS count FROM super_admins');
+      return { rows: [{ count: storedAdmin ? 1 : 0 }] };
+    },
+    async transaction() {
+      return {
+        async execute(statement) {
+          if (typeof statement === 'string') return { rows: [{ count: storedAdmin ? 1 : 0 }] };
+          assert.equal(statement.sql, 'INSERT INTO super_admins (name, username, password_hash) VALUES (?, ?, ?)');
+          storedAdmin = {
+            name: statement.args[0],
+            username: statement.args[1],
+            password_hash: statement.args[2]
+          };
+          return { rows: [] };
+        },
+        async commit() {},
+        async rollback() {}
+      };
+    }
+  };
+  let databaseOpenCount = 0;
+  const getDatabase = async () => {
+    databaseOpenCount += 1;
+    return controlDb;
+  };
+
+  assert.equal(await bootstrapConfiguredSuperAdmin(bootstrapEnvironment, getDatabase), true);
+  const originalHash = storedAdmin.password_hash;
+  assert.equal(storedAdmin.username, 'first owner');
+  assert.equal(await bcrypt.compare(bootstrapEnvironment.SUPERADMIN_PASSWORD, originalHash), true);
+  assert.equal(await bootstrapConfiguredSuperAdmin(bootstrapEnvironment, getDatabase), false);
+  assert.equal(storedAdmin.password_hash, originalHash);
+  assert.equal(databaseOpenCount, 2);
+});
+
+test('startup bootstrap does not require control database unless credentials are configured', async () => {
+  let opened = false;
+  assert.equal(await bootstrapConfiguredSuperAdmin({}, async () => {
+    opened = true;
+    throw new Error('Database should not be opened');
+  }), false);
+  await assert.rejects(
+    bootstrapConfiguredSuperAdmin({ SUPERADMIN_USERNAME: 'super admin' }, async () => {
+      opened = true;
+      throw new Error('Database should not be opened');
+    }),
+    /Both SUPERADMIN_USERNAME and SUPERADMIN_PASSWORD/
   );
   assert.equal(opened, false);
 });

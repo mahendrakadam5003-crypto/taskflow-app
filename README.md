@@ -32,20 +32,13 @@ Without `USE_LOCAL_DB=1`, TaskFlow requires both `TURSO_DATABASE_URL` and `TURSO
 The admin dashboard's Turso storage quota also requires `TURSO_PLATFORM_TOKEN`. `TURSO_ORG` and `TURSO_DATABASE` are optional when the platform token can discover the organization and the database URL identifies the database.
 
 ### Super-admin control panel (Phase 3)
-The separate control database stores company registry, plans, super-admin accounts and sessions, usage snapshots, backup records, billing notes, and audit entries. Configure `CONTROL_DATABASE_URL` and `CONTROL_AUTH_TOKEN` with a separate Turso database and token, then run `npm run migrate:control`. This migration is repeatable and does not move or change the existing company's database.
+The separate control database stores company registry, plans, super-admin accounts and sessions, usage snapshots, backup records, billing notes, and audit entries. Configure `CONTROL_DATABASE_URL` and `CONTROL_AUTH_TOKEN` with a separate Turso database and token. The app safely creates/updates its control schema when needed; this does not move or change the existing company's database.
 
-Create the first personal super-admin account from a trusted terminal with `SUPERADMIN_USERNAME` and `SUPERADMIN_PASSWORD` set in the environment, then run `npm run superadmin:create`. `SUPERADMIN_NAME` is optional and defaults to the username. Usernames are case-insensitive. Use a unique password of at least 10 characters (72 UTF-8 bytes maximum); a longer, randomly generated password is recommended, and passwords already shared in messages should be changed. For example, in PowerShell:
+For the initial account, set `SUPERADMIN_USERNAME` and `SUPERADMIN_PASSWORD` as private environment variables on the deployed service. On startup, TaskFlow creates that account only when the control database has no super-admins; it never changes an existing account. `SUPERADMIN_NAME` is optional and defaults to the username. Usernames are case-insensitive. Use a unique password of at least 10 characters (72 UTF-8 bytes maximum); a longer, randomly generated password is recommended, and passwords already shared in messages should be changed. After the startup log confirms creation, remove `SUPERADMIN_PASSWORD` from the service environment and redeploy.
 
-```powershell
-$env:SUPERADMIN_USERNAME = 'super admin'
-$password = Read-Host 'Choose a unique super-admin password' -AsSecureString
-$env:SUPERADMIN_PASSWORD = [System.Net.NetworkCredential]::new('', $password).Password
-npm run superadmin:create
-Remove-Item Env:SUPERADMIN_PASSWORD
-$password.Dispose()
-```
+Alternatively, run `npm run migrate:control` and then `npm run superadmin:create` from a trusted terminal with the control-database and bootstrap variables set.
 
-Set the two control-database variables in this terminal as well (or your deployment environment) before running the command. The bootstrap refuses to add an account if one already exists and never prints the password. Sign in at `/superadmin`; this login is separate from the company admin login. The overview is read-only. It lists only companies in the control database. The existing company will not appear there until its registry is linked in Phase 4; it continues using the same database and company login in the meantime.
+The bootstrap refuses to add or replace accounts if one already exists and never prints the password. Sign in at `/superadmin`; this login is separate from the company admin login. The overview is read-only. It lists only companies in the control database. The existing company will not appear there until its registry is linked in Phase 4; it continues using the same database and company login in the meantime.
 
 Set `APP_ENCRYPTION_KEY` to a private 32-byte key encoded as 64 hexadecimal characters; generate one with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Back up this key securely: tenant database tokens encrypted with it cannot be recovered without the same key.
 
