@@ -17,6 +17,10 @@ const deviceId = 'a'.repeat(48);
 const passwordHash = bcrypt.hashSync('AttendancePassword123', 4);
 const deviceHash = crypto.createHash('sha256').update(deviceId).digest('hex');
 const writes = [];
+const auditEntries = [];
+let timelineQuery = '';
+let liveShiftQuery = '';
+let taskCheckinsQuery = '';
 
 const mockDb = {
   ready: Promise.resolve(),
@@ -33,7 +37,29 @@ const mockDb = {
         if (sql.includes('SELECT latitude, longitude FROM attendance_locations')) return null;
         return null;
       },
-      all: async () => [],
+      all: async () => {
+        if (sql.includes('FROM attendance_locations al JOIN users u')) {
+          timelineQuery = sql;
+          return [
+            { recorded_at: '2026-10-05T04:00:00.000Z', latitude: 18.52, longitude: 73.85, distance_meters: 0, place_changed: 0, user_name: 'Employee' },
+            { recorded_at: '2026-10-05T04:05:00.000Z', latitude: 18.53, longitude: 73.86, distance_meters: 71.5, place_changed: 1, user_name: 'Employee' }
+          ];
+        }
+        if (sql.includes('FROM attendance a JOIN users u')) {
+          liveShiftQuery = sql;
+          return [
+            { id: 1, user_id: 7, date: '2026-10-04', punch_in: '2026-10-04T03:00:00.000Z', punch_out: null, in_lat: null, in_lng: null, user_name: 'Employee' },
+            { id: 2, user_id: 8, date: '2026-10-05', punch_in: '2026-10-05T03:00:00.000Z', punch_out: null, in_lat: null, in_lng: null, user_name: 'Today Employee' }
+          ];
+        }
+        if (sql.includes('FROM task_checkins c')) {
+          taskCheckinsQuery = sql;
+          return [
+            { check_in_at: '2026-10-04T19:00:00.000Z', check_in_lat: 18.52, check_in_lng: 73.85, check_out_at: '2026-10-05T18:45:00.000Z', check_out_lat: 18.53, check_out_lng: 73.86, task_title: 'IST boundary task', customer_name: '', project_name: 'Project' }
+          ];
+        }
+        return [];
+      },
       run: async (...args) => {
         writes.push({ sql, args });
         if (sql.includes('INSERT OR IGNORE INTO attendance')) return { changes: 1, lastInsertRowid: 35 };
@@ -54,7 +80,12 @@ require.cache[authPath] = {
     requireAdmin(req, res, next) { return req.session?.role === 'admin' ? next() : res.status(403).end(); }
   }
 };
-require.cache[auditPath] = { id: auditPath, filename: auditPath, loaded: true, exports: { logActivity: async () => {} } };
+require.cache[auditPath] = {
+  id: auditPath,
+  filename: auditPath,
+  loaded: true,
+  exports: { logActivity: async (...args) => { auditEntries.push(args); } }
+};
 require.cache[storagePath] = {
   id: storagePath,
   filename: storagePath,
@@ -78,12 +109,19 @@ app.post('/test-session', (req, res) => {
   req.session.tokenVersion = 1;
   req.session.save(error => error ? res.status(500).end() : res.json({ ok: true }));
 });
+app.post('/test-admin-session', (req, res) => {
+  req.session.userId = 99;
+  req.session.role = 'admin';
+  req.session.tokenVersion = 1;
+  req.session.save(error => error ? res.status(500).end() : res.json({ ok: true }));
+});
 app.use('/api/attendance', attendanceRouter);
 app.use((error, req, res, next) => res.status(500).json({ error: 'Internal server error.' }));
 
 let server;
 let baseUrl;
 let cookie;
+let adminCookie;
 
 before(async () => {
   server = app.listen(0, '127.0.0.1');
@@ -91,6 +129,8 @@ before(async () => {
   baseUrl = `http://127.0.0.1:${server.address().port}`;
   const response = await fetch(`${baseUrl}/test-session`, { method: 'POST' });
   cookie = response.headers.get('set-cookie').split(';', 1)[0];
+  const adminResponse = await fetch(`${baseUrl}/test-admin-session`, { method: 'POST' });
+  adminCookie = adminResponse.headers.get('set-cookie').split(';', 1)[0];
 });
 
 after(async () => {
@@ -123,4 +163,60 @@ test('required attendance verification blocks direct punches without password an
   const verified = await request('AttendancePassword123');
   assert.equal(verified.status, 200);
   assert.ok(writes.some(write => write.sql.includes('INSERT OR IGNORE INTO attendance')));
+});
+
+test('admin live timeline returns stored distance and place-change totals', async () => {
+  const response = await fetch(`${baseUrl}/api/attendance/live/7/timeline?date=2026-10-05`, {
+    headers: { Cookie: adminCookie }
+  });
+
+  assert.equal(response.status, 200);
+  assert.match(timelineQuery, /al\.distance_meters,\s*al\.place_changed/);
+  assert.deepEqual(await response.json(), {
+    points: [
+      { recorded_at: '2026-10-05T04:00:00.000Z', latitude: 18.52, longitude: 73.85, distance_meters: 0, place_changed: 0, user_name: 'Employee' },
+      { recorded_at: '2026-10-05T04:05:00.000Z', latitude: 18.53, longitude: 73.86, distance_meters: 71.5, place_changed: 1, user_name: 'Employee' }
+    ],
+    total_distance_meters: 71.5,
+    place_changes: 1
+  });
+});
+
+test('admin live list includes open shifts from earlier dates', async () => {
+  const response = await fetch(`${baseUrl}/api/attendance/live`, {
+    headers: { Cookie: adminCookie }
+  });
+
+  assert.equal(response.status, 200);
+  assert.match(liveShiftQuery, /a\.date\s*<=\s*\?/);
+  assert.doesNotMatch(liveShiftQuery, /a\.date\s*=\s*\?/);
+  const rows = await response.json();
+  assert.deepEqual(rows.map(row => row.date), ['2026-10-04', '2026-10-05']);
+});
+
+test('employee location timeline views are audited with viewer, target, and date', async () => {
+  auditEntries.length = 0;
+  const response = await fetch(`${baseUrl}/api/attendance/live/7/timeline?date=2026-10-05`, {
+    headers: { Cookie: adminCookie }
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(auditEntries.length, 1);
+  assert.equal(auditEntries[0][0].session.userId, 99);
+  assert.equal(auditEntries[0][1], 'Viewed employee location timeline');
+  assert.equal(auditEntries[0][3], 7);
+  assert.equal(auditEntries[0][4], 'Attendance date: 2026-10-05');
+  assert.equal(auditEntries[0][5], 7);
+});
+
+test('employee timeline filters task events by India date across UTC midnight', async () => {
+  const response = await fetch(`${baseUrl}/api/attendance/tracking/7/timeline?date=2026-10-05`, {
+    headers: { Cookie: adminCookie }
+  });
+
+  assert.equal(response.status, 200);
+  assert.match(taskCheckinsQuery, /substr\(c\.check_in_at, 1, 10\) BETWEEN \? AND \?/);
+  const result = await response.json();
+  assert.deepEqual(result.events.map(event => event.action), ['Checked in to task']);
+  assert.equal(result.events[0].recorded_at, '2026-10-04T19:00:00.000Z');
 });

@@ -132,7 +132,6 @@ async function requireAttendanceVerification(req, res) {
   return true;
 }
 
-// Generates an instant, clickable Google Maps link from raw coordinates
 function makeMapLink(lat, lng) {
   if (lat == null || lng == null || isNaN(parseFloat(lat)) || isNaN(parseFloat(lng))) return '';
   return `https://www.google.com/maps?q=${lat},${lng}`;
@@ -194,7 +193,6 @@ async function recordLocationPoint(attendanceId, userId, lat, lng, recordedAt, m
   return { id: info.lastInsertRowid, distanceMeters, placeChanged };
 }
 
-// Free Helper function to convert GPS points into a readable Location Name
 async function getLocationName(lat, lng) {
   try {
     const cacheKey = `${Number(lat).toFixed(5)},${Number(lng).toFixed(5)}`;
@@ -378,7 +376,6 @@ async function savePunchIn(userId, date, lat, lng, device, { adminEnteredBy = fa
   return { attendanceId, locationName, now, mapStr };
 }
 
-// PUNCH IN ROUTE WITH AUTOMATIC LOCATION NAMING
 router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
   if (!(await checkRegisteredDevice(req, res))) return;
   const device = getPunchDevice(req, req.body.device_model);
@@ -428,7 +425,6 @@ router.post('/location-update', async (req, res) => {
   }
 });
 
-// PUNCH OUT ROUTE WITH AUTOMATIC LOCATION NAMING
 router.post('/punch-out', attendanceVerificationLimiter, async (req, res) => {
   if (!(await checkRegisteredDevice(req, res))) return;
   const device = getPunchDevice(req, req.body.device_model);
@@ -446,10 +442,8 @@ router.post('/punch-out', attendanceVerificationLimiter, async (req, res) => {
   
   const now = new Date().toISOString();
   
-  // Fetch new readable address for where they are punching out
   const outLocationName = await getLocationName(lat, lng);
   
-  // Clean up the previous string text or fetch the new layout format
   const finalLocationStatus = `${existing.location_status || '📍 In: Unknown'} | Out: ${outLocationName}`;
   
   await db.prepare('UPDATE attendance SET punch_out = ?, out_lat = ?, out_lng = ?, out_location_text = ?, out_device_type = ?, out_device_info = ?, location_status = ? WHERE id = ?')
@@ -577,8 +571,8 @@ router.get('/', requireAdmin, async (req, res) => {
 router.get('/live', requireAdmin, async (req, res) => {
   const rows = await db.prepare(`
     SELECT a.*, u.name AS user_name, u.department FROM attendance a JOIN users u ON u.id = a.user_id
-    WHERE a.date = ? AND a.punch_in IS NOT NULL AND a.punch_out IS NULL
-    ORDER BY a.punch_in`).all(todayStr());
+    WHERE a.date <= ? AND a.punch_in IS NOT NULL AND a.punch_out IS NULL
+    ORDER BY a.date DESC, a.punch_in`).all(todayStr());
     
   const mappedRows = rows.map(r => ({
     ...r,
@@ -588,12 +582,17 @@ router.get('/live', requireAdmin, async (req, res) => {
 });
 
 router.get('/live/:userId/timeline', requireAdmin, async (req, res) => {
-  const rows = await db.prepare(`SELECT al.recorded_at, al.latitude, al.longitude, u.name AS user_name
+  const userId = Number(req.params.userId);
+  if (!Number.isSafeInteger(userId) || userId < 1) return res.status(400).json({ error: 'Invalid employee ID.' });
+  const selectedDate = String(req.query.date || todayStr());
+  const rows = await db.prepare(`SELECT al.recorded_at, al.latitude, al.longitude,
+      al.distance_meters, al.place_changed, u.name AS user_name
     FROM attendance_locations al JOIN users u ON u.id = al.user_id
     JOIN attendance a ON a.id = al.attendance_id
     WHERE al.user_id = ? AND a.date = ? AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL
-    ORDER BY al.recorded_at ASC`).all(req.params.userId, req.query.date || todayStr());
+    ORDER BY al.recorded_at ASC`).all(userId, selectedDate);
   const totalDistance = (rows || []).reduce((total, row) => total + Number(row.distance_meters || 0), 0);
+  await logActivity(req, 'Viewed employee location timeline', 'user', userId, `Attendance date: ${selectedDate}`, userId);
   res.json({ points: rows || [], total_distance_meters: totalDistance, place_changes: (rows || []).filter(row => Number(row.place_changed) === 1).length });
 });
 
@@ -633,15 +632,21 @@ router.get('/tracking/people', async (req, res) => {
 
 router.get('/tracking/:userId/timeline', async (req, res) => {
   if (!(await canViewTracking(req))) return res.status(403).json({ error: 'Tracking access has not been granted to this account.' });
+  const userId = Number(req.params.userId);
+  if (!Number.isSafeInteger(userId) || userId < 1) return res.status(400).json({ error: 'Invalid employee ID.' });
   const selectedDate = req.query.date || todayStr();
+  if (!isValidDateOnly(String(selectedDate))) return res.status(400).json({ error: 'Choose a valid attendance date.' });
   const rows = await db.prepare(`SELECT al.recorded_at, al.latitude, al.longitude, al.distance_meters, al.place_changed, u.name AS user_name
     FROM attendance_locations al JOIN users u ON u.id = al.user_id JOIN attendance a ON a.id = al.attendance_id
     WHERE al.user_id = ? AND a.date = ? AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL
-    ORDER BY al.recorded_at ASC`).all(req.params.userId, selectedDate);
+    ORDER BY al.recorded_at ASC`).all(userId, selectedDate);
   const attendance = await db.prepare(`SELECT a.punch_in, a.punch_out, a.in_lat, a.in_lng, a.out_lat, a.out_lng,
       a.in_location_text, a.out_location_text, u.name AS user_name
     FROM attendance a JOIN users u ON u.id = a.user_id
-    WHERE a.user_id = ? AND a.date = ?`).get(req.params.userId, selectedDate);
+    WHERE a.user_id = ? AND a.date = ?`).get(userId, selectedDate);
+  const previousUtcDate = new Date(`${selectedDate}T00:00:00Z`);
+  previousUtcDate.setUTCDate(previousUtcDate.getUTCDate() - 1);
+  const earliestUtcDate = previousUtcDate.toISOString().slice(0, 10);
   const taskCheckins = await db.prepare(`SELECT c.check_in_at, c.check_in_lat, c.check_in_lng,
       c.check_out_at, c.check_out_lat, c.check_out_lng,
       t.title AS task_title, t.customer_name, p.name AS project_name
@@ -649,12 +654,13 @@ router.get('/tracking/:userId/timeline', async (req, res) => {
     JOIN tasks t ON t.id = c.task_id
     JOIN projects p ON p.id = t.project_id
     WHERE c.user_id = ?
-      AND (substr(c.check_in_at, 1, 10) = ? OR substr(c.check_out_at, 1, 10) = ?)
-    ORDER BY c.check_in_at ASC`).all(req.params.userId, selectedDate, selectedDate);
+      AND ((substr(c.check_in_at, 1, 10) BETWEEN ? AND ?) OR (substr(c.check_out_at, 1, 10) BETWEEN ? AND ?))
+    ORDER BY c.check_in_at ASC`).all(userId, earliestUtcDate, selectedDate, earliestUtcDate, selectedDate);
   const points = [...(rows || [])];
   const events = [];
   const addEvent = (event) => {
-    if (!event.recorded_at || event.recorded_at.slice(0, 10) !== selectedDate) return;
+    const eventDate = new Date(event.recorded_at);
+    if (!event.recorded_at || !Number.isFinite(eventDate.getTime()) || todayStr(eventDate) !== selectedDate) return;
     events.push(event);
   };
   if (attendance?.punch_in) {
@@ -746,6 +752,7 @@ router.get('/tracking/:userId/timeline', async (req, res) => {
       Number(point.longitude)
     )
   ), 0);
+  await logActivity(req, 'Viewed employee location timeline', 'user', userId, `Attendance date: ${selectedDate}`, userId);
   res.json({
     points,
     events,

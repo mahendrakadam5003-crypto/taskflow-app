@@ -60,6 +60,24 @@ async function streamFromTelegram(fileId, res, metadata = {}) {
   response.data.pipe(res);
 }
 
+async function deleteTelegramMessage(messageId) {
+  assertConfigured();
+  const normalizedMessageId = Number(messageId);
+  if (!Number.isSafeInteger(normalizedMessageId) || normalizedMessageId < 1) {
+    throw new Error('Invalid Telegram message ID for cleanup.');
+  }
+  try {
+    const response = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteMessage`, {
+      chat_id: CHANNEL_ID,
+      message_id: normalizedMessageId
+    }, { timeout: 10000 });
+    if (response.data?.ok !== true) throw new Error(response.data?.description || 'Telegram did not confirm message deletion.');
+    return true;
+  } catch (error) {
+    throw new Error(`Telegram cleanup failed: ${error.response?.data?.description || error.message}`);
+  }
+}
+
 async function sendLocationToTelegram(latitude, longitude, caption) {
   assertConfigured();
   try {
@@ -84,4 +102,4 @@ async function sendLocationToTelegram(latitude, longitude, caption) {
   }
 }
 
-module.exports = { uploadToTelegram, streamFromTelegram, sendLocationToTelegram };
+module.exports = { uploadToTelegram, streamFromTelegram, deleteTelegramMessage, sendLocationToTelegram };

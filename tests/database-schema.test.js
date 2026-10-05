@@ -33,6 +33,11 @@ test('foreign keys reject missing parents and cascade project tasks, comments, a
   const output = runInIsolatedDatabase(`
     const foreignKeys = await db.prepare('PRAGMA foreign_keys').get();
     assert.equal(Number(foreignKeys.foreign_keys), 1);
+    const reimbursementColumns = await db.prepare('PRAGMA table_info(reimbursements)').all();
+    const reimbursementColumnNames = reimbursementColumns.map(column => column.name);
+    for (const column of ['approved_level_1_by', 'approved_by', 'paid_by', 'paid_at', 'submission_key', 'edited_at']) {
+      assert.ok(reimbursementColumnNames.includes(column));
+    }
     const admin = await db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
     let invalidProjectRejected = false;
     try { await db.prepare('INSERT INTO tasks (project_id, title) VALUES (?, ?)').run(99999, 'invalid'); }

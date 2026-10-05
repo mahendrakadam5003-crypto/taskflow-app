@@ -979,7 +979,7 @@ async function renderReimbursements() {
           <select id="reimbursement-currency"><option>INR</option><option>USD</option><option>EUR</option></select>
           <select id="reimbursement-category">${categoryOptions}</select>
           <input id="reimbursement-date" type="date" value="${todayISO()}" required>
-          <textarea id="reimbursement-description" class="reimbursement-description" rows="2" placeholder="Description" required></textarea>
+          <textarea id="reimbursement-description" class="reimbursement-description" rows="2" placeholder="Description"></textarea>
           <input id="reimbursement-receipt" type="file" accept="image/*,.pdf" multiple aria-label="Choose receipt photos or files">
           <button class="btn btn-primary" id="reimbursement-submit" type="submit">Submit claim</button>
         </form>
@@ -1009,12 +1009,22 @@ async function renderReimbursements() {
           <th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Receipt</th><th>Status</th><th>Action</th>
         </tr></thead><tbody id="reimbursements-table"></tbody></table>
       </div>
+      <div class="attendance-filters" id="reimbursement-pagination" style="justify-content:flex-end; align-items:center; margin-top:10px;">
+        <button class="btn btn-secondary btn-sm" id="reimbursement-prev" type="button" disabled>Previous</button>
+        <span class="hint" id="reimbursement-page-label">Page 1</span>
+        <button class="btn btn-secondary btn-sm" id="reimbursement-next" type="button" disabled>Next</button>
+      </div>
     </div>`;
 
   const table = $('#reimbursements-table');
+  const reimbursementPageSize = 50;
+  let reimbursementOffset = 0;
+  let reimbursementHasMore = false;
   let editingReimbursementId = null;
+  let reimbursementSubmissionKey = null;
   const showExpenseForm = (row = null) => {
     editingReimbursementId = row ? Number(row.id) : null;
+    reimbursementSubmissionKey = row ? null : (reimbursementSubmissionKey || crypto.randomUUID());
     $('#reimbursement-form').reset();
     $('#reimbursement-amount').value = row ? Number(row.amount).toFixed(2) : '';
     $('#reimbursement-currency').value = row?.currency || 'INR';
@@ -1041,6 +1051,7 @@ async function renderReimbursements() {
   };
   const hideExpenseForm = () => {
     editingReimbursementId = null;
+    reimbursementSubmissionKey = null;
     $('#reimbursement-form').reset();
     $('#employee-reimbursement-form').classList.add('hidden');
     $('#employee-reimbursement-overview').classList.remove('hidden');
@@ -1052,10 +1063,14 @@ async function renderReimbursements() {
   const refreshReimbursementSummary = async () => {
     try {
       const summary = await api('/reimbursements/summary');
-      $('#reimbursement-total-amount').textContent = `INR ${Number(summary.total_amount || 0).toFixed(2)}`;
+      const currencyTotals = summary.currency_totals || [];
+      const formatCurrencyTotals = field => currencyTotals.length
+        ? currencyTotals.map(row => `${escapeHtml(row.currency)} ${Number(row[field] || 0).toFixed(2)}`).join(' · ')
+        : '—';
+      $('#reimbursement-total-amount').textContent = formatCurrencyTotals('total_amount');
       $('#reimbursement-total-count').textContent = `${Number(summary.claim_count || 0)} claim${Number(summary.claim_count || 0) === 1 ? '' : 's'}`;
-      $('#reimbursement-pending-amount').textContent = `INR ${Number(summary.pending_amount || 0).toFixed(2)}`;
-      $('#reimbursement-approved-amount').textContent = `INR ${Number(summary.approved_amount || 0).toFixed(2)}`;
+      $('#reimbursement-pending-amount').textContent = formatCurrencyTotals('pending_amount');
+      $('#reimbursement-approved-amount').textContent = formatCurrencyTotals('approved_amount');
     } catch (error) {
       $('#reimbursement-total-amount').textContent = '—';
       $('#reimbursement-total-count').textContent = 'Unable to load claims';
@@ -1070,8 +1085,21 @@ async function renderReimbursements() {
     if (canReview && $('#reimbursement-status')?.value) params.set('status', $('#reimbursement-status').value);
     if ($('#reimbursement-from')?.value) params.set('from', $('#reimbursement-from').value);
     if ($('#reimbursement-to')?.value) params.set('to', $('#reimbursement-to').value);
+    params.set('limit', String(reimbursementPageSize));
+    params.set('offset', String(reimbursementOffset));
     try {
-      const rows = await api(`/reimbursements?${params.toString()}`);
+      const page = await api(`/reimbursements?${params.toString()}`);
+      const rows = Array.isArray(page) ? page : (page.items || []);
+      reimbursementHasMore = !!page.has_more;
+      if (!rows.length && reimbursementOffset > 0) {
+        reimbursementOffset = Math.max(0, reimbursementOffset - reimbursementPageSize);
+        return renderRows();
+      }
+      $('#reimbursement-prev').disabled = reimbursementOffset === 0;
+      $('#reimbursement-next').disabled = !reimbursementHasMore;
+      $('#reimbursement-page-label').textContent = rows.length
+        ? `Claims ${reimbursementOffset + 1}–${reimbursementOffset + rows.length}`
+        : 'No claims';
       table.innerHTML = rows.length ? rows.map(row => {
         const canApprove = canReview && ((row.status === 'submitted' && (isAdmin || Number(access.approval_level) === 1)) || (row.status === 'approved_level_1' && (isAdmin || Number(access.approval_level) >= 2)));
         const canEdit = !isAdmin && Number(row.user_id) === Number(ME?.id) && row.status === 'submitted';
@@ -1086,7 +1114,7 @@ async function renderReimbursements() {
         <td>${escapeHtml(row.expense_date)}</td><td>${escapeHtml(row.category)}</td><td>${escapeHtml(row.description)}</td>
         <td>${escapeHtml(row.currency)} ${Number(row.amount).toFixed(2)}</td>
         <td>${receiptCell}</td>
-        <td><span class="tag">${escapeHtml(row.status)}</span>${row.admin_note ? `<small class="hint">${escapeHtml(row.admin_note)}</small>` : ''}</td>
+        <td><span class="tag">${escapeHtml(row.status)}</span>${canReview && row.edited_at ? `<small class="hint">Edited after submission · ${escapeHtml(fmtDateTime(row.edited_at))}</small>` : ''}${row.admin_note ? `<small class="hint">${escapeHtml(row.admin_note)}</small>` : ''}</td>
         <td>${canReview ? (canApprove ? `<button class="btn btn-primary btn-sm reimbursement-action" data-id="${row.id}" data-status="approved">Approve</button> <button class="btn btn-danger btn-sm reimbursement-action" data-id="${row.id}" data-status="rejected">Reject</button>` : row.status === 'approved' && canPay ? `<button class="btn btn-secondary btn-sm reimbursement-action" data-id="${row.id}" data-status="paid">Mark paid</button>` : '—') : ''}${canEdit ? ` <button class="btn btn-secondary btn-sm reimbursement-edit" data-id="${row.id}" type="button">Edit</button>` : ''}${isAdmin ? ` <button class="btn btn-danger btn-sm reimbursement-delete" data-id="${row.id}">Delete</button>` : ''}</td>
       </tr>`;
       }).join('') : `<tr><td colspan="${canReview ? 10 : 7}" class="hint" style="text-align:center; padding:15px;">No reimbursement claims found.</td></tr>`;
@@ -1188,13 +1216,16 @@ async function renderReimbursements() {
       formData.append('category', $('#reimbursement-category').value);
       formData.append('expense_date', $('#reimbursement-date').value);
       formData.append('description', $('#reimbursement-description').value.trim());
+      if (!editing) formData.append('submission_key', reimbursementSubmissionKey || crypto.randomUUID());
       Array.from($('#reimbursement-receipt').files || []).forEach(receipt => formData.append('receipt', receipt));
       const response = await fetch(editing ? `/api/reimbursements/${editingReimbursementId}` : '/api/reimbursements', {
         method: editing ? 'PUT' : 'POST', body: formData, credentials: 'same-origin'
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) { $('#reimbursement-form-error').textContent = result.error || 'Unable to save expense.'; return; }
+      if (!editing) reimbursementOffset = 0;
       editingReimbursementId = null;
+      reimbursementSubmissionKey = null;
       $('#reimbursement-form').reset();
       $('#reimbursement-date').value = todayISO();
       $('#reimbursement-form-title').textContent = 'Submit expense';
@@ -1212,9 +1243,18 @@ async function renderReimbursements() {
   }
   ['reimbursement-user', 'reimbursement-status', 'reimbursement-from', 'reimbursement-to'].forEach(id => {
     const filter = $(`#${id}`);
-    if (filter) filter.onchange = renderRows;
+    if (filter) filter.onchange = () => { reimbursementOffset = 0; renderRows(); };
   });
-  $('#reimbursement-filter').onclick = renderRows;
+  $('#reimbursement-filter').onclick = () => { reimbursementOffset = 0; renderRows(); };
+  $('#reimbursement-prev').onclick = () => {
+    reimbursementOffset = Math.max(0, reimbursementOffset - reimbursementPageSize);
+    renderRows();
+  };
+  $('#reimbursement-next').onclick = () => {
+    if (!reimbursementHasMore) return;
+    reimbursementOffset += reimbursementPageSize;
+    renderRows();
+  };
   $('#reimbursement-export').onclick = () => {
     const params = new URLSearchParams();
     if (canReview && $('#reimbursement-user')?.value) params.set('user_id', $('#reimbursement-user').value);

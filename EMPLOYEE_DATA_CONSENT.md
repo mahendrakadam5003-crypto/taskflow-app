@@ -30,6 +30,7 @@ Phone/laptop classification is inferred from browser-provided information and ca
 - The configured database is stored in Turso when cloud database credentials are configured; a local SQLite database is used as a fallback.
 - Attendance location points are sent as Telegram location messages when Telegram storage is configured. Receipt and comment attachments may also be stored in the configured Telegram channel.
 - GPS coordinates are sent to OpenStreetMap Nominatim's reverse-geocoding service to obtain a readable location name.
+- Administrators and employees explicitly granted tracking access can view live attendance locations and selected employees' location timelines. Individual timeline views are recorded in the activity log with the viewer, employee, and date.
 - Tailscale or Render may provide network hosting/proxy services depending on the deployment.
 
 Turso, Telegram, OpenStreetMap Nominatim, Render, and Tailscale are separate providers. Their processing and storage regions depend on the account, service plan, and configuration and may be outside India. The employer must confirm the actual regions, contractual terms, access controls, and any transfer requirements, then update this notice before use.

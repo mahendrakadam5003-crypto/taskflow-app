@@ -426,12 +426,17 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     );`);
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS reimbursements_user_status_idx ON reimbursements(user_id, status)');
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS reimbursements_expense_date_idx ON reimbursements(expense_date)');
-    if (needsSchemaUpgrade) {
-      const reimbursementColumns = await dbDriverInterface.prepare('PRAGMA table_info(reimbursements)').all();
-      const reimbursementColumnNames = reimbursementColumns.map(row => row.name);
-      if (!reimbursementColumnNames.includes('receipt_paths')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN receipt_paths TEXT');
-      if (!reimbursementColumnNames.includes('receipt_meta')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN receipt_meta TEXT');
-    }
+    const reimbursementColumns = await dbDriverInterface.prepare('PRAGMA table_info(reimbursements)').all();
+    const reimbursementColumnNames = reimbursementColumns.map(row => row.name);
+    if (!reimbursementColumnNames.includes('receipt_paths')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN receipt_paths TEXT');
+    if (!reimbursementColumnNames.includes('receipt_meta')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN receipt_meta TEXT');
+    if (!reimbursementColumnNames.includes('approved_level_1_by')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN approved_level_1_by INTEGER REFERENCES users(id)');
+    if (!reimbursementColumnNames.includes('approved_by')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN approved_by INTEGER REFERENCES users(id)');
+    if (!reimbursementColumnNames.includes('paid_by')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN paid_by INTEGER REFERENCES users(id)');
+    if (!reimbursementColumnNames.includes('paid_at')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN paid_at TEXT');
+    if (!reimbursementColumnNames.includes('submission_key')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN submission_key TEXT');
+    if (!reimbursementColumnNames.includes('edited_at')) await dbDriverInterface.exec('ALTER TABLE reimbursements ADD COLUMN edited_at TEXT');
+    await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS reimbursements_submission_key_unique ON reimbursements(submission_key) WHERE submission_key IS NOT NULL');
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS reimbursement_access (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
