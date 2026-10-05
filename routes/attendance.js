@@ -1,5 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const db = require('../db');
 const { csvValue } = require('../csv');
 const axios = require('axios'); // Added axios to make the free API call
@@ -11,6 +13,15 @@ const { wrapAsyncRoutes } = require('../http-errors');
 const router = express.Router();
 wrapAsyncRoutes(router);
 router.use(requireAuth);
+const attendanceVerificationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  keyGenerator: req => `${ipKeyGenerator(req.ip)}:attendance:${req.session.userId}`,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { error: 'Too many attendance verification attempts. Try again later.' }
+});
 
 async function canViewTracking(req) {
   if (req.session.role === 'admin') return true;
@@ -26,6 +37,12 @@ function todayStr(date = new Date()) {
   }).formatToParts(date);
   const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
   return `${values.year}-${values.month}-${values.day}`;
+}
+
+function isValidDateOnly(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 function getPunchDevice(req, reportedModel) {
@@ -46,7 +63,7 @@ function getPunchDevice(req, reportedModel) {
   else if (/Firefox\//i.test(userAgent)) browserName = 'Firefox';
   else if (/Chrome\//i.test(userAgent)) browserName = 'Chrome';
   else if (/Safari\//i.test(userAgent)) browserName = 'Safari';
-  return { type: isPhone ? 'phone' : 'laptop', info: `${deviceName} · ${browserName}` };
+  return { type: isPhone ? 'phone' : 'laptop', info: `${deviceName} · ${browserName} · category indicative` };
 }
 
 function getDeviceTokenHash(deviceId) {
@@ -99,11 +116,38 @@ async function canPunchFromDevice(userId, deviceType) {
   return deviceType === 'laptop' ? Number(access.allow_laptop) === 1 : Number(access.allow_phone) === 1;
 }
 
+async function requireAttendanceVerification(req, res) {
+  const access = await db.prepare('SELECT user_id FROM attendance_verification_access WHERE user_id=?').get(req.session.userId);
+  if (!access) return true;
+  const password = req.body.verification_password;
+  if (typeof password !== 'string' || !password) {
+    res.status(403).json({ error: 'Re-enter your TaskFlow password to verify this attendance punch.' });
+    return false;
+  }
+  const user = await db.prepare('SELECT password_hash FROM users WHERE id=? AND active=1').get(req.session.userId);
+  if (!user?.password_hash || !await bcrypt.compare(password, user.password_hash)) {
+    res.status(401).json({ error: 'Attendance password verification failed.' });
+    return false;
+  }
+  return true;
+}
+
 // Generates an instant, clickable Google Maps link from raw coordinates
 function makeMapLink(lat, lng) {
   if (lat == null || lng == null || isNaN(parseFloat(lat)) || isNaN(parseFloat(lng))) return '';
   return `https://www.google.com/maps?q=${lat},${lng}`;
 }
+
+function validateCoordinates(rawLat, rawLng) {
+  if (rawLat == null || rawLng == null || (typeof rawLat === 'string' && !rawLat.trim()) || (typeof rawLng === 'string' && !rawLng.trim())) return null;
+  const lat = Number(rawLat);
+  const lng = Number(rawLng);
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) return null;
+  return { lat, lng };
+}
+
+let nextNominatimRequestAt = 0;
+const locationNameCache = new Map();
 
 function distanceBetweenPoints(firstLat, firstLng, secondLat, secondLng) {
   const earthRadius = 6371000;
@@ -114,34 +158,67 @@ function distanceBetweenPoints(firstLat, firstLng, secondLat, secondLng) {
   return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-async function recordLocationPoint(attendanceId, userId, lat, lng, recordedAt) {
+async function isInsideConfiguredOffice(lat, lng) {
+  const rows = await db.prepare(`SELECT key, value FROM settings
+    WHERE key IN ('office_lat', 'office_lng', 'office_radius_m')`).all();
+  const settings = Object.fromEntries((rows || []).map(row => [row.key, row.value]));
+  const latitudeValue = String(settings.office_lat || '').trim();
+  const longitudeValue = String(settings.office_lng || '').trim();
+  if (!latitudeValue && !longitudeValue) return true;
+  const officeLat = Number(latitudeValue);
+  const officeLng = Number(longitudeValue);
+  const radiusMeters = Number(settings.office_radius_m);
+  if (!latitudeValue || !longitudeValue || !Number.isFinite(officeLat) || officeLat < -90 || officeLat > 90
+    || !Number.isFinite(officeLng) || officeLng < -180 || officeLng > 180
+    || !Number.isFinite(radiusMeters) || radiusMeters < 1) {
+    throw new Error('Configured office location or radius is invalid.');
+  }
+  return distanceBetweenPoints(lat, lng, officeLat, officeLng) <= radiusMeters;
+}
+
+async function recordLocationPoint(attendanceId, userId, lat, lng, recordedAt, minimumIntervalMs = 0) {
   const previous = await db.prepare(`SELECT latitude, longitude FROM attendance_locations
     WHERE attendance_id = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
     ORDER BY recorded_at DESC, id DESC LIMIT 1`).get(attendanceId);
   const distanceMeters = previous ? distanceBetweenPoints(Number(previous.latitude), Number(previous.longitude), Number(lat), Number(lng)) : 0;
   const placeChanged = distanceMeters >= 50 ? 1 : 0;
-  const info = await db.prepare('INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed) VALUES (?, ?, ?, ?, ?, ?, ?)').run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged);
+  const info = minimumIntervalMs > 0
+    ? await db.prepare(`INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed)
+      SELECT ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (
+        SELECT 1 FROM attendance_locations WHERE attendance_id=? AND recorded_at >= ?
+      )`).run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged,
+      attendanceId, new Date(Date.now() - minimumIntervalMs).toISOString())
+    : await db.prepare('INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged);
+  if (minimumIntervalMs > 0 && !info.changes) return null;
   return { id: info.lastInsertRowid, distanceMeters, placeChanged };
 }
 
 // Free Helper function to convert GPS points into a readable Location Name
 async function getLocationName(lat, lng) {
   try {
-    // Queries OpenStreetMap's free reverse geocoding engine
-    const response = await axios.get(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`, {
-      headers: { 'User-Agent': 'TaskFlowApp/1.0' } // Required by OpenStreetMap policies
+    const cacheKey = `${Number(lat).toFixed(5)},${Number(lng).toFixed(5)}`;
+    if (locationNameCache.has(cacheKey)) return locationNameCache.get(cacheKey);
+    const requestAt = Math.max(Date.now(), nextNominatimRequestAt);
+    nextNominatimRequestAt = requestAt + 1000;
+    const waitMs = requestAt - Date.now();
+    if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, waitMs));
+    const response = await axios.get('https://nominatim.openstreetmap.org/reverse', {
+      params: { lat, lon: lng, format: 'json' },
+      headers: { 'User-Agent': 'TaskFlowApp/1.0' },
+      timeout: 5000
     });
-    
+    let locationName = 'Unknown Location';
     if (response.data && response.data.address) {
       const addr = response.data.address;
-      // Builds a short clean name (e.g., "Main Street, Mumbai" or "Tech Park, Sector 4")
       const place = addr.road || addr.suburb || addr.neighbourhood || '';
       const city = addr.city || addr.town || addr.village || '';
-      
-      if (place && city) return `${place}, ${city}`;
-      if (city) return city;
+      if (place && city) locationName = `${place}, ${city}`;
+      else if (city) locationName = city;
     }
-    return 'Unknown Location';
+    if (locationNameCache.size >= 1000) locationNameCache.delete(locationNameCache.keys().next().value);
+    locationNameCache.set(cacheKey, locationName);
+    return locationName;
   } catch (error) {
     console.error("Geocoding failed:", error.message);
     return 'Location Saved'; // Fallback text if network drops out
@@ -202,6 +279,14 @@ router.post('/device-registration/register', async (req, res) => {
     return res.status(403).json({ error: `This account is already registered to "${existing.device_name}". Ask an administrator to reset it before using another device.` });
   }
   if (existing) {
+    if (existing.device_name !== deviceName) {
+      const device = getPunchDevice(req, req.body.device_model);
+      const updated = await db.prepare('UPDATE attendance_registered_devices SET device_name=?, device_info=? WHERE user_id=? AND device_token_hash=?')
+        .run(deviceName, device.info, req.session.userId, tokenHash);
+      if (!updated.changes) return res.status(409).json({ error: 'Device registration changed in another request. Reload and try again.' });
+      await logActivity(req, 'Attendance device renamed', 'user', req.session.userId, `${existing.device_name} -> ${deviceName}`, req.session.userId);
+      return res.json({ ok: true, device_name: deviceName });
+    }
     return res.json({ ok: true, device_name: existing.device_name });
   } else {
     try {
@@ -212,7 +297,7 @@ router.post('/device-registration/register', async (req, res) => {
     }
   }
   await db.prepare('DELETE FROM attendance_device_rebind_pending WHERE user_id=?').run(req.session.userId);
-  await logActivity(req, existing ? 'Attendance device renamed' : 'Attendance device registered', 'user', req.session.userId, deviceName, req.session.userId);
+  await logActivity(req, 'Attendance device registered', 'user', req.session.userId, deviceName, req.session.userId);
   res.json({ ok: true, device_name: deviceName });
 });
 
@@ -228,7 +313,10 @@ router.delete('/device-registration/:userId', requireAdmin, async (req, res) => 
 
 router.put('/device-access/:userId', requireAdmin, async (req, res) => {
   const userId = Number(req.params.userId);
-  if (!userId) return res.status(400).json({ error: 'Valid user is required.' });
+  if (!Number.isSafeInteger(userId) || userId < 1) return res.status(400).json({ error: 'Valid user is required.' });
+  const target = await db.prepare('SELECT id, active FROM users WHERE id=?').get(userId);
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (Number(target.active) !== 1) return res.status(400).json({ error: 'Cannot update device access for an inactive user.' });
   const allowPhone = req.body.allow_phone ? 1 : 0;
   const allowLaptop = req.body.allow_laptop ? 1 : 0;
   if (!allowPhone && !allowLaptop) return res.status(400).json({ error: 'Allow at least one device.' });
@@ -247,7 +335,10 @@ router.get('/verification-access', requireAdmin, async (req, res) => {
 
 router.put('/verification-access/:userId', requireAdmin, async (req, res) => {
   const userId = Number(req.params.userId);
-  if (!userId) return res.status(400).json({ error: 'Valid user is required.' });
+  if (!Number.isSafeInteger(userId) || userId < 1) return res.status(400).json({ error: 'Valid user is required.' });
+  const target = await db.prepare('SELECT id, active FROM users WHERE id=?').get(userId);
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (req.body.enabled && Number(target.active) !== 1) return res.status(400).json({ error: 'Cannot require attendance verification for an inactive user.' });
   if (req.body.enabled) {
     await db.prepare('INSERT OR REPLACE INTO attendance_verification_access (user_id, enabled_by) VALUES (?, ?)').run(userId, req.session.userId);
   } else {
@@ -256,27 +347,31 @@ router.put('/verification-access/:userId', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-async function savePunchIn(userId, date, lat, lng, device) {
+async function savePunchIn(userId, date, lat, lng, device, { adminEnteredBy = false } = {}) {
   await db.ready;
   const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(userId, date);
   if (existing?.punch_in) return null;
 
-  const locationName = await getLocationName(lat, lng);
+  const locationName = adminEnteredBy ? 'Entered by admin' : await getLocationName(lat, lng);
+  const storedLat = adminEnteredBy ? null : lat;
+  const storedLng = adminEnteredBy ? null : lng;
+  const storedDeviceType = adminEnteredBy ? null : device.type;
+  const storedDeviceInfo = adminEnteredBy ? 'Entered by admin' : device.info;
   const now = new Date().toISOString();
-  const mapStr = `📍 In: ${locationName}`;
+  const mapStr = adminEnteredBy ? 'Entered by admin' : `📍 In: ${locationName}`;
   let attendanceId;
   if (existing) {
     const updated = await db.prepare(`UPDATE attendance SET punch_in = ?, in_lat = ?, in_lng = ?,
       in_location_text = ?, in_device_type = ?, in_device_info = ?, location_status = ?
       WHERE id = ? AND punch_in IS NULL`)
-      .run(now, lat, lng, locationName, device.type, device.info, mapStr, existing.id);
+      .run(now, storedLat, storedLng, locationName, storedDeviceType, storedDeviceInfo, mapStr, existing.id);
     if (!updated.changes) return null;
     attendanceId = existing.id;
   } else {
     const inserted = await db.prepare(`INSERT OR IGNORE INTO attendance
       (user_id, date, punch_in, in_lat, in_lng, in_location_text, in_device_type, in_device_info, location_status)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(userId, date, now, lat, lng, locationName, device.type, device.info, mapStr);
+      .run(userId, date, now, storedLat, storedLng, locationName, storedDeviceType, storedDeviceInfo, mapStr);
     if (!inserted.changes) return null;
     attendanceId = inserted.lastInsertRowid;
   }
@@ -284,13 +379,16 @@ async function savePunchIn(userId, date, lat, lng, device) {
 }
 
 // PUNCH IN ROUTE WITH AUTOMATIC LOCATION NAMING
-router.post('/punch-in', async (req, res) => {
-  const { lat, lng } = req.body;
+router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
   if (!(await checkRegisteredDevice(req, res))) return;
   const device = getPunchDevice(req, req.body.device_model);
   const deviceType = device.type;
   if (!(await canPunchFromDevice(req.session.userId, deviceType))) return res.status(403).json({ error: 'Punching from this device is not allowed. Ask an admin to enable it.' });
-  if (lat == null || lng == null) return res.status(400).json({ error: 'Location is required to punch in.' });
+  const coordinates = validateCoordinates(req.body.lat, req.body.lng);
+  if (!coordinates) return res.status(400).json({ error: 'A valid latitude and longitude are required to punch in.' });
+  const { lat, lng } = coordinates;
+  if (!(await isInsideConfiguredOffice(lat, lng))) return res.status(403).json({ error: 'Punch-in location is outside the configured office radius.' });
+  if (!(await requireAttendanceVerification(req, res))) return;
   
   const date = todayStr();
   const punchIn = await savePunchIn(req.session.userId, date, lat, lng, device);
@@ -309,12 +407,17 @@ router.post('/punch-in', async (req, res) => {
 });
 
 router.post('/location-update', async (req, res) => {
-  const { lat, lng } = req.body;
-  if (lat == null || lng == null) return res.status(400).json({ error: 'Location is required.' });
+  if (!(await checkRegisteredDevice(req, res))) return;
+  const device = getPunchDevice(req, req.body.device_model);
+  if (!(await canPunchFromDevice(req.session.userId, device.type))) return res.status(403).json({ error: 'Live tracking from this device is not allowed.' });
+  const coordinates = validateCoordinates(req.body.lat, req.body.lng);
+  if (!coordinates) return res.status(400).json({ error: 'A valid latitude and longitude are required.' });
+  const { lat, lng } = coordinates;
   const attendance = await db.prepare('SELECT id, punch_in, punch_out FROM attendance WHERE user_id = ? AND date = ?').get(req.session.userId, todayStr());
   if (!attendance?.punch_in || attendance.punch_out) return res.status(400).json({ error: 'Live tracking is only available during an active shift.' });
   const recordedAt = new Date().toISOString();
-  const locationInfo = await recordLocationPoint(attendance.id, req.session.userId, lat, lng, recordedAt);
+  const locationInfo = await recordLocationPoint(attendance.id, req.session.userId, lat, lng, recordedAt, 30_000);
+  if (!locationInfo) return res.json({ ok: true, ignored: true, recorded_at: recordedAt });
   try {
     const telegramMessageId = await sendLocationToTelegram(lat, lng, `Live tracking update: ${req.session.userId}`);
     await db.prepare('UPDATE attendance_locations SET telegram_message_id = ? WHERE id = ?').run(telegramMessageId, locationInfo.id);
@@ -326,13 +429,15 @@ router.post('/location-update', async (req, res) => {
 });
 
 // PUNCH OUT ROUTE WITH AUTOMATIC LOCATION NAMING
-router.post('/punch-out', async (req, res) => {
-  const { lat, lng } = req.body;
+router.post('/punch-out', attendanceVerificationLimiter, async (req, res) => {
   if (!(await checkRegisteredDevice(req, res))) return;
   const device = getPunchDevice(req, req.body.device_model);
   const deviceType = device.type;
   if (!(await canPunchFromDevice(req.session.userId, deviceType))) return res.status(403).json({ error: 'Punching from this device is not allowed. Ask an admin to enable it.' });
-  if (lat == null || lng == null) return res.status(400).json({ error: 'Location is required to punch out.' });
+  const coordinates = validateCoordinates(req.body.lat, req.body.lng);
+  if (!coordinates) return res.status(400).json({ error: 'A valid latitude and longitude are required to punch out.' });
+  const { lat, lng } = coordinates;
+  if (!(await requireAttendanceVerification(req, res))) return;
   
   const date = todayStr();
   const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(req.session.userId, date);
@@ -382,29 +487,36 @@ router.get('/overview', requireAdmin, async (req, res) => {
 
 // admin: punch on behalf of an employee from the monitoring screen
 router.post('/admin-punch-in', requireAdmin, async (req, res) => {
-  const { user_id, lat, lng } = req.body;
+  const userId = Number(req.body.user_id);
+  if (!Number.isSafeInteger(userId) || userId < 1) return res.status(400).json({ error: 'Valid employee ID is required.' });
+  const employee = await db.prepare('SELECT id, active FROM users WHERE id=?').get(userId);
+  if (!employee) return res.status(404).json({ error: 'Employee not found.' });
+  if (Number(employee.active) !== 1) return res.status(400).json({ error: 'Cannot punch in an inactive employee.' });
   const device = getPunchDevice(req, req.body.device_model);
   if (!(await canPunchFromDevice(req.session.userId, device.type))) return res.status(403).json({ error: 'Punching from this device is not allowed for your admin account.' });
-  if (!user_id || lat == null || lng == null) return res.status(400).json({ error: 'Employee and location are required.' });
   const date = todayStr();
-  const punchIn = await savePunchIn(user_id, date, lat, lng, device);
+  const punchIn = await savePunchIn(userId, date, null, null, device, { adminEnteredBy: true });
   if (!punchIn) return res.status(400).json({ error: 'This employee is already punched in today.' });
+  await logActivity(req, 'Admin entered punch-in', 'attendance', punchIn.attendanceId, `${date} - ${employee.id}`, userId);
   res.json({ ok: true });
 });
 
 router.post('/admin-punch-out', requireAdmin, async (req, res) => {
-  const { user_id, lat, lng } = req.body;
+  const userId = Number(req.body.user_id);
+  if (!Number.isSafeInteger(userId) || userId < 1) return res.status(400).json({ error: 'Valid employee ID is required.' });
+  const employee = await db.prepare('SELECT id, active FROM users WHERE id=?').get(userId);
+  if (!employee) return res.status(404).json({ error: 'Employee not found.' });
+  if (Number(employee.active) !== 1) return res.status(400).json({ error: 'Cannot punch out an inactive employee.' });
   const device = getPunchDevice(req, req.body.device_model);
   if (!(await canPunchFromDevice(req.session.userId, device.type))) return res.status(403).json({ error: 'Punching from this device is not allowed for your admin account.' });
-  if (!user_id || lat == null || lng == null) return res.status(400).json({ error: 'Employee and location are required.' });
-  const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(user_id, todayStr());
+  const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(userId, todayStr());
   if (!existing || !existing.punch_in) return res.status(400).json({ error: 'This employee has not punched in today.' });
   if (existing.punch_out) return res.status(400).json({ error: 'This employee is already punched out today.' });
-  const outLocationName = await getLocationName(lat, lng);
   const now = new Date().toISOString();
-  const status = `${existing.location_status || '📍 In: Unknown'} | Out: ${outLocationName}`;
+  const status = `${existing.location_status || '📍 In: Unknown'} | Out: Entered by admin`;
   await db.prepare('UPDATE attendance SET punch_out = ?, out_lat = ?, out_lng = ?, out_location_text = ?, out_device_type = ?, out_device_info = ?, location_status = ? WHERE id = ?')
-    .run(now, lat, lng, outLocationName, device.type, device.info, status, existing.id);
+    .run(now, null, null, 'Entered by admin', null, 'Entered by admin', status, existing.id);
+  await logActivity(req, 'Admin entered punch-out', 'attendance', existing.id, `${existing.date} - ${employee.id}`, userId);
   res.json({ ok: true });
 });
 
@@ -412,11 +524,13 @@ router.post('/admin-punch-out', requireAdmin, async (req, res) => {
 router.get('/mine', async (req, res) => {
   const defaultFrom = new Date(`${todayStr()}T00:00:00.000Z`);
   defaultFrom.setUTCDate(defaultFrom.getUTCDate() - 30);
-  const fromQuery = req.query.from || defaultFrom.toISOString().slice(0, 10);
-  const toQuery = req.query.to || todayStr();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromQuery) || !/^\d{4}-\d{2}-\d{2}$/.test(toQuery) || fromQuery > toQuery) {
+  const fromQuery = String(req.query.from || defaultFrom.toISOString().slice(0, 10));
+  const toQuery = String(req.query.to || todayStr());
+  if (!isValidDateOnly(fromQuery) || !isValidDateOnly(toQuery) || fromQuery > toQuery) {
     return res.status(400).json({ error: 'Choose a valid attendance date range.' });
   }
+  const rangeDays = (Date.parse(`${toQuery}T00:00:00Z`) - Date.parse(`${fromQuery}T00:00:00Z`)) / 86_400_000;
+  if (rangeDays > 365) return res.status(400).json({ error: 'Attendance history is limited to 366 days.' });
   const rows = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date DESC')
     .all(req.session.userId, fromQuery, toQuery);
   const rowsByDate = new Map(rows.map(row => [row.date, row]));
@@ -644,14 +758,26 @@ router.get('/tracking/:userId/timeline', async (req, res) => {
 // admin: CSV export
 router.get('/export.csv', requireAdmin, async (req, res) => {
   const today = todayStr();
-  const from = req.query.from || today;
-  const to = req.query.to || from;
+  const from = String(req.query.from || today);
+  const to = String(req.query.to || from);
+  const isValidDate = value => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00Z`);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  };
+  if (!isValidDate(from) || !isValidDate(to) || from > to) return res.status(400).json({ error: 'Choose a valid attendance date range.' });
+  const dayCount = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000;
+  if (dayCount > 365) return res.status(400).json({ error: 'Attendance exports are limited to 366 days.' });
+  const shiftStart = String(req.query.shift_start || '11:00');
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(shiftStart)) return res.status(400).json({ error: 'Shift start must use 24-hour HH:MM format.' });
   const { user_id, department } = req.query;
-  let userSql = 'SELECT id, name, department FROM users WHERE active = 1';
-  const userParams = [];
-  if (user_id) { userSql += ' AND id = ?'; userParams.push(user_id); }
-  if (department) { userSql += ' AND department = ?'; userParams.push(department); }
-  userSql += ' ORDER BY name';
+  let userSql = `SELECT DISTINCT u.id, u.name, u.department FROM users u
+    LEFT JOIN attendance a ON a.user_id=u.id AND a.date>=? AND a.date<=?
+    WHERE (u.active=1 OR a.id IS NOT NULL)`;
+  const userParams = [from, to];
+  if (user_id) { userSql += ' AND u.id = ?'; userParams.push(user_id); }
+  if (department) { userSql += ' AND u.department = ?'; userParams.push(department); }
+  userSql += ' ORDER BY u.name';
   const users = await db.prepare(userSql).all(...userParams);
 
   const attendanceRows = await db.prepare(`
@@ -661,7 +787,6 @@ router.get('/export.csv', requireAdmin, async (req, res) => {
   `).all(from, to);
   const attendanceByKey = new Map(attendanceRows.map(row => [`${row.user_id}|${row.date}`, row]));
 
-  const shiftStart = String(req.query.shift_start || '11:00');
   const [shiftHour, shiftMinute] = shiftStart.split(':').map(Number);
   const dates = [];
   for (let cursor = new Date(`${from}T00:00:00Z`), end = new Date(`${to}T00:00:00Z`); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
@@ -674,7 +799,7 @@ router.get('/export.csv', requireAdmin, async (req, res) => {
   }
   function displayTime(value) {
     if (!value) return '-';
-    return new Date(value).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    return new Date(value).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true });
   }
   function duration(value) {
     if (!value || value < 0) return '-';
@@ -697,9 +822,15 @@ router.get('/export.csv', requireAdmin, async (req, res) => {
     let lateMinutes = null;
     if (punchedIn) {
       const inDate = new Date(row.punch_in);
-      const shiftDate = new Date(inDate);
-      shiftDate.setHours(shiftHour, shiftMinute, 0, 0);
-      lateMinutes = Math.max(0, Math.round((inDate - shiftDate) / 60000));
+      const indiaParts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Kolkata',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23'
+      }).formatToParts(inDate);
+      const indiaTime = Object.fromEntries(indiaParts.map(part => [part.type, part.value]));
+      const punchMinutes = Number(indiaTime.hour) * 60 + Number(indiaTime.minute);
+      lateMinutes = Math.max(0, punchMinutes - (shiftHour * 60 + shiftMinute));
     }
     const lateText = lateMinutes > 0 ? `${lateMinutes >= 60 ? `${Math.floor(lateMinutes / 60)}hr ` : ''}${lateMinutes % 60 ? `${lateMinutes % 60} mins` : ''}`.trim() : '-';
     lines.push([serial++, displayDate(date), user.name, punchedIn ? 'P' : 'A', inTime, outTime, duration(workingMinutes), lateText].map(csvValue).join(','));
@@ -711,17 +842,49 @@ router.get('/export.csv', requireAdmin, async (req, res) => {
 });
 
 // admin: manual correction
-router.put('/:id', requireAdmin, (req, res) => {
-  const { punch_in, punch_out, notes } = req.body;
-  const updates = [];
-  const vals = [];
-  if (punch_in !== undefined) { updates.push('punch_in = ?'); vals.push(punch_in); }
-  if (punch_out !== undefined) { updates.push('punch_out = ?'); vals.push(punch_out); }
-  if (notes !== undefined) { updates.push('notes = ?'); vals.push(notes); }
-  if (!updates.length) return res.json({ ok: true });
-  vals.push(req.params.id);
-  db.prepare(`UPDATE attendance SET ${updates.join(', ')} WHERE id = ?`).run(...vals);
-  res.json({ ok: true });
+router.put('/:id', requireAdmin, async (req, res) => {
+  try {
+    const attendanceId = Number(req.params.id);
+    if (!Number.isSafeInteger(attendanceId) || attendanceId < 1) return res.status(400).json({ error: 'Invalid attendance record ID.' });
+    const existing = await db.prepare('SELECT id, user_id, punch_in, punch_out, notes FROM attendance WHERE id=?').get(attendanceId);
+    if (!existing) return res.status(404).json({ error: 'Attendance record not found.' });
+    const reason = String(req.body.reason || '').trim();
+    if (!reason || reason.length > 500) return res.status(400).json({ error: 'A correction reason of at most 500 characters is required.' });
+
+    const normalizeTimestamp = value => {
+      if (value === null || value === '') return null;
+      if (typeof value !== 'string' || !value.trim()) return undefined;
+      const timestamp = new Date(value);
+      return Number.isFinite(timestamp.getTime()) ? timestamp.toISOString() : undefined;
+    };
+    const punchIn = req.body.punch_in === undefined ? existing.punch_in : normalizeTimestamp(req.body.punch_in);
+    const punchOut = req.body.punch_out === undefined ? existing.punch_out : normalizeTimestamp(req.body.punch_out);
+    if (punchIn === undefined || punchOut === undefined) return res.status(400).json({ error: 'Punch times must be valid date-time values.' });
+    if (punchIn && punchOut && new Date(punchOut) < new Date(punchIn)) return res.status(400).json({ error: 'Punch-out cannot be earlier than punch-in.' });
+    if (req.body.notes !== undefined && (typeof req.body.notes !== 'string' || req.body.notes.length > 2000)) {
+      return res.status(400).json({ error: 'Notes must be a string of at most 2000 characters.' });
+    }
+
+    const updates = [];
+    const values = [];
+    if (req.body.punch_in !== undefined) { updates.push('punch_in=?'); values.push(punchIn); }
+    if (req.body.punch_out !== undefined) { updates.push('punch_out=?'); values.push(punchOut); }
+    if (req.body.notes !== undefined) { updates.push('notes=?'); values.push(req.body.notes); }
+    if (!updates.length) return res.status(400).json({ error: 'Provide a punch time or notes change.' });
+    values.push(attendanceId);
+    const updated = await db.prepare(`UPDATE attendance SET ${updates.join(', ')} WHERE id=?`).run(...values);
+    if (!updated.changes) return res.status(404).json({ error: 'Attendance record not found.' });
+    const details = [
+      `Reason: ${reason}`,
+      ...(req.body.punch_in !== undefined ? [`Punch in: ${existing.punch_in || '(none)'} -> ${punchIn || '(none)'}`] : []),
+      ...(req.body.punch_out !== undefined ? [`Punch out: ${existing.punch_out || '(none)'} -> ${punchOut || '(none)'}`] : []),
+      ...(req.body.notes !== undefined ? [`Notes: ${existing.notes || '(none)'} -> ${req.body.notes || '(none)'}`] : [])
+    ].join('; ');
+    await logActivity(req, 'Attendance record corrected', 'attendance', attendanceId, details, existing.user_id);
+    res.json({ ok: true });
+  } catch (error) {
+    sendInternalError(res, error, 'Attendance correction failed');
+  }
 });
 
 module.exports = router;

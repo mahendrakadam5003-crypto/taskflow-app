@@ -273,6 +273,7 @@ const initializationPromise = (async function initializeDatabaseScripts() {
         { sql: 'ALTER TABLE task_checkins_rebuilt RENAME TO task_checkins' }
       ]);
     }
+    }
     const duplicateOpenCheckin = await dbDriverInterface.prepare(`SELECT task_id, user_id, COUNT(*) AS duplicate_count
       FROM task_checkins WHERE check_out_at IS NULL GROUP BY task_id, user_id HAVING COUNT(*) > 1 LIMIT 1`).get();
     if (duplicateOpenCheckin) {
@@ -281,7 +282,6 @@ const initializationPromise = (async function initializeDatabaseScripts() {
     await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS task_checkins_one_open_per_user ON task_checkins(task_id, user_id) WHERE check_out_at IS NULL');
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS task_checkins_task_id_idx ON task_checkins(task_id)');
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS task_checkins_user_checkin_idx ON task_checkins(user_id, check_in_at)');
-    }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS subtasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

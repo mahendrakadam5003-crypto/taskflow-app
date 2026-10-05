@@ -18,6 +18,46 @@ const { businessDate } = require('../lib/business-date');
 const router = express.Router();
 wrapAsyncRoutes(router);
 router.use(requireAuth);
+router.use('/projects/:id', async (req, res, next) => {
+  if (req.path === '/unlock') return next();
+  if (req.session?.role === 'admin') return next();
+  const projectId = Number(req.params.id);
+  if (!Number.isSafeInteger(projectId) || projectId < 1) return next();
+  const project = await db.prepare('SELECT pin_hash FROM projects WHERE id=?').get(projectId);
+  if (!project || !project.pin_hash) return next();
+  if (hasUnlockedProject(req, projectId)) return next();
+  return res.status(403).json({ error: 'This project is locked. Unlock it with the project PIN first.' });
+});
+router.use('/tasks/:id', async (req, res, next) => {
+  if (req.session?.role === 'admin') return next();
+  const taskId = Number(req.params.id);
+  if (!Number.isSafeInteger(taskId) || taskId < 1) return next();
+  const task = await db.prepare(`SELECT t.project_id, p.pin_hash
+    FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?`).get(taskId);
+  if (!task || !task.pin_hash) return next();
+  if (hasUnlockedProject(req, task.project_id)) return next();
+  return res.status(403).json({ error: 'This project is locked. Unlock it with the project PIN first.' });
+});
+router.use('/subtasks/:id', async (req, res, next) => {
+  if (req.session?.role === 'admin') return next();
+  const subtaskId = Number(req.params.id);
+  if (!Number.isSafeInteger(subtaskId) || subtaskId < 1) return next();
+  const subtask = await db.prepare(`SELECT t.project_id, p.pin_hash
+    FROM subtasks s JOIN tasks t ON t.id=s.task_id JOIN projects p ON p.id=t.project_id WHERE s.id=?`).get(subtaskId);
+  if (!subtask || !subtask.pin_hash) return next();
+  if (hasUnlockedProject(req, subtask.project_id)) return next();
+  return res.status(403).json({ error: 'This project is locked. Unlock it with the project PIN first.' });
+});
+router.use('/comments/:id', async (req, res, next) => {
+  if (req.session?.role === 'admin') return next();
+  const commentId = Number(req.params.id);
+  if (!Number.isSafeInteger(commentId) || commentId < 1) return next();
+  const comment = await db.prepare(`SELECT t.project_id, p.pin_hash
+    FROM comments c JOIN tasks t ON t.id=c.task_id JOIN projects p ON p.id=t.project_id WHERE c.id=?`).get(commentId);
+  if (!comment || !comment.pin_hash) return next();
+  if (hasUnlockedProject(req, comment.project_id)) return next();
+  return res.status(403).json({ error: 'This project is locked. Unlock it with the project PIN first.' });
+});
 const asanaImportProgress = new Map();
 
 function formatStorageUsage(totalBytes, usedBytes, source = 'turso') {
@@ -178,6 +218,14 @@ const commentUpload = multer({
     callback(null, true);
   }
 });
+const handleCommentUploadError = (req, res, next) => {
+  commentUpload.single('attachment')(req, res, error => {
+    if (!error) return next();
+    if (error.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Comment attachments cannot exceed 10 MB.' });
+    if (error.status === 415) return res.status(415).json({ error: error.message });
+    return res.status(400).json({ error: 'Unable to receive the comment attachment. Check the file and try again.' });
+  });
+};
 const asanaImportUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024, files: 10 }
@@ -204,6 +252,33 @@ const handleAsanaUploadError = (uploadMiddleware, label) => (req, res, next) => 
 async function canAccessProject(projectId, userId, admin = false) {
   if (admin) return true;
   return !!(await db.prepare(`SELECT 1 FROM projects p LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=? WHERE p.id=? AND (p.created_by=? OR pm.user_id=?)`).get(userId, projectId, userId, userId));
+}
+function getUnlockedProjectMap(req) {
+  const existing = req.session?.unlocked_projects;
+  if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+    req.session.unlocked_projects = {};
+    return req.session.unlocked_projects;
+  }
+  const now = Date.now();
+  for (const [projectId, expiresAt] of Object.entries(existing)) {
+    if (!Number.isFinite(Number(expiresAt)) || Number(expiresAt) <= now) delete existing[projectId];
+  }
+  req.session.unlocked_projects = existing;
+  return existing;
+}
+function hasUnlockedProject(req, projectId) {
+  if (req.session?.role === 'admin') return true;
+  const projectIdKey = String(projectId);
+  const expiresAt = Number(getUnlockedProjectMap(req)[projectIdKey]);
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+async function ensureProjectUnlocked(req, res, projectId) {
+  if (req.session?.role === 'admin') return true;
+  const project = await db.prepare('SELECT pin_hash FROM projects WHERE id=?').get(projectId);
+  if (!project || !project.pin_hash) return true;
+  if (hasUnlockedProject(req, projectId)) return true;
+  res.status(403).json({ error: 'This project is locked. Unlock it with the project PIN first.' });
+  return false;
 }
 async function canViewPaymentHistory(req) {
   if (req.session.role === 'admin') return true;
@@ -259,14 +334,38 @@ async function canAccessTask(taskId, userId, admin = false) {
   if (row && Number(row.assignee_id) === Number(userId)) return true;
   return row && (await canAccessProject(row.project_id, userId, false));
 }
+async function canAssignTaskToProject(projectId, userId) {
+  const normalizedUserId = Number(userId);
+  if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId < 1) return false;
+  const activeUser = await db.prepare('SELECT id FROM users WHERE id=? AND active=1').get(normalizedUserId);
+  return !!activeUser && canAccessProject(projectId, normalizedUserId, false);
+}
 async function requireProjectAccess(req, res, next) {
   try {
     await db.ready;
     const id = Number(req.params.id);
     if (!(await canAccessProject(id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You are not a member of this project' });
+    if (!(await ensureProjectUnlocked(req, res, id))) return;
     next();
   } catch (err) {
     sendInternalError(res, err, 'Project access check failed');
+  }
+}
+async function requireProjectTaskAccess(req, res, next) {
+  try {
+    await db.ready;
+    const projectId = Number(req.params.id);
+    const canViewAllTasks = await canAccessProject(projectId, req.session.userId, req.session.role === 'admin');
+    if (!canViewAllTasks) {
+      const hasAssignedTask = await db.prepare('SELECT 1 FROM tasks WHERE project_id=? AND assignee_id=? LIMIT 1')
+        .get(projectId, req.session.userId);
+      if (!hasAssignedTask) return res.status(403).json({ error: 'You do not have access to this project.' });
+    }
+    if (!(await ensureProjectUnlocked(req, res, projectId))) return;
+    req.canViewAllProjectTasks = canViewAllTasks;
+    next();
+  } catch (err) {
+    sendInternalError(res, err, 'Project task access check failed');
   }
 }
 
@@ -328,11 +427,14 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
   try {
     const projectRows = await db.prepare(`SELECT DISTINCT p.id, p.name
       FROM projects p LEFT JOIN project_members pm ON pm.project_id = p.id
-      WHERE ? = 'admin' OR p.created_by = ? OR pm.user_id = ? ORDER BY p.name`).all(req.session.role, req.session.userId, req.session.userId);
+      WHERE ? = 'admin' OR p.created_by = ? OR pm.user_id = ?
+        OR EXISTS (SELECT 1 FROM tasks assigned WHERE assigned.project_id = p.id AND assigned.assignee_id = ?)
+      ORDER BY p.name`).all(req.session.role, req.session.userId, req.session.userId, req.session.userId);
     const taskRows = await db.prepare(`SELECT t.project_id, t.due_date
       FROM tasks t JOIN projects p ON p.id = t.project_id
-      WHERE COALESCE(t.status, 'open') <> 'done' AND (? = 'admin' OR p.created_by = ? OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = ?))`)
-      .all(req.session.role, req.session.userId, req.session.userId);
+      WHERE COALESCE(t.status, 'open') <> 'done'
+        AND (? = 'admin' OR p.created_by = ? OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = ?) OR t.assignee_id = ?)`)
+      .all(req.session.role, req.session.userId, req.session.userId, req.session.userId);
     const today = businessDate();
     const projects = projectRows.map(project => {
       const projectTasks = taskRows.filter(task => Number(task.project_id) === Number(project.id));
@@ -866,21 +968,25 @@ router.post('/admin/asana-import', requireAdmin, handleAsanaUploadError(asanaImp
       if (progressId) {
         asanaImportProgress.set(progressId, { status: 'failed', percent: currentProgress ? Math.min(99, asanaImportProgress.get(progressId)?.percent || 0) : 0, message: 'Import failed. Please check the server logs.', eta_seconds: null, updated_at: Date.now() });
       }
+      let rollbackFailed = false;
       if (projectId && createdProject) {
-        const taskIds = await db.prepare('SELECT id FROM tasks WHERE project_id = ?').all(projectId).catch(() => []);
-        const ids = (taskIds || []).map(row => Number(row.id));
-        if (ids.length) {
-          const marks = ids.map(() => '?').join(',');
-          await db.prepare(`DELETE FROM subtasks WHERE task_id IN (${marks})`).run(...ids).catch(() => {});
-          await db.prepare(`DELETE FROM comments WHERE task_id IN (${marks})`).run(...ids).catch(() => {});
-          await db.prepare(`DELETE FROM task_history WHERE task_id IN (${marks})`).run(...ids).catch(() => {});
-          await db.prepare(`DELETE FROM task_checkins WHERE task_id IN (${marks})`).run(...ids).catch(() => {});
+        try {
+          await db.batch([
+            { sql: 'DELETE FROM subtasks WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)', args: [projectId] },
+            { sql: 'DELETE FROM comments WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)', args: [projectId] },
+            { sql: 'DELETE FROM task_history WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)', args: [projectId] },
+            { sql: 'DELETE FROM task_checkins WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)', args: [projectId] },
+            { sql: 'DELETE FROM telegram_attachments WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)', args: [projectId] },
+            { sql: 'DELETE FROM project_members WHERE project_id = ?', args: [projectId] },
+            { sql: 'DELETE FROM tasks WHERE project_id = ?', args: [projectId] },
+            { sql: 'DELETE FROM projects WHERE id = ?', args: [projectId] }
+          ]);
+        } catch (rollbackError) {
+          rollbackFailed = true;
+          console.error(`Asana import rollback failed for ${file.originalname}:`, rollbackError);
         }
-        await db.prepare('DELETE FROM project_members WHERE project_id = ?').run(projectId).catch(() => {});
-        await db.prepare('DELETE FROM tasks WHERE project_id = ?').run(projectId).catch(() => {});
-        await db.prepare('DELETE FROM projects WHERE id = ?').run(projectId).catch(() => {});
       }
-      results.push({ file: file.originalname, status: 'failed', project_gid: projectGid, error: 'Import failed.' });
+      results.push({ file: file.originalname, status: 'failed', project_gid: projectGid, error: rollbackFailed ? 'Import failed and cleanup was incomplete; administrator review is required.' : 'Import failed.' });
     }
   }
   res.json({ ok: results.every(result => result.status === 'imported'), results });
@@ -940,45 +1046,71 @@ router.post('/admin/asana-import/:projectId/attachments', requireAdmin, handleAs
 });
 
 router.get('/task-checkin-access', requireAdmin, async (req, res) => {
-  const rows = await db.prepare(`SELECT u.id, u.name, u.username,
-    CASE WHEN a.user_id IS NULL THEN 0 ELSE 1 END AS checkin_required
-    FROM users u LEFT JOIN task_checkin_access a ON a.user_id=u.id
-    WHERE u.active=1 ORDER BY u.name`).all();
-  res.json(rows || []);
+  try {
+    const rows = await db.prepare(`SELECT u.id, u.name, u.username,
+      CASE WHEN a.user_id IS NULL THEN 0 ELSE 1 END AS checkin_required
+      FROM users u LEFT JOIN task_checkin_access a ON a.user_id=u.id
+      WHERE u.active=1 ORDER BY u.name`).all();
+    res.json(rows || []);
+  } catch (error) {
+    sendInternalError(res, error, 'Task check-in access list failed');
+  }
 });
 
 router.put('/task-checkin-access/:userId', requireAdmin, async (req, res) => {
-  const userId = Number(req.params.userId);
-  if (!userId) return res.status(400).json({ error: 'Valid user is required.' });
-  if (req.body.enabled) {
-    await db.prepare('INSERT OR REPLACE INTO task_checkin_access (user_id, enabled_by) VALUES (?, ?)').run(userId, req.session.userId);
-  } else {
-    await db.prepare('DELETE FROM task_checkin_access WHERE user_id=?').run(userId);
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isSafeInteger(userId) || userId < 1) return res.status(400).json({ error: 'Valid user is required.' });
+    const target = await db.prepare('SELECT id, active FROM users WHERE id=?').get(userId);
+    if (!target) return res.status(404).json({ error: 'User not found.' });
+    if (req.body.enabled && Number(target.active) !== 1) return res.status(400).json({ error: 'Cannot require check-in for an inactive user.' });
+    if (req.body.enabled) {
+      await db.prepare('INSERT OR REPLACE INTO task_checkin_access (user_id, enabled_by) VALUES (?, ?)').run(userId, req.session.userId);
+    } else {
+      await db.prepare('DELETE FROM task_checkin_access WHERE user_id=?').run(userId);
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    sendInternalError(res, error, 'Task check-in access update failed');
   }
-  res.json({ ok: true });
 });
 
 router.get('/task-work-mode-access/me', async (req, res) => {
-  res.json({ allowed: await canChangeTaskWorkMode(req) });
+  try {
+    res.json({ allowed: await canChangeTaskWorkMode(req) });
+  } catch (error) {
+    sendInternalError(res, error, 'Task work-mode access lookup failed');
+  }
 });
 
 router.get('/task-work-mode-access', requireAdmin, async (req, res) => {
-  const rows = await db.prepare(`SELECT u.id, u.name, u.username,
-    CASE WHEN a.user_id IS NULL THEN 0 ELSE 1 END AS can_change_work_mode
-    FROM users u LEFT JOIN task_work_mode_access a ON a.user_id=u.id
-    WHERE u.active=1 ORDER BY u.name`).all();
-  res.json(rows || []);
+  try {
+    const rows = await db.prepare(`SELECT u.id, u.name, u.username,
+      CASE WHEN a.user_id IS NULL THEN 0 ELSE 1 END AS can_change_work_mode
+      FROM users u LEFT JOIN task_work_mode_access a ON a.user_id=u.id
+      WHERE u.active=1 ORDER BY u.name`).all();
+    res.json(rows || []);
+  } catch (error) {
+    sendInternalError(res, error, 'Task work-mode access list failed');
+  }
 });
 
 router.put('/task-work-mode-access/:userId', requireAdmin, async (req, res) => {
-  const userId = Number(req.params.userId);
-  if (!userId) return res.status(400).json({ error: 'Valid user is required.' });
-  if (req.body.enabled) {
-    await db.prepare('INSERT OR REPLACE INTO task_work_mode_access (user_id, enabled_by) VALUES (?, ?)').run(userId, req.session.userId);
-  } else {
-    await db.prepare('DELETE FROM task_work_mode_access WHERE user_id=?').run(userId);
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isSafeInteger(userId) || userId < 1) return res.status(400).json({ error: 'Valid user is required.' });
+    const target = await db.prepare('SELECT id, active FROM users WHERE id=?').get(userId);
+    if (!target) return res.status(404).json({ error: 'User not found.' });
+    if (req.body.enabled && Number(target.active) !== 1) return res.status(400).json({ error: 'Cannot grant work-mode access to an inactive user.' });
+    if (req.body.enabled) {
+      await db.prepare('INSERT OR REPLACE INTO task_work_mode_access (user_id, enabled_by) VALUES (?, ?)').run(userId, req.session.userId);
+    } else {
+      await db.prepare('DELETE FROM task_work_mode_access WHERE user_id=?').run(userId);
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    sendInternalError(res, error, 'Task work-mode access update failed');
   }
-  res.json({ ok: true });
 });
 
 router.put('/project-action-access/:userId', requireAdmin, async (req, res) => {
@@ -1000,36 +1132,76 @@ router.put('/project-action-access/:userId', requireAdmin, async (req, res) => {
 });
 
 router.put('/projects/:id', async (req, res) => {
-  if (!(await canAccessProject(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You are not a member of this project.' });
-  if (!(await canProjectAction(req, 'edit_project'))) return res.status(403).json({ error: 'You do not have permission to edit projects.' });
-  const name = String(req.body.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'Project name is required.' });
-  const project = await db.prepare('SELECT id FROM projects WHERE id=?').get(req.params.id);
-  if (!project) return res.status(404).json({ error: 'Project not found.' });
-  await db.prepare('UPDATE projects SET name=? WHERE id=?').run(name, req.params.id);
-  res.json({ ok: true });
+  try {
+    if (!(await canAccessProject(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You are not a member of this project.' });
+    if (!(await canProjectAction(req, 'edit_project'))) return res.status(403).json({ error: 'You do not have permission to edit projects.' });
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Project name is required.' });
+    const hasPinUpdate = Object.prototype.hasOwnProperty.call(req.body || {}, 'pin');
+    const pin = req.body.pin;
+    if (hasPinUpdate && pin !== null && pin !== '' && (typeof pin !== 'string' || !/^\d{4,12}$/.test(pin))) {
+      return res.status(400).json({ error: 'Project PIN must contain 4 to 12 digits, or be empty to remove it.' });
+    }
+    const project = await db.prepare('SELECT id FROM projects WHERE id=?').get(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found.' });
+    if (hasPinUpdate) {
+      const pinHash = pin ? await bcrypt.hash(pin, 10) : null;
+      await db.prepare('UPDATE projects SET name=?, pin_hash=? WHERE id=?').run(name, pinHash, req.params.id);
+    } else {
+      await db.prepare('UPDATE projects SET name=? WHERE id=?').run(name, req.params.id);
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    sendInternalError(res, error, 'Project update failed');
+  }
 });
 
-router.post('/projects/:id/unlock', requireProjectAccess, projectPinLimiter, async (req, res) => {
+router.post('/projects/:id/unlock', projectPinLimiter, async (req, res) => {
   try {
     const project = await db.prepare('SELECT * FROM projects WHERE id=?').get(req.params.id);
     if (!project) return res.status(404).json({ error: 'Not found' });
-    if (!project.pin_hash || await bcrypt.compare(String(req.body.pin || ''), project.pin_hash)) return res.json({ ok: true });
+    if (!project.pin_hash) return res.json({ ok: true });
+    if (await bcrypt.compare(String(req.body.pin || ''), project.pin_hash)) {
+      const unlockedProjects = getUnlockedProjectMap(req);
+      unlockedProjects[String(req.params.id)] = Date.now() + 30 * 60 * 1000;
+      req.session.unlocked_projects = unlockedProjects;
+      return res.json({ ok: true });
+    }
     res.status(401).json({ error: 'Wrong PIN' });
   } catch (err) { sendInternalError(res, err, 'Project unlock failed'); }
 });
 
 router.delete('/projects/:id', async (req, res) => {
   try {
-    if (!(await canAccessProject(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You are not a member of this project.' });
+    const projectId = Number(req.params.id);
+    if (!Number.isSafeInteger(projectId) || projectId < 1) return res.status(400).json({ error: 'Invalid project ID.' });
+    const project = await db.prepare('SELECT id, name, created_by FROM projects WHERE id=?').get(projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found.' });
+    if (!(await canAccessProject(projectId, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You are not a member of this project.' });
     if (!(await canProjectAction(req, 'delete_project'))) return res.status(403).json({ error: 'You do not have permission to delete projects.' });
-    await db.prepare('DELETE FROM projects WHERE id=?').run(req.params.id);
+
+    const taskRows = await db.prepare('SELECT id FROM tasks WHERE project_id=?').all(projectId);
+    const taskIds = (taskRows || []).map(row => Number(row.id)).filter(Number.isSafeInteger);
+    const statements = [];
+    if (taskIds.length) {
+      const placeholders = taskIds.map(() => '?').join(',');
+      statements.push({ sql: `DELETE FROM subtasks WHERE task_id IN (${placeholders})`, args: taskIds });
+      statements.push({ sql: `DELETE FROM comments WHERE task_id IN (${placeholders})`, args: taskIds });
+      statements.push({ sql: `DELETE FROM task_history WHERE task_id IN (${placeholders})`, args: taskIds });
+      statements.push({ sql: `DELETE FROM task_checkins WHERE task_id IN (${placeholders})`, args: taskIds });
+      statements.push({ sql: `DELETE FROM telegram_attachments WHERE task_id IN (${placeholders})`, args: taskIds });
+    }
+    statements.push({ sql: 'DELETE FROM project_members WHERE project_id = ?', args: [projectId] });
+    statements.push({ sql: 'DELETE FROM tasks WHERE project_id = ?', args: [projectId] });
+    statements.push({ sql: 'DELETE FROM projects WHERE id = ?', args: [projectId] });
+    await db.batch(statements);
+    await logActivity(req, 'Project deleted', 'project', project.id, project.name, project.created_by || req.session.userId);
     res.json({ ok: true });
   } catch (err) { sendInternalError(res, err, 'Project deletion failed'); }
 });
 
 // ---- Tasks ----
-router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
+router.get('/projects/:id/tasks', requireProjectTaskAccess, async (req, res) => {
   try {
     const assignee = String(req.query.assignee_id || '').trim();
     const search = String(req.query.q || '').trim();
@@ -1039,6 +1211,10 @@ router.get('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 200) : 200;
     let sql = `SELECT t.id,t.title,t.status,t.position,t.created_at,t.due_date,COALESCE(u.name,t.asana_assignee_name) AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? AND t.id>?`;
     const params = [req.params.id, afterId];
+    if (!req.canViewAllProjectTasks) {
+      sql += ' AND t.assignee_id=?';
+      params.push(req.session.userId);
+    }
     if (status !== 'all') {
       sql += status === 'done' ? " AND t.status='done'" : " AND COALESCE(t.status, 'open') <> 'done'";
     }
@@ -1091,11 +1267,11 @@ router.get('/tasks/search', async (req, res) => {
     const sql = `SELECT t.id,t.project_id,t.title,t.status,t.due_date,t.assignee_id,t.asana_assignee_name,p.name AS project_name,COALESCE(u.name,t.asana_assignee_name) AS assignee_name
       FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN users u ON u.id=t.assignee_id
       LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=?
-      WHERE (p.created_by=? OR pm.user_id=? OR ?=1)
+      WHERE (p.created_by=? OR pm.user_id=? OR ?=1 OR t.assignee_id=?)
       ${words.map(() => 'AND (t.title LIKE ? OR t.description LIKE ? OR u.name LIKE ? OR t.asana_assignee_name LIKE ? OR p.name LIKE ?)').join(' ')}
       ORDER BY CASE WHEN t.title LIKE ? THEN 0 WHEN t.description LIKE ? THEN 1 ELSE 2 END,
         CASE WHEN t.status='open' THEN 0 ELSE 1 END,t.created_at DESC LIMIT 50`;
-    const params = [req.session.userId, req.session.userId, req.session.userId, admin ? 1 : 0];
+    const params = [req.session.userId, req.session.userId, req.session.userId, admin ? 1 : 0, req.session.userId];
     words.forEach(word => { const like = `%${word}%`; params.push(like, like, like, like, like); });
     params.push(`%${q}%`, `%${q}%`);
     res.json(await db.prepare(sql).all(...params));
@@ -1112,7 +1288,7 @@ router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     const invoiceType = String(invoice_type || 'gst').trim().toLowerCase();
     if (!INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invoice type must be Cash or GST.' });
     if (!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
-    if (assignee_id && !(await canAccessProject(req.params.id, Number(assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
+    if (assignee_id && !(await canAssignTaskToProject(req.params.id, assignee_id))) return res.status(400).json({ error: 'Assignee must be an active project member' });
     const normalizedInvoiceNumber = noBillingRequired ? null : String(invoice_number || '').trim() || null;
     const normalizedInvoiceDate = noBillingRequired ? null : (invoice_date || null);
     const normalizedCustomerName = noBillingRequired ? '' : String(customer_name || '').trim();
@@ -1140,6 +1316,9 @@ router.put('/tasks/:id', async (req, res) => {
     if (req.body.status !== undefined && !['open', 'done'].includes(req.body.status)) {
       return res.status(400).json({ error: 'Task status must be open or done.' });
     }
+    if (req.body.title !== undefined && (typeof req.body.title !== 'string' || !req.body.title.trim())) {
+      return res.status(400).json({ error: 'Task title is required.' });
+    }
     if (req.body.work_mode !== undefined && !['office', 'on_field'].includes(req.body.work_mode)) {
       return res.status(400).json({ error: 'Task work mode must be office or on_field.' });
     }
@@ -1148,7 +1327,7 @@ router.put('/tasks/:id', async (req, res) => {
     const workModeChangeRequested = req.body.work_mode !== undefined;
     if (workModeChangeRequested && !(await canChangeTaskWorkMode(req))) return res.status(403).json({ error: 'You do not have permission to change the task work location. Ask an administrator.' });
     if (Object.keys(req.body).some(key => !['status', 'work_mode'].includes(key)) && !(await canProjectAction(req, 'edit_task'))) return res.status(403).json({ error: 'You do not have permission to edit tasks.' });
-    const taskBefore = await db.prepare('SELECT title, description, status, assignee_id, due_date, payment_member_id, invoice_number, invoice_date, customer_name, total_amount, amount_received, invoice_type, no_billing_required, work_mode FROM tasks WHERE id=?').get(req.params.id);
+    const taskBefore = await db.prepare('SELECT project_id, title, description, status, assignee_id, due_date, payment_member_id, invoice_number, invoice_date, customer_name, total_amount, amount_received, invoice_type, no_billing_required, work_mode FROM tasks WHERE id=?').get(req.params.id);
     if (!taskBefore) return res.status(404).json({ error: 'Task not found.' });
     const nextTotalAmount = req.body.total_amount === undefined
       ? Number(taskBefore.total_amount || 0)
@@ -1158,6 +1337,25 @@ router.put('/tasks/:id', async (req, res) => {
     const noBillingRequired = req.body.no_billing_required === undefined
       ? Number(taskBefore.no_billing_required) === 1
       : req.body.no_billing_required === true || Number(req.body.no_billing_required) === 1;
+    const billingChanges = [];
+    const addBillingChange = (field, oldValue, newValue) => {
+      const oldText = oldValue == null ? '' : String(oldValue);
+      const newText = newValue == null ? '' : String(newValue);
+      if (oldText !== newText) billingChanges.push([field, oldText, newText]);
+    };
+    if (req.body.no_billing_required !== undefined) {
+      addBillingChange('No billing required', Number(taskBefore.no_billing_required) === 1 ? 'Yes' : 'No', noBillingRequired ? 'Yes' : 'No');
+    }
+    if (!noBillingRequired) {
+      if (req.body.invoice_number !== undefined) addBillingChange('Invoice number', taskBefore.invoice_number, String(req.body.invoice_number || '').trim() || null);
+      if (req.body.invoice_date !== undefined) addBillingChange('Invoice date', taskBefore.invoice_date, req.body.invoice_date || null);
+      if (req.body.customer_name !== undefined) addBillingChange('Customer', taskBefore.customer_name, String(req.body.customer_name || '').trim());
+      if (req.body.invoice_type !== undefined) addBillingChange('Invoice type', taskBefore.invoice_type, String(req.body.invoice_type || '').trim().toLowerCase());
+      if (req.body.total_amount !== undefined) addBillingChange('Invoice total', taskBefore.total_amount, nextTotalAmount);
+    }
+    if (taskBefore.status === 'done' && billingChanges.length) {
+      return res.status(409).json({ error: 'Billing details cannot be changed after task completion.' });
+    }
     if (req.body.status === 'done' && !noBillingRequired) {
       const invoiceNumber = String(req.body.invoice_number ?? taskBefore.invoice_number ?? '').trim();
       const invoiceDate = String(req.body.invoice_date ?? taskBefore.invoice_date ?? '').trim();
@@ -1209,7 +1407,7 @@ router.put('/tasks/:id', async (req, res) => {
     if (!noBillingRequired && req.body.total_amount !== undefined) { updates.push('total_amount=?'); values.push(nextTotalAmount); }
     if (req.body.work_mode !== undefined) { updates.push('work_mode=?'); values.push(nextWorkMode); }
     if (req.body.assignee_id !== undefined) {
-      if (req.body.assignee_id && !(await canAccessProject((await db.prepare('SELECT project_id FROM tasks WHERE id=?').get(req.params.id)).project_id, Number(req.body.assignee_id), false))) return res.status(400).json({ error: 'Assignee must be a project member' });
+      if (req.body.assignee_id && !(await canAssignTaskToProject(taskBefore.project_id, req.body.assignee_id))) return res.status(400).json({ error: 'Assignee must be an active project member' });
       updates.push('assignee_id=?'); values.push(req.body.assignee_id || null);
       if (req.body.assignee_id) updates.push('asana_assignee_name=NULL');
     }
@@ -1228,6 +1426,7 @@ router.put('/tasks/:id', async (req, res) => {
       const newText = newValue == null ? '' : String(newValue);
       if (oldText !== newText) historyRows.push([req.params.id, req.session.userId, field, oldText, newText]);
     };
+    for (const [field, oldValue, newValue] of billingChanges) trackChange(field, oldValue, newValue);
     if (req.body.title !== undefined) trackChange('Title', taskBefore.title, String(req.body.title).trim());
     if (req.body.description !== undefined && String(taskBefore.description || '').trim()) {
       trackChange('Description', taskBefore.description, String(req.body.description));
@@ -1280,10 +1479,27 @@ router.get('/tasks/:id/activity', async (req, res) => {
     ORDER BY created_at DESC, id DESC, activity_type DESC LIMIT ? OFFSET ?`)
       .all(req.params.id, req.params.id, limit + 1, offset);
     const hasMore = rows.length > limit;
-    const items = rows.slice(0, limit).map(item => ({
-      ...item,
-      attachment_available: !!(item.image_path && (item.image_path.startsWith('/api/download/') || fs.existsSync(path.join(__dirname, '..', item.image_path.replace(/^\/uploads\//, 'uploads/')))))
-    }));
+    const page = rows.slice(0, limit);
+    const telegramFileIds = [...new Set(page.map(item => item.image_path?.match(/^\/api\/download\/([A-Za-z0-9_-]{1,256})$/)?.[1]).filter(Boolean))];
+    const availableTelegramFileIds = new Set();
+    if (telegramFileIds.length) {
+      const placeholders = telegramFileIds.map(() => '?').join(',');
+      const attachments = await db.prepare(`SELECT DISTINCT file_id FROM telegram_attachments
+        WHERE task_id=? AND deleted_at IS NULL AND file_id IN (${placeholders})`).all(req.params.id, ...telegramFileIds);
+      for (const attachment of attachments || []) availableTelegramFileIds.add(String(attachment.file_id));
+    }
+    const items = page.map(item => {
+      const telegramFileId = item.image_path?.match(/^\/api\/download\/([A-Za-z0-9_-]{1,256})$/)?.[1];
+      const localPath = item.image_path && !telegramFileId
+        ? path.join(__dirname, '..', item.image_path.replace(/^\/uploads\//, 'uploads/'))
+        : null;
+      return {
+        ...item,
+        attachment_available: telegramFileId
+          ? availableTelegramFileIds.has(telegramFileId)
+          : !!localPath && fs.existsSync(localPath)
+      };
+    });
     res.json({ items, has_more: hasMore, next_offset: offset + items.length });
   } catch (err) { sendInternalError(res, err, 'Task activity request failed'); }
 });
@@ -1303,7 +1519,9 @@ router.post('/tasks/:id/check-in', async (req, res) => {
     if (!task) return res.status(403).json({ error: 'You do not have access to this task.' });
     if (task.error) return res.status(400).json({ error: task.error });
     const lat = Number(req.body.lat), lng = Number(req.body.lng);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: 'Location is required to check in.' });
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
+      return res.status(400).json({ error: 'A valid latitude and longitude are required to check in.' });
+    }
     const activeVisit = await db.prepare(`SELECT id FROM task_checkins
       WHERE task_id=? AND user_id=? AND check_in_at IS NOT NULL AND check_out_at IS NULL
       ORDER BY id DESC LIMIT 1`).get(req.params.id, req.session.userId);
@@ -1322,28 +1540,25 @@ router.post('/tasks/:id/check-in', async (req, res) => {
     await db.prepare('INSERT INTO task_checkins (task_id,user_id,check_in_at,check_in_lat,check_in_lng) VALUES (?,?,?,?,?)').run(req.params.id, req.session.userId, now, lat, lng);
     await db.prepare('INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value) VALUES (?, ?, ?, ?, ?)')
       .run(req.params.id, req.session.userId, 'Task check-in', '', now);
-    if (Number(task.assignee_id) !== Number(req.session.userId)) {
-      await db.prepare("UPDATE tasks SET assignee_id=?, updated_at=datetime('now') WHERE id=?").run(req.session.userId, req.params.id);
-      const newAssignee = await db.prepare('SELECT name FROM users WHERE id=?').get(req.session.userId);
-      await db.prepare('INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value) VALUES (?, ?, ?, ?, ?)')
-        .run(req.params.id, req.session.userId, 'Assignee', task.assignee_id ? (await db.prepare('SELECT name FROM users WHERE id=?').get(task.assignee_id))?.name || String(task.assignee_id) : 'Unassigned', newAssignee?.name || String(req.session.userId));
-    }
     res.json({ ok: true, check_in_at: now });
-  } catch (err) { sendInternalError(res, err, 'Task check-in failed'); }
+  } catch (err) {
+    if (/unique constraint failed: task_checkins\.task_id,\s*task_checkins\.user_id/i.test(String(err.message))) {
+      return res.status(400).json({ error: 'You are already checked in for this task.' });
+    }
+    sendInternalError(res, err, 'Task check-in failed');
+  }
 });
 
 router.post('/tasks/:id/check-out', async (req, res) => {
   try {
-    const task = await getTaskForCheckin(req.params.id, req.session.userId, req.session.role === 'admin');
-    if (!task) return res.status(403).json({ error: 'You do not have access to this task.' });
-    if (task.error) return res.status(400).json({ error: task.error });
-    const lat = Number(req.body.lat), lng = Number(req.body.lng);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: 'Location is required to check out.' });
     const existing = await db.prepare(`SELECT * FROM task_checkins
       WHERE task_id=? AND user_id=? AND check_in_at IS NOT NULL AND check_out_at IS NULL
       ORDER BY id DESC LIMIT 1`).get(req.params.id, req.session.userId);
-    if (!existing?.check_in_at) return res.status(400).json({ error: 'Check in before checking out.' });
-    if (existing.check_out_at) return res.status(400).json({ error: 'You are already checked out for this task.' });
+    if (!existing?.check_in_at) return res.status(400).json({ error: 'There is no open check-in to close for this task.' });
+    const lat = Number(req.body.lat), lng = Number(req.body.lng);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
+      return res.status(400).json({ error: 'A valid latitude and longitude are required to check out.' });
+    }
     const now = new Date().toISOString();
     await db.prepare('UPDATE task_checkins SET check_out_at=?, check_out_lat=?, check_out_lng=? WHERE id=?').run(now, lat, lng, existing.id);
     await db.prepare('INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value) VALUES (?, ?, ?, ?, ?)')
@@ -1355,7 +1570,22 @@ router.post('/tasks/:id/check-out', async (req, res) => {
 router.get('/tasks/:id', async (req, res) => {
   try {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
-    const task = await db.prepare('SELECT t.*, COALESCE(u.name, t.asana_assignee_name) AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.id=?').get(req.params.id);
+    const canViewPayments = await canViewPaymentHistory(req);
+    const task = await db.prepare(`SELECT t.id, t.project_id, t.title, t.description, t.no_billing_required,
+      t.created_by, t.assignee_id, t.due_date, t.work_mode, t.status, t.position, t.asana_gid,
+      t.created_at, t.updated_at, t.completed_at,
+      CASE WHEN ?=1 THEN t.invoice_type END AS invoice_type,
+      CASE WHEN ?=1 THEN t.invoice_number END AS invoice_number,
+      CASE WHEN ?=1 THEN t.invoice_date END AS invoice_date,
+      CASE WHEN ?=1 THEN t.customer_name END AS customer_name,
+      CASE WHEN ?=1 THEN t.total_amount END AS total_amount,
+      CASE WHEN ?=1 THEN t.payment_member_id END AS payment_member_id,
+      CASE WHEN ?=1 THEN t.payment_status END AS payment_status,
+      CASE WHEN ?=1 THEN t.payment_received_date END AS payment_received_date,
+      CASE WHEN ?=1 THEN t.amount_received END AS amount_received,
+      COALESCE(u.name, t.asana_assignee_name) AS assignee_name
+      FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.id=?`)
+      .get(...Array(9).fill(canViewPayments ? 1 : 0), req.params.id);
     if (!task) return res.status(404).json({ error: 'Not found' });
     const uniqueRows = (rows, fields) => {
       const seen = new Set();
@@ -1385,8 +1615,13 @@ router.get('/tasks/:id', async (req, res) => {
 
 router.delete('/tasks/:id', async (req, res) => {
   try {
+    const task = await db.prepare('SELECT id, title, assignee_id FROM tasks WHERE id=?').get(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found.' });
+    if (!(await canAccessTask(task.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task.' });
     if (!(await canProjectAction(req, 'delete_task'))) return res.status(403).json({ error: 'You do not have permission to delete tasks.' });
-    await db.prepare('DELETE FROM tasks WHERE id=?').run(req.params.id);
+    const deleted = await db.prepare('DELETE FROM tasks WHERE id=?').run(task.id);
+    if (!deleted.changes) return res.status(404).json({ error: 'Task not found.' });
+    await logActivity(req, 'Task deleted', 'task', task.id, task.title, task.assignee_id || req.session.userId);
     res.json({ ok: true });
   } catch (err) { sendInternalError(res, err, 'Task deletion failed'); }
 });
@@ -1446,7 +1681,7 @@ async function requireTaskCheckinToComment(req, res, next) {
   }
 }
 
-router.post('/tasks/:id/comments', requireTaskCheckinToComment, commentUpload.single('attachment'), async (req, res) => {
+router.post('/tasks/:id/comments', requireTaskCheckinToComment, handleCommentUploadError, async (req, res) => {
   try {
     const body = String(req.body.body || '').trim();
     if (!body && !req.file) return res.status(400).json({ error: 'Write a comment or attach an image.' });
@@ -1466,7 +1701,7 @@ router.post('/tasks/:id/comments', requireTaskCheckinToComment, commentUpload.si
 
 router.put('/comments/:id', async (req, res) => {
   try {
-    const comment = await db.prepare('SELECT id, task_id, user_id FROM comments WHERE id=?').get(req.params.id);
+    const comment = await db.prepare('SELECT id, task_id, user_id, body FROM comments WHERE id=?').get(req.params.id);
     if (!comment) return res.status(404).json({ error: 'Comment not found.' });
     if (Number(comment.user_id) !== Number(req.session.userId)) return res.status(403).json({ error: 'Only the comment author can edit this comment.' });
     if (!(await canAccessTask(comment.task_id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task.' });
@@ -1475,7 +1710,10 @@ router.put('/comments/:id', async (req, res) => {
     const body = String(req.body.body || '').trim();
     if (!body) return res.status(400).json({ error: 'Comment cannot be empty.' });
     const editedAt = new Date().toISOString();
-    await db.prepare("UPDATE comments SET body=?, edited_at=? WHERE id=?").run(body, editedAt, req.params.id);
+    await db.batch([
+      { sql: 'INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)', args: [comment.task_id, req.session.userId, 'Comment edited', comment.body, body, editedAt] },
+      { sql: 'UPDATE comments SET body=?, edited_at=? WHERE id=?', args: [body, editedAt, req.params.id] }
+    ]);
     res.json({ ok: true, edited_at: editedAt });
   } catch (err) {
     sendInternalError(res, err, 'Comment update failed');

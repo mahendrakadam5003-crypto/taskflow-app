@@ -4,6 +4,8 @@ const { parseMoneyAmount, parsePaymentAmounts } = require('../lib/money');
 
 test('money parsing rejects negative reimbursement amounts and excess precision', () => {
   assert.equal(parseMoneyAmount(-1, { allowZero: false }), null);
+  assert.equal(parseMoneyAmount('Infinity'), null);
+  assert.equal(parseMoneyAmount('1000000000.01'), null);
   assert.equal(parseMoneyAmount('0', { allowZero: false }), null);
   assert.equal(parseMoneyAmount('12.34', { allowZero: false }), 12.34);
   assert.equal(parseMoneyAmount('12.345', { allowZero: false }), null);

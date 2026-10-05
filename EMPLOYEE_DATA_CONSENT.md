@@ -19,8 +19,11 @@ TaskFlow is used for attendance and work management. Depending on the features e
 - Device and browser details, including phone/laptop category, a device name chosen during registration, and a derived browser/model label. The app requests browser model and platform-version client hints; it stores a derived device label rather than the complete raw User-Agent string.
 - A pseudonymous device-binding hash used to enforce the registered-device policy. The original device ID is not stored in that table.
 - Work records such as task comments, task history, reimbursement claims, receipts, and administrative activity records when those features are used.
+- If an administrator requires attendance verification, the mobile app requests biometric confirmation and the server verifies a re-entered TaskFlow password before employee punch-in/out. The password is checked transiently and is not written to the attendance record.
 
 GPS is **indicative only**. A user or mock-location tool can spoof it. It is not proof of physical presence and should not be the sole basis for disciplinary, payroll, or other consequential decisions.
+
+Phone/laptop classification is inferred from browser-provided information and can be spoofed. The browser-generated device ID can also be copied; device registration is a policy check, not strong device authentication.
 
 ## Where data is stored and sent
 

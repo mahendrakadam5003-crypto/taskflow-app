@@ -372,7 +372,8 @@ function startLiveTracking() {
     liveTrackingBusy = true;
     try {
       const coords = await getLiveCoords();
-      await api('/attendance/location-update', { method: 'POST', body: coords });
+      const devicePayload = await getPunchDevicePayload();
+      await api('/attendance/location-update', { method: 'POST', body: { ...coords, ...devicePayload } });
     } catch (error) {
       if (/active shift|punched out/i.test(error.message)) stopLiveTracking();
       else console.warn('Live location update failed:', error.message);
@@ -1355,14 +1356,27 @@ async function enterProjectView(project) {
     renameProjectButton.style.display = PROJECT_ACTION_ACCESS.edit_project ? '' : 'none';
     renameProjectButton.onclick = async () => {
       const name = prompt('New project name:', project.name);
-      if (!name || !name.trim() || name.trim() === project.name) return;
+      if (name === null || !name.trim()) return;
+      const pinInput = prompt('New project PIN (4–12 digits). Leave blank to remove the PIN, or cancel to keep it unchanged:', '');
+      const body = { name: name.trim() };
+      if (pinInput !== null) {
+        const pin = pinInput.trim();
+        if (pin && !/^\d{4,12}$/.test(pin)) {
+          alert('Project PIN must contain 4 to 12 digits.');
+          return;
+        }
+        if (!pin && project.locked && !confirm('Remove the current project PIN?')) return;
+        body.pin = pin || null;
+      }
+      if (name.trim() === project.name && pinInput === null) return;
       try {
-        await api(`/projects/${project.id}`, { method: 'PUT', body: { name: name.trim() } });
+        await api(`/projects/${project.id}`, { method: 'PUT', body });
         project.name = name.trim();
+        if (pinInput !== null) project.locked = Boolean(pinInput.trim());
         if (pTitle) pTitle.textContent = project.name;
         renderProjectList();
         renderProjectsDirectory();
-        showAppNotification('Project renamed.');
+        showAppNotification('Project updated.');
       } catch (error) { alert(error.message); }
     };
   }
@@ -2427,7 +2441,7 @@ function getLiveCoords() {
 
 async function verifyAttendanceIfRequired(action) {
   const setting = await api('/attendance/verification-required');
-  if (!setting.required) return true;
+  if (!setting.required) return null;
   const biometricAuth = window.Capacitor?.Plugins?.BiometricAuth;
   if (!biometricAuth) throw new Error('Attendance verification requires the installed TaskFlow mobile app.');
   const availability = await biometricAuth.checkBiometry();
@@ -2444,6 +2458,9 @@ async function verifyAttendanceIfRequired(action) {
   } catch (error) {
     throw new Error('Biometric verification failed. Punch ' + action + ' was not recorded.');
   }
+  const password = prompt('Re-enter your TaskFlow password to verify this punch.');
+  if (!password) throw new Error('Password verification is required. Punch ' + action + ' was not recorded.');
+  return password;
 }
 
 function isPhoneDevice() {
@@ -2520,10 +2537,10 @@ async function renderPunchCard() {
       card.insertAdjacentHTML('beforeend', `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`);
       $('#btn-punch-in').onclick = async () => {
         try {
-          await verifyAttendanceIfRequired('in');
+          const verificationPassword = await verifyAttendanceIfRequired('in');
           const coords = await getLiveCoords();
           const devicePayload = await getPunchDevicePayload();
-          await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload } });
+          await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload, verification_password: verificationPassword } });
           reloadWithActionMessage('attendance', 'Punched in successfully.');
         } catch (err) { alert(err.message); }
       };
@@ -2531,10 +2548,10 @@ async function renderPunchCard() {
       card.insertAdjacentHTML('beforeend', `<button class="btn btn-primary btn-lg" id="btn-punch-in" style="width:100%; padding:15px; font-size:18px;">📍 Punch In Field Shift</button>`);
       $('#btn-punch-in').onclick = async () => {
         try {
-          await verifyAttendanceIfRequired('in');
+          const verificationPassword = await verifyAttendanceIfRequired('in');
           const coords = await getLiveCoords();
           const devicePayload = await getPunchDevicePayload();
-          await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload } });
+          await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload, verification_password: verificationPassword } });
           reloadWithActionMessage('attendance', 'Punched in successfully.');
         } catch (err) { alert(err.message); }
       };
@@ -2547,10 +2564,10 @@ async function renderPunchCard() {
         <button class="btn btn-danger btn-lg" id="btn-punch-out" style="width:100%; padding:15px; font-size:18px;">🏁 Punch Out Field Shift</button>`);
       $('#btn-punch-out').onclick = async () => {
         try {
-          await verifyAttendanceIfRequired('out');
+          const verificationPassword = await verifyAttendanceIfRequired('out');
           const coords = await getLiveCoords();
           const devicePayload = await getPunchDevicePayload();
-          await api('/attendance/punch-out', { method: 'POST', body: { ...coords, ...devicePayload } });
+          await api('/attendance/punch-out', { method: 'POST', body: { ...coords, ...devicePayload, verification_password: verificationPassword } });
           stopLiveTracking();
           reloadWithActionMessage('attendance', 'Punched out successfully.');
         } catch (err) { alert(err.message); }
@@ -3507,7 +3524,7 @@ async function renderAdmin() {
         try {
           await api(`/attendance/verification-access/${checkbox.dataset.verificationUser}`, { method: 'PUT', body: { enabled: checkbox.checked } });
           checkbox.nextElementSibling.textContent = checkbox.checked ? 'Required' : 'Off';
-          showAppNotification(checkbox.checked ? 'Biometric verification enabled.' : 'Biometric verification disabled.');
+          showAppNotification(checkbox.checked ? 'Biometric and password verification enabled.' : 'Attendance verification disabled.');
         } catch (error) {
           checkbox.checked = !checkbox.checked;
           alert(error.message);
@@ -3611,10 +3628,8 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
         button.onclick = async () => {
           button.disabled = true;
           try {
-            const coords = await getLiveCoords();
-            const devicePayload = await getPunchDevicePayload();
             await api(`/attendance/admin-punch-${button.dataset.action}`, {
-              method: 'POST', body: { user_id: Number(button.dataset.userId), ...coords, ...devicePayload }
+              method: 'POST', body: { user_id: Number(button.dataset.userId) }
             });
             await renderRows();
           } catch (err) {
