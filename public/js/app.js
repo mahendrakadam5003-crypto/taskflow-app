@@ -1372,11 +1372,11 @@ async function renderReimbursements() {
         const canApprove = canReview && ((row.status === 'submitted' && (isAdmin || Number(access.approval_level) === 1)) || (row.status === 'approved_level_1' && (isAdmin || Number(access.approval_level) >= 2)));
         const canEdit = !isAdmin && Number(row.user_id) === Number(ME?.id) && row.status === 'submitted';
         const receiptItems = Array.isArray(row.receipt_items) ? row.receipt_items : (row.receipt_url ? [{ url: row.receipt_url, original_name: 'View receipt' }] : []);
-        const receiptCell = receiptItems.length
-          ? `<div class="reimbursement-receipt-links">${receiptItems.map((item, index) => item.url
-            ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${String(item.mime_type || '').startsWith('image/') ? `<img class="receipt-table-thumbnail" src="${escapeHtml(item.url)}" alt="">` : icon('folder')}<span>${escapeHtml(item.original_name || `View receipt ${index + 1}`)}</span></a>`
-            : `<span class="hint">${escapeHtml(item.original_name || `Receipt ${index + 1}`)} (expired)</span>`).join('')}</div>`
-          : (row.receipt_expired ? '<span class="hint">Attachment expired</span>' : '—');
+        const availableReceiptCount = receiptItems.filter(item => item.url).length;
+        const expiredReceiptCount = receiptItems.length - availableReceiptCount;
+        const receiptCell = availableReceiptCount
+          ? `<span class="reimbursement-receipt-count">${icon('receipt')}<span>${availableReceiptCount} ${availableReceiptCount === 1 ? 'file' : 'files'}</span></span>${expiredReceiptCount ? `<small class="hint">${expiredReceiptCount} expired</small>` : ''}`
+          : (expiredReceiptCount || row.receipt_expired ? '<span class="hint">Attachment expired</span>' : '—');
         return `<tr class="reimbursement-row" data-reimbursement-id="${row.id}">
         ${canReview ? `<td data-label="Select"><input type="checkbox" class="reimbursement-select" data-id="${row.id}" ${canApprove ? '' : 'disabled'}></td><td data-label="Employee">${escapeHtml(row.user_name)}</td><td data-label="Department">${escapeHtml(row.department || '—')}</td>` : ''}
         <td data-label="Date">${escapeHtml(row.expense_date)}</td><td data-label="Category">${escapeHtml(row.category)}</td><td data-label="Description">${escapeHtml(row.description)}</td>
