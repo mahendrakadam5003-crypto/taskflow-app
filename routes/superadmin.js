@@ -737,66 +737,6 @@ function createSuperAdminRouter({
     }
   }));
 
-  router.post('/companies/:companyId/subscriptions', handle(async (req, res) => {
-    const admin = await getAuthenticatedAdmin(req);
-    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
-    const companyId = Number(req.params.companyId);
-    const seats = Number(req.body?.seats);
-    const billingCycle = req.body?.billingCycle;
-    if (!Number.isSafeInteger(companyId) || companyId < 1 || !Number.isSafeInteger(seats) || !['monthly', 'yearly'].includes(billingCycle)) {
-      return res.status(400).json({ error: 'Choose a valid company, billing cycle, and whole-number seat count.' });
-    }
-    const controlDb = await getDatabase();
-    try {
-      const invoice = await createManualSubscriptionInvoice(controlDb, admin, { companyId, billingCycle, seats });
-      res.set('Cache-Control', 'no-store');
-      return res.status(201).json(invoice);
-    } catch (error) {
-      if (/Company not found/.test(String(error.message))) return res.status(404).json({ error: error.message });
-      if (/already has a paid subscription/.test(String(error.message))) return res.status(409).json({ error: error.message });
-      if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
-      throw error;
-    }
-  }));
-
-  router.get('/companies/:companyId/invoices', handle(async (req, res) => {
-    const admin = await getAuthenticatedAdmin(req);
-    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
-    const companyId = Number(req.params.companyId);
-    if (!Number.isSafeInteger(companyId) || companyId < 1) return res.status(400).json({ error: 'Choose a valid company.' });
-    const controlDb = await getDatabase();
-    const result = await controlDb.execute({
-      sql: `SELECT id, subscription_id, number, period_start, period_end, seats, unit_price_paise,
-        subtotal_paise, discount_paise, tax_paise, total_paise, currency, tax_pct, status, paid_at, created_at
-        FROM invoices WHERE company_id = ? ORDER BY created_at DESC, id DESC LIMIT 100`,
-      args: [companyId]
-    });
-    res.set('Cache-Control', 'no-store');
-    return res.json({ invoices: result.rows || [] });
-  }));
-
-  router.post('/companies/:companyId/invoices/:invoiceId/paid', handle(async (req, res) => {
-    const admin = await getAuthenticatedAdmin(req);
-    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
-    const companyId = Number(req.params.companyId);
-    const invoiceId = Number(req.params.invoiceId);
-    const providerRef = typeof req.body?.providerRef === 'string' ? req.body.providerRef.trim().slice(0, 200) : '';
-    if (!Number.isSafeInteger(companyId) || companyId < 1 || !Number.isSafeInteger(invoiceId) || invoiceId < 1) {
-      return res.status(400).json({ error: 'Choose a valid company and invoice.' });
-    }
-    const controlDb = await getDatabase();
-    try {
-      const payment = await markManualInvoicePaid(controlDb, admin, { companyId, invoiceId, providerRef });
-      res.set('Cache-Control', 'no-store');
-      return res.json(payment);
-    } catch (error) {
-      if (/Open invoice not found/.test(String(error.message))) return res.status(404).json({ error: error.message });
-      if (/already paid or changed/.test(String(error.message))) return res.status(409).json({ error: error.message });
-      if (error instanceof TypeError) return res.status(400).json({ error: error.message });
-      throw error;
-    }
-  }));
-
   router.post('/companies/:companyId/billing', handle(async (req, res) => {
     const admin = await getAuthenticatedAdmin(req);
     if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
