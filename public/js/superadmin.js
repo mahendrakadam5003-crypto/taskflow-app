@@ -749,7 +749,7 @@ document.getElementById('company-support-mode').addEventListener('click', async 
   button.disabled = true;
   try {
     await request(`companies/${activeCompanyDetail.company.id}/support-mode`, { method: 'POST' });
-    window.location.assign('/');
+    window.location.assign('/app');
   } catch (error) {
     const target = document.getElementById('company-detail-error');
     target.textContent = error.message;

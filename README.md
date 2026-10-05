@@ -64,7 +64,7 @@ Cancelling a company blocks sign-in immediately and schedules retirement 30 days
 
 Unexpected server errors appear in the super-admin **User error inbox** when the control database is configured. Reports include a request ID, company, route, method, status, and safe event label only; they never store exception text, request bodies, passwords, tokens, or GPS coordinates. Expected client errors such as validation failures and permission denials are not reported as incidents.
 
-The local server listens on `127.0.0.1:3000`. Open `http://127.0.0.1:3000` on the PC itself. Local installs do not accept connections from other LAN devices.
+The responsive public landing page is served at `http://127.0.0.1:3000`; open `/app` on that same host to sign in to the workspace. The local server listens on `127.0.0.1:3000`, so local installs do not accept connections from other LAN devices. Public pricing is loaded from the current control-database settings. Demo requests are rate-limited, stored for manual super-admin review, and do not create an account or trial automatically. See the [demo request privacy notice](public/privacy.html).
 
 On an empty database, set `INITIAL_ADMIN_PASSWORD` as a private environment variable before first startup. It must contain 10 to 72 UTF-8 bytes; the password is never printed to logs, and the admin must change it at first login. Existing databases are not reseeded.
 

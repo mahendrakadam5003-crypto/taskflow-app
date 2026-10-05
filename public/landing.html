@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#14213D">
+  <meta name="description" content="TaskFlow brings team tasks, attendance, and reimbursements together in one straightforward workspace.">
+  <meta name="robots" content="index,follow">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="TaskFlow | Team work, in sync">
+  <meta property="og:description" content="Keep projects, attendance, and reimbursements together in one clear workspace.">
+  <title>TaskFlow | Team work, in sync</title>
+  <link rel="icon" href="/icons/taskflow.svg">
+  <link rel="stylesheet" href="/css/landing.css">
+  <script src="/js/landing.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="TaskFlow home">
+      <img src="/icons/taskflow.svg" alt="">
+      <span>TaskFlow</span>
+    </a>
+    <nav class="site-nav" aria-label="Main navigation">
+      <a href="#features">Features</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#demo">Request a demo</a>
+      <a class="nav-login" href="/app">Workspace sign in</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">A calmer way to get work moving</p>
+        <h1>Bring your team's work into <span>focus.</span></h1>
+        <p class="hero-description">Keep projects, attendance, and reimbursements together in one clear workspace—so your team can spend less time chasing updates.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#demo">Request a guided demo</a>
+          <a class="button button-secondary" href="#features">Explore TaskFlow</a>
+        </div>
+        <p class="hero-note">A real person reviews every demo request. No automatic trial or charge.</p>
+      </div>
+      <div class="product-card" aria-label="TaskFlow workspace overview">
+        <div class="product-top"><span class="product-dot"></span><span>TEAM WORKSPACE</span><span class="product-menu">•••</span></div>
+        <div class="product-title"><div><small>PROJECTS / OPERATIONS</small><h2>Make room for the work</h2></div><span class="avatar">TF</span></div>
+        <div class="task-progress"><span>Today's focus</span><strong>3 of 5 complete</strong><div class="progress-track"><i></i></div></div>
+        <div class="task-row"><span class="task-check done">✓</span><span>Review this week's priorities</span><small>Done</small></div>
+        <div class="task-row"><span class="task-check done">✓</span><span>Share the project update</span><small>Done</small></div>
+        <div class="task-row"><span class="task-check">3</span><span>Prepare the client handoff</span><small>Today</small></div>
+        <div class="task-row"><span class="task-check">4</span><span>Reconcile team expenses</span><small>Fri</small></div>
+        <div class="product-footer"><span><i></i> Team workspace</span><span>Tasks · Attendance · Expenses</span></div>
+      </div>
+    </section>
+
+    <section class="trust-strip" aria-label="TaskFlow benefits">
+      <span>One workspace for everyday operations</span>
+      <span>Clear roles for admins and employees</span>
+      <span>Human-reviewed onboarding</span>
+    </section>
+
+    <section class="section features-section" id="features">
+      <div class="section-heading">
+        <p class="eyebrow">Built for the everyday</p>
+        <h2>Less chasing. More doing.</h2>
+        <p>Give your team a shared place to keep the details moving.</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature-card"><span class="feature-icon icon-tasks">✓</span><h3>Projects &amp; tasks</h3><p>Organize projects, owners, due dates, subtasks, and updates in one approachable workspace.</p></article>
+        <article class="feature-card"><span class="feature-icon icon-time">◷</span><h3>Team attendance</h3><p>Give admins a clear attendance view while employees can manage their own punches and history.</p></article>
+        <article class="feature-card"><span class="feature-icon icon-expenses">₹</span><h3>Reimbursements</h3><p>Collect expense claims and receipts, then review decisions and payment records in context.</p></article>
+      </div>
+      <p class="feature-footnote">Attendance location, when enabled, is device-reported and indicative only; it does not prove physical presence. <a href="/EMPLOYEE_DATA_CONSENT.md">Read the employee data notice</a>.</p>
+    </section>
+
+    <section class="section pricing-section" id="pricing">
+      <div class="section-heading">
+        <p class="eyebrow">Straightforward pricing</p>
+        <h2>See the current rates.</h2>
+        <p>Pricing is per seat. The rates below are loaded from TaskFlow's current published pricing.</p>
+      </div>
+      <div id="pricing-status" class="pricing-status" role="status" aria-live="polite">Loading current pricing…</div>
+      <div id="pricing-content" class="pricing-content hidden">
+        <div class="price-cards">
+          <article class="price-card">
+            <p class="plan-label">MONTH-TO-MONTH</p>
+            <h3><span id="monthly-price">—</span><small> / seat / month</small></h3>
+            <p id="monthly-tax" class="price-detail"></p>
+          </article>
+          <article class="price-card price-card-featured">
+            <p class="plan-label">YEARLY</p>
+            <h3><span id="yearly-price">—</span><small> / seat / year</small></h3>
+            <p id="yearly-tax" class="price-detail"></p>
+          </article>
+        </div>
+        <form class="estimate-card" id="estimate-form">
+          <div><p class="plan-label">QUICK ESTIMATE</p><h3>Estimate your team's plan</h3></div>
+          <label for="estimate-seats">Team seats</label>
+          <input id="estimate-seats" type="number" min="1" max="100000" value="5" step="1" inputmode="numeric">
+          <label for="estimate-cycle">Billing cycle</label>
+          <select id="estimate-cycle"><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
+          <output id="estimate-total" for="estimate-seats estimate-cycle">—</output>
+          <p id="estimate-note" class="estimate-note"></p>
+        </form>
+        <p class="pricing-disclaimer">Estimates use the published seat rate and tax settings. Any taxes shown follow the current pricing configuration. Payments are handled manually; no charge is made automatically. Final invoice details are confirmed during onboarding.</p>
+      </div>
+    </section>
+
+    <section class="demo-section" id="demo">
+      <div class="demo-intro">
+        <p class="eyebrow">Let's talk about your team</p>
+        <h2>See if TaskFlow fits the way you work.</h2>
+        <p>Tell us a little about your team. A TaskFlow administrator will review your request and follow up with you.</p>
+        <div class="demo-promise"><span>01</span><p><strong>Request a conversation</strong><br>Share only the details we need to get back to you.</p></div>
+        <div class="demo-promise"><span>02</span><p><strong>Human review</strong><br>Requests are reviewed manually; submitting does not create an account or trial.</p></div>
+      </div>
+      <form id="demo-form" class="demo-form">
+        <h3>Request a guided demo</h3>
+        <div class="form-grid">
+          <label>Your name<input name="name" autocomplete="name" maxlength="120" required></label>
+          <label>Work email<input name="email" type="email" autocomplete="email" maxlength="254" required></label>
+          <label>Company<input name="companyName" autocomplete="organization" maxlength="160" required></label>
+          <label>Team size<input name="teamSize" type="number" min="1" max="100000" step="1" inputmode="numeric" required></label>
+          <label class="form-full">Phone <span class="optional">(optional)</span><input name="phone" type="tel" autocomplete="tel" maxlength="40"></label>
+          <label class="form-full">What would you like to manage?<textarea name="message" rows="3" maxlength="2000"></textarea></label>
+        </div>
+        <label class="consent-label"><input name="consent" type="checkbox" required><span>I agree that TaskFlow may use these details to review and respond to my demo request. See the <a href="/privacy.html">demo request privacy notice</a>.</span></label>
+        <div class="website-field" aria-hidden="true"><label>Leave this field empty<input name="website" tabindex="-1" autocomplete="off"></label></div>
+        <button class="button button-primary button-wide" type="submit">Send demo request</button>
+        <p id="demo-status" class="demo-status" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <a class="brand footer-brand" href="/"><img src="/icons/taskflow.svg" alt=""><span>TaskFlow</span></a>
+    <p>Make room for the work that matters.</p>
+    <nav aria-label="Footer navigation"><a href="/privacy.html">Demo request privacy</a><a href="/EMPLOYEE_DATA_CONSENT.md">Employee data notice</a><a href="/app">Workspace sign in</a></nav>
+    <small>© <span id="copyright-year"></span> TaskFlow</small>
+  </footer>
+</body>
+</html>

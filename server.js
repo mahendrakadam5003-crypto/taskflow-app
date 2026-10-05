@@ -23,6 +23,7 @@ const { createUserErrorReporter } = require('./user-error-reporter');
 const { createEntitlementMiddleware, createEntitlementService } = require('./entitlements');
 const { createEntitlementScheduler } = require('./entitlement-scheduler');
 const { createPublicRouter } = require('./routes/public');
+const { createPublicPagesRouter } = require('./routes/public-pages');
 const { createBillingRouter } = require('./routes/billing');
 
 const app = express();
@@ -417,6 +418,7 @@ app.use('/api/superadmin', createSuperAdminRouter({
 }));
 app.use('/api/public', publicRouter.router);
 app.use('/api/billing', createBillingRouter({ getDatabase: getControlDatabase }));
+app.use(createPublicPagesRouter(path.join(__dirname, 'public')));
 
 app.use('/api/auth', authRouter);
 app.use('/api', tasksRouter);
