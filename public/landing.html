@@ -4,11 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#14213D">
-  <meta name="description" content="TaskFlow brings team tasks, attendance, and reimbursements together in one straightforward workspace.">
+  <meta name="description" content="TaskFlow brings projects, team attendance, and reimbursements together in one practical workspace, with clear per-seat pricing.">
   <meta name="robots" content="index,follow">
   <meta property="og:type" content="website">
+  <meta property="og:site_name" content="TaskFlow">
   <meta property="og:title" content="TaskFlow | Team work, in sync">
   <meta property="og:description" content="Keep projects, attendance, and reimbursements together in one clear workspace.">
+  <meta property="og:url" content="https://taskflow-app-zjlw.onrender.com/">
+  <meta name="twitter:card" content="summary">
+  <link rel="canonical" href="https://taskflow-app-zjlw.onrender.com/">
   <title>TaskFlow | Team work, in sync</title>
   <link rel="icon" href="/icons/taskflow.svg">
   <link rel="stylesheet" href="/css/landing.css">
@@ -20,10 +24,16 @@
       <img src="/icons/taskflow.svg" alt="">
       <span>TaskFlow</span>
     </a>
-    <nav class="site-nav" aria-label="Main navigation">
-      <a href="#features">Features</a>
-      <a href="#pricing">Pricing</a>
-      <a href="#demo">Request a demo</a>
+    <nav class="site-nav" id="site-navigation" aria-label="Main navigation">
+      <button class="menu-toggle" id="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav-links">
+        <span class="menu-toggle-label">Menu</span>
+      </button>
+      <div class="site-nav-links" id="site-nav-links">
+        <a href="#features">Features</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#faq">FAQ</a>
+        <a href="#demo">Request a demo</a>
+      </div>
       <a class="nav-login" href="/app">Workspace sign in</a>
     </nav>
   </header>
@@ -36,11 +46,12 @@
         <p class="hero-description">Keep projects, attendance, and reimbursements together in one clear workspace—so your team can spend less time chasing updates.</p>
         <div class="hero-actions">
           <a class="button button-primary" href="#demo">Request a guided demo</a>
-          <a class="button button-secondary" href="#features">Explore TaskFlow</a>
+          <a class="button button-secondary" href="#pricing">See pricing</a>
         </div>
+        <p class="hero-price" id="hero-price" aria-live="polite"></p>
         <p class="hero-note">A real person reviews every demo request. No automatic trial or charge.</p>
       </div>
-      <div class="product-card" aria-label="TaskFlow workspace overview">
+      <div class="product-card" aria-label="Illustration of a TaskFlow team workspace">
         <div class="product-top"><span class="product-dot"></span><span>TEAM WORKSPACE</span><span class="product-menu">•••</span></div>
         <div class="product-title"><div><small>PROJECTS / OPERATIONS</small><h2>Make room for the work</h2></div><span class="avatar">TF</span></div>
         <div class="task-progress"><span>Today's focus</span><strong>3 of 5 complete</strong><div class="progress-track"><i></i></div></div>
@@ -52,56 +63,82 @@
       </div>
     </section>
 
-    <section class="trust-strip" aria-label="TaskFlow benefits">
-      <span>One workspace for everyday operations</span>
-      <span>Clear roles for admins and employees</span>
-      <span>Human-reviewed onboarding</span>
+    <section class="trust-strip" aria-label="How TaskFlow works">
+      <span>Published per-seat pricing</span>
+      <span>Manual onboarding and invoicing</span>
+      <span>No automatic trial or charge</span>
     </section>
 
     <section class="section features-section" id="features">
       <div class="section-heading">
         <p class="eyebrow">Built for the everyday</p>
         <h2>Less chasing. More doing.</h2>
-        <p>Give your team a shared place to keep the details moving.</p>
+        <p>Practical tools for the work your team does every day.</p>
       </div>
       <div class="feature-grid">
-        <article class="feature-card"><span class="feature-icon icon-tasks">✓</span><h3>Projects &amp; tasks</h3><p>Organize projects, owners, due dates, subtasks, and updates in one approachable workspace.</p></article>
-        <article class="feature-card"><span class="feature-icon icon-time">◷</span><h3>Team attendance</h3><p>Give admins a clear attendance view while employees can manage their own punches and history.</p></article>
-        <article class="feature-card"><span class="feature-icon icon-expenses">₹</span><h3>Reimbursements</h3><p>Collect expense claims and receipts, then review decisions and payment records in context.</p></article>
+        <article class="feature-card"><span class="feature-icon icon-tasks">✓</span><h3>Projects &amp; tasks</h3><p>Organize projects, owners, due dates, subtasks, comments, attachments, and task history in one workspace.</p></article>
+        <article class="feature-card"><span class="feature-icon icon-time">◷</span><h3>Team attendance</h3><p>Employees can punch in and out and review their records; admins can view attendance and export reports.</p></article>
+        <article class="feature-card"><span class="feature-icon icon-expenses">₹</span><h3>Reimbursements</h3><p>Submit expense claims with receipts, review approval status, and keep payment records together.</p></article>
+        <article class="feature-card"><span class="feature-icon icon-team">◎</span><h3>Clear team roles</h3><p>Separate employee and administrator workflows, with access to attendance and management tools based on role.</p></article>
+        <article class="feature-card"><span class="feature-icon icon-checkins">↗</span><h3>On-field check-ins</h3><p>For configured tasks, employees can check in and out and share task progress with the team.</p></article>
+        <article class="feature-card"><span class="feature-icon icon-reports">↓</span><h3>Reports &amp; exports</h3><p>Download attendance and reimbursement CSV reports, and export your own records in supported formats.</p></article>
       </div>
-      <p class="feature-footnote">Attendance location, when enabled, is device-reported and indicative only; it does not prove physical presence. <a href="/EMPLOYEE_DATA_CONSENT.md">Read the employee data notice</a>.</p>
+      <p class="feature-footnote">Location features are optional and device-reported; GPS can be inaccurate or spoofed and is not proof of physical presence. <a href="/employee-data-notice">Read the employee data notice</a>.</p>
     </section>
 
     <section class="section pricing-section" id="pricing">
       <div class="section-heading">
         <p class="eyebrow">Straightforward pricing</p>
-        <h2>See the current rates.</h2>
-        <p>Pricing is per seat. The rates below are loaded from TaskFlow's current published pricing.</p>
+        <h2>Choose the right fit for your team.</h2>
+        <p>Per employee seat, per month. The published rates below are loaded from TaskFlow's current pricing.</p>
       </div>
       <div id="pricing-status" class="pricing-status" role="status" aria-live="polite">Loading current pricing…</div>
       <div id="pricing-content" class="pricing-content hidden">
-        <div class="price-cards">
-          <article class="price-card">
-            <p class="plan-label">MONTH-TO-MONTH</p>
-            <h3><span id="monthly-price">—</span><small> / seat / month</small></h3>
-            <p id="monthly-tax" class="price-detail"></p>
-          </article>
-          <article class="price-card price-card-featured">
-            <p class="plan-label">YEARLY</p>
-            <h3><span id="yearly-price">—</span><small> / seat / year</small></h3>
-            <p id="yearly-tax" class="price-detail"></p>
-          </article>
+        <div class="billing-toggle" role="group" aria-label="Billing cycle">
+          <button type="button" data-cycle="monthly" aria-pressed="true">Monthly</button>
+          <button type="button" data-cycle="yearly" aria-pressed="false">Yearly <span class="saving-badge" id="yearly-saving-badge">Save</span></button>
         </div>
+        <div class="price-cards" id="price-cards" aria-live="polite"></div>
+        <div class="plan-comparison" id="plan-comparison"></div>
+
         <form class="estimate-card" id="estimate-form">
-          <div><p class="plan-label">QUICK ESTIMATE</p><h3>Estimate your team's plan</h3></div>
+          <div class="estimate-heading"><p class="plan-label">QUICK ESTIMATE</p><h3>Estimate your team's cost</h3></div>
           <label for="estimate-seats">Team seats</label>
           <input id="estimate-seats" type="number" min="1" max="100000" value="5" step="1" inputmode="numeric">
           <label for="estimate-cycle">Billing cycle</label>
           <select id="estimate-cycle"><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
-          <output id="estimate-total" for="estimate-seats estimate-cycle">—</output>
+          <div class="estimate-breakdown" aria-live="polite">
+            <p><span>Rate per seat</span><strong id="estimate-rate">—</strong></p>
+            <p><span>Plan</span><strong id="estimate-plan">—</strong></p>
+            <p><span>Subtotal</span><strong id="estimate-subtotal">—</strong></p>
+            <p><span>GST</span><strong id="estimate-tax">—</strong></p>
+            <p class="estimate-total"><span>Estimated total</span><output id="estimate-total" for="estimate-seats estimate-cycle">—</output></p>
+            <p class="estimate-saving hidden" id="estimate-saving-row"><span>Yearly saving vs monthly</span><strong id="estimate-saving">—</strong></p>
+          </div>
           <p id="estimate-note" class="estimate-note"></p>
+          <p id="boundary-warning" class="boundary-warning hidden" role="status"></p>
         </form>
-        <p class="pricing-disclaimer">Estimates use the published seat rate and tax settings. Any taxes shown follow the current pricing configuration. Payments are handled manually; no charge is made automatically. Final invoice details are confirmed during onboarding.</p>
+        <p class="pricing-disclaimer">All prices are per employee seat and exclude GST unless the current pricing configuration says otherwise. Estimates are indicative; final invoice details are confirmed during manual onboarding. Payments are handled manually—no automatic charge is made.</p>
+        <div class="custom-plan">
+          <div><p class="plan-label">NEED A DIFFERENT FIT?</p><h3>Custom</h3><p>Talk with us about your team's needs. Custom pricing is provided after review.</p></div>
+          <button class="button button-secondary plan-interest-button" type="button" data-plan-interest="Custom">Discuss a custom plan</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="section faq-section" id="faq">
+      <div class="section-heading">
+        <p class="eyebrow">Good to know</p>
+        <h2>Frequently asked questions</h2>
+      </div>
+      <div class="faq-list">
+        <details><summary>How does per-seat pricing work?</summary><p>Each employee seat uses the rate for the published tier that covers your team's seat count. When a volume tier applies, its rate applies to every seat in that quote. The estimator shows the current tier and total.</p></details>
+        <details><summary>Is there a discount for yearly billing?</summary><p>Yearly rates are shown from the current published pricing. Any saving displayed is calculated from the configured monthly and yearly rates; check the pricing cards and estimate for your tier.</p></details>
+        <details><summary>Are the displayed prices tax-inclusive?</summary><p>The pricing section uses the current tax settings and states whether tax is included or added. The estimate breaks the tax amount out separately.</p></details>
+        <details><summary>Will requesting a demo create an account or start a trial?</summary><p>No. Demo requests are reviewed manually. They do not create an account or trial; any access requires separate approval and setup.</p></details>
+        <details><summary>How do payment and onboarding work?</summary><p>Onboarding and payment are handled manually. A TaskFlow administrator reviews your request and confirms the plan and invoice details before setup.</p></details>
+        <details><summary>Does TaskFlow track employee location?</summary><p>Location features are used only where enabled. Location is device-reported and may be inaccurate or spoofed; it is not proof of physical presence. Employers should provide employees with an appropriate notice and policy. <a href="/employee-data-notice">Read the employee data notice</a>.</p></details>
+        <details><summary>Can existing companies keep using their workspace?</summary><p>Yes. Existing companies continue to use their current workspace and sign in at <a href="/app">Workspace sign in</a>. Published pricing changes do not automatically replace an existing company's saved pricing.</p></details>
       </div>
     </section>
 
@@ -119,7 +156,15 @@
           <label>Your name<input name="name" autocomplete="name" maxlength="120" required></label>
           <label>Work email<input name="email" type="email" autocomplete="email" maxlength="254" required></label>
           <label>Company<input name="companyName" autocomplete="organization" maxlength="160" required></label>
-          <label>Team size<input name="teamSize" type="number" min="1" max="100000" step="1" inputmode="numeric" required></label>
+          <label>Team size<input id="demo-team-size" name="teamSize" type="number" min="1" max="100000" step="1" inputmode="numeric" required></label>
+          <label class="form-full">Plan of interest <span class="optional">(optional)</span>
+            <select id="demo-plan-interest" name="planInterest">
+              <option value="">Not sure yet</option>
+              <option value="Team">Team</option>
+              <option value="Enterprise">Enterprise</option>
+              <option value="Custom">Custom</option>
+            </select>
+          </label>
           <label class="form-full">Phone <span class="optional">(optional)</span><input name="phone" type="tel" autocomplete="tel" maxlength="40"></label>
           <label class="form-full">What would you like to manage?<textarea name="message" rows="3" maxlength="2000"></textarea></label>
         </div>
@@ -134,7 +179,7 @@
   <footer class="site-footer">
     <a class="brand footer-brand" href="/"><img src="/icons/taskflow.svg" alt=""><span>TaskFlow</span></a>
     <p>Make room for the work that matters.</p>
-    <nav aria-label="Footer navigation"><a href="/privacy.html">Demo request privacy</a><a href="/EMPLOYEE_DATA_CONSENT.md">Employee data notice</a><a href="/app">Workspace sign in</a></nav>
+    <nav aria-label="Footer navigation"><a href="/privacy.html">Demo request privacy</a><a href="/employee-data-notice">Employee data notice</a><a href="/app">Workspace sign in</a></nav>
     <small>© <span id="copyright-year"></span> TaskFlow</small>
   </footer>
 </body>

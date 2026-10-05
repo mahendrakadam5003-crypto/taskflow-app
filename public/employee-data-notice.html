@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#14213D">
+  <meta name="description" content="Employer template describing employee attendance, location, work records, storage, and retention in TaskFlow.">
+  <meta name="robots" content="index,follow">
+  <title>Employee Attendance and Data Notice | TaskFlow</title>
+  <link rel="icon" href="/icons/taskflow.svg">
+  <link rel="stylesheet" href="/css/landing.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/"><img src="/icons/taskflow.svg" alt=""><span>TaskFlow</span></a>
+    <nav class="site-nav" aria-label="Main navigation"><div class="site-nav-links"><a href="/">Home</a></div><a class="nav-login" href="/app">Workspace sign in</a></nav>
+  </header>
+  <main class="privacy-main notice-main">
+    <p class="eyebrow">Employer template · Complete before use</p>
+    <h1>Employee Attendance and Data Notice</h1>
+    <p class="notice-warning"><strong>Template for employer review.</strong> Complete the bracketed fields and have an Indian privacy/legal adviser and accountant review this notice before giving it to employees. This template is not legal advice or a determination of compliance with the Digital Personal Data Protection Act, 2023 or other applicable law.</p>
+
+    <h2>Organization and contact</h2>
+    <ul>
+      <li>Employer / organization: <strong>[legal entity name]</strong></li>
+      <li>Purpose-specific contact: <strong>[name, email, phone]</strong></li>
+      <li>Data-protection or grievance contact: <strong>[name and contact details]</strong></li>
+      <li>Effective date / notice version: <strong>[date and version]</strong></li>
+    </ul>
+
+    <h2>What TaskFlow records</h2>
+    <p>TaskFlow is used for attendance and work management. Depending on the features enabled, it records:</p>
+    <ul>
+      <li>Account details such as name, username, department, and role.</li>
+      <li>Attendance punch-in and punch-out times.</li>
+      <li>Device-reported GPS latitude and longitude at attendance punches, during live attendance tracking, and at task check-in/check-out when enabled. The address displayed for a coordinate is derived from that coordinate.</li>
+      <li>Device and browser details, including phone/laptop category, a device name chosen during registration, and a derived browser/model label. The app requests browser model and platform-version client hints; it stores a derived device label rather than the complete raw User-Agent string.</li>
+      <li>A pseudonymous device-binding hash used to enforce the registered-device policy. The original device ID is not stored in that table.</li>
+      <li>Work records such as task comments, task history, reimbursement claims, receipts, and administrative activity records when those features are used.</li>
+      <li>If an administrator requires attendance verification, the mobile app requests biometric confirmation and the server verifies a re-entered TaskFlow password before employee punch-in/out. The password is checked transiently and is not written to the attendance record.</li>
+    </ul>
+    <p><strong>GPS is indicative only.</strong> A user or mock-location tool can spoof it. It is not proof of physical presence and should not be the sole basis for disciplinary, payroll, or other consequential decisions.</p>
+    <p>Phone/laptop classification is inferred from browser-provided information and can be spoofed. The browser-generated device ID can also be copied; device registration is a policy check, not strong device authentication.</p>
+
+    <h2>Where data is stored and sent</h2>
+    <ul>
+      <li>The configured database is stored in Turso when cloud database credentials are configured; a local SQLite database is used as a fallback.</li>
+      <li>Attendance location points are sent as Telegram location messages when Telegram storage is configured. Receipt and comment attachments may also be stored in the configured Telegram channel.</li>
+      <li>GPS coordinates are sent to OpenStreetMap Nominatim's reverse-geocoding service to obtain a readable location name.</li>
+      <li>Administrators and employees explicitly granted tracking access can view live attendance locations and selected employees' location timelines. Individual timeline views are recorded in the activity log with the viewer, employee, and date.</li>
+      <li>Tailscale or Render may provide network hosting/proxy services depending on the deployment.</li>
+    </ul>
+    <p>Turso, Telegram, OpenStreetMap Nominatim, Render, and Tailscale are separate providers. Their processing and storage regions depend on the account, service plan, and configuration and may be outside India. The employer must confirm the actual regions, contractual terms, access controls, and any transfer requirements, then update this notice before use.</p>
+
+    <h2>Retention</h2>
+    <p>Current application defaults are:</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Data</th><th>Retention</th></tr></thead>
+        <tbody>
+          <tr><td>Exact attendance GPS points and Telegram location messages</td><td>60 days. The app deletes Telegram messages where possible, then removes local points. If Telegram deletion fails, local coordinates are erased and a coordinate-free marker remains so deletion can be retried.</td></tr>
+          <tr><td>Exact punch-in/out and task check-in/out coordinates and location names</td><td>60 days. Punch/check-in timestamps remain after coordinates are cleared.</td></tr>
+          <tr><td>Attendance device type and model/browser details</td><td>60 days. The displayed registered-device name is anonymized after 60 days. The device-binding hash remains while the device registration is active and is removed when that registration is reset or deleted.</td></tr>
+          <tr><td>Reimbursement receipts, comment images, and other attachments</td><td>No automatic deletion by default (0 days). An administrator may configure a finite period after review with the accountant. If configured, comment attachments are aged from comment creation and receipts from the expense date; references and metadata are cleared after file deletion succeeds.</td></tr>
+          <tr><td>Attendance punch times, activity log, task history, and comment text</td><td>No automatic expiry. They remain until removed through the employer's separate records-management process or as part of deletion of their parent records.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The employer should review these periods regularly. Tax, accounting, employment, and privacy requirements may require a different period; obtain professional advice before changing retention settings or deleting records.</p>
+
+    <h2>Consent and employee acknowledgement</h2>
+    <p>Please complete and retain this section with the employer's attendance/privacy records.</p>
+    <ul class="consent-list">
+      <li>☐ I received and read this notice, including the listed purposes, data types, storage providers, and retention periods.</li>
+      <li>☐ I understand that reported GPS can be inaccurate or spoofed and is not proof of physical presence.</li>
+      <li>☐ I consent to the collection and use of my device-reported location for the attendance and task check-in features described above.</li>
+      <li>☐ I understand that data may be processed by the listed providers and that the employer must confirm their applicable storage/processing regions.</li>
+    </ul>
+    <div class="signature-fields">
+      <p>Employee name: ______________________________<br><br>Employee ID / username: _______________________</p>
+      <p>Signature: ___________________________________<br><br>Date: ________________________________________</p>
+      <p>Employer representative: _____________________</p>
+      <p>Signature: ___________________________________<br><br>Date: ________________________________________</p>
+    </div>
+    <p>Questions, access/correction requests, or withdrawal of consent: contact <strong>[privacy or grievance contact]</strong>. The employer should document how requests are handled and provide an appropriate alternative attendance process where required by law or policy.</p>
+    <p class="privacy-link"><a href="/">Return to TaskFlow</a> · <a href="/privacy.html">Demo request privacy notice</a> · <a href="/EMPLOYEE_DATA_CONSENT.md">Download the Markdown template</a></p>
+  </main>
+  <footer class="site-footer"><a class="brand footer-brand" href="/"><img src="/icons/taskflow.svg" alt=""><span>TaskFlow</span></a><small>Employee attendance and data notice template</small></footer>
+</body>
+</html>

@@ -28,7 +28,13 @@ after(async () => {
 test('public root serves landing page and /app preserves the workspace login', async () => {
   const landing = await fetch(baseUrl);
   assert.equal(landing.status, 200);
-  assert.match(await landing.text(), /TaskFlow \| Team work, in sync/);
+  const landingHtml = await landing.text();
+  assert.match(landingHtml, /TaskFlow \| Team work, in sync/);
+  assert.match(landingHtml, /rel="canonical"/);
+  assert.match(landingHtml, /id="site-navigation"/);
+  assert.match(landingHtml, /id="faq"/);
+  assert.match(landingHtml, /id="price-cards"/);
+  assert.match(landingHtml, /id="demo-plan-interest"/);
 
   const workspace = await fetch(`${baseUrl}/app`);
   assert.equal(workspace.status, 200);
@@ -37,6 +43,13 @@ test('public root serves landing page and /app preserves the workspace login', a
   const privacy = await fetch(`${baseUrl}/privacy.html`);
   assert.equal(privacy.status, 200);
   assert.match(await privacy.text(), /Demo request privacy notice/);
+
+  const employeeNotice = await fetch(`${baseUrl}/employee-data-notice`);
+  assert.equal(employeeNotice.status, 200);
+  const employeeNoticeHtml = await employeeNotice.text();
+  assert.match(employeeNoticeHtml, /Employee Attendance and Data Notice/);
+  assert.match(employeeNoticeHtml, /Turso, Telegram, OpenStreetMap Nominatim/);
+  assert.match(employeeNoticeHtml, /No automatic deletion by default/);
 
   const verifyPage = await fetch(`${baseUrl}/verify-email.html`);
   assert.equal(verifyPage.status, 200);
