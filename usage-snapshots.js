@@ -113,7 +113,8 @@ function createUsageSnapshotCollector({
     }
     if (snapshots.length) {
       snapshots.push({
-        sql: "DELETE FROM usage_snapshots WHERE taken_at < datetime('now', '-365 days')"
+        sql: "DELETE FROM usage_snapshots WHERE taken_at < datetime('now', '-365 days')",
+        args: []
       });
       await controlDb.batch(snapshots, 'write');
     }

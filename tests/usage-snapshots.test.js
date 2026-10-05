@@ -65,6 +65,7 @@ test('daily usage snapshots collect active users, database bytes, and only refer
       },
       async batch(statements, mode) {
         assert.equal(mode, 'write');
+        assert.ok(statements.every(statement => Array.isArray(statement.args)));
         snapshotStatements.push(...statements);
       }
     };
