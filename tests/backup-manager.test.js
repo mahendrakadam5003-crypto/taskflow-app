@@ -43,7 +43,7 @@ function createTenantFixture({ failSnapshot = false } = {}) {
   };
 }
 
-async function makeFixture({ status = 'active', failSnapshot = false } = {}) {
+async function makeFixture({ status = 'active', failSnapshot = false, trialPolicyVersion = null } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'taskflow-backup-manager-'));
   const backupDirectory = path.join(directory, 'backups');
   const tenantRoot = path.join(directory, 'tenants');
@@ -57,9 +57,9 @@ async function makeFixture({ status = 'active', failSnapshot = false } = {}) {
     args: ['Test Super Admin', 'test-super-admin', 'test-hash']
   });
   const company = await controlDb.execute({
-    sql: `INSERT INTO companies (code, name, status, plan_id, tenant_db_name, tenant_db_url, tenant_db_token_encrypted)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    args: ['example', 'Example Company', status, 2, 'example', `file:${path.join(tenantRoot, 'example.db').replace(/\\/g, '/')}`, 'encrypted-live-token']
+    sql: `INSERT INTO companies (code, name, status, plan_id, tenant_db_name, tenant_db_url, tenant_db_token_encrypted, trial_policy_version)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: ['example', 'Example Company', status, 2, 'example', `file:${path.join(tenantRoot, 'example.db').replace(/\\/g, '/')}`, 'encrypted-live-token', trialPolicyVersion]
   });
   const companyId = Number(company.lastInsertRowid);
   const tenantDatabase = createTenantFixture({ failSnapshot });
@@ -218,6 +218,42 @@ test('due company deletion creates a final backup, removes file messages/databas
     assert.equal(audit.rows.length, 1);
   } finally {
     await cleanupFixture(fixture);
+  }
+});
+
+test('new-policy trials are deleted after grace without creating any backup', async () => {
+  const fixture = await makeFixture({ status: 'trial', trialPolicyVersion: 1 });
+  try {
+    await fs.writeFile(path.join(fixture.tenantRoot, 'example.db'), 'tenant database');
+    await fs.writeFile(path.join(fixture.uploadsDirectory, 'comment.png'), 'comment');
+    await fixture.controlDb.execute({ sql: "UPDATE companies SET delete_after = '2026-10-01T00:00:00.000Z' WHERE id = ?", args: [fixture.companyId] });
+
+    const result = await fixture.manager.processDueCompanyDeletions({ date: new Date('2026-10-05T00:00:00Z') });
+
+    assert.equal(result[0].status, 'deleted', result[0].error);
+    assert.equal(result[0].backupId, null);
+    assert.equal(fixture.telegram.sent.length, 0);
+    assert.deepEqual(fixture.telegram.deleted.map(item => item.messageId), [77, 88]);
+    await assert.rejects(fs.access(path.join(fixture.tenantRoot, 'example.db')));
+    await assert.rejects(fs.access(path.join(fixture.uploadsDirectory, 'comment.png')));
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test('manual backup is not available for a new-policy trial company', async () => {
+  for (const status of ['trial', 'cancelled']) {
+    const fixture = await makeFixture({ status, trialPolicyVersion: 1 });
+    try {
+      await assert.rejects(
+        fixture.manager.createCompanyBackup(fixture.companyId, { kind: 'manual' }),
+        /Backups are not included during the trial period/
+      );
+      const rows = await fixture.controlDb.execute('SELECT id FROM backups');
+      assert.equal(rows.rows.length, 0);
+    } finally {
+      await cleanupFixture(fixture);
+    }
   }
 });
 

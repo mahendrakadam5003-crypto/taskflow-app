@@ -27,6 +27,11 @@ body {
 }
 .hidden { display: none !important; }
 .app.booting { visibility: hidden; }
+.company-access-banner { position: sticky; top: 0; z-index: 60; padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 600; text-align: center; }
+.company-access-banner.grace { background: var(--amber-bg); color: #765414; }
+.company-access-banner.trial { background: var(--amber-bg); color: #765414; }
+.company-access-banner.read_only { background: var(--amber-bg); color: #765414; }
+.company-access-banner.locked { background: var(--red-bg); color: #8d291f; }
 .startup-screen {
   position: fixed;
   inset: 0;

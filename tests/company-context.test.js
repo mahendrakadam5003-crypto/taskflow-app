@@ -220,7 +220,8 @@ test('legacy and registered-company sign-in preserve existing credentials and is
     const cancelledSessionRequest = await fetch(`${baseUrl}/api/context`, {
       headers: { Cookie: secondSessionCookie }
     });
-    assert.equal(cancelledSessionRequest.status, 403);
+    assert.equal(cancelledSessionRequest.status, 200);
+    assert.deepEqual(await cancelledSessionRequest.json(), { tenantId: 202, companyStatus: 'cancelled' });
   } finally {
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }

@@ -69,7 +69,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
     const tables = new Set(tablesResult.rows.map(row => row.name));
     const expectedColumns = {
       web_sessions: ['sid', 'data', 'user_id', 'company_id', 'expires_at'],
-      companies: ['id', 'code', 'name', 'owner_name', 'owner_email', 'owner_phone', 'status', 'plan_id', 'trial_ends_at', 'tenant_db_url', 'tenant_db_token_encrypted', 'notes', 'created_at', 'max_users_override', 'storage_limit_mb_override', 'last_login_at', 'tenant_db_name', 'delete_after'],
+      companies: ['id', 'code', 'name', 'owner_name', 'owner_email', 'owner_phone', 'status', 'plan_id', 'trial_ends_at', 'tenant_db_url', 'tenant_db_token_encrypted', 'notes', 'created_at', 'max_users_override', 'storage_limit_mb_override', 'last_login_at', 'tenant_db_name', 'delete_after', 'trial_policy_version'],
       plans: ['id', 'name', 'max_users', 'storage_limit_mb', 'features_json', 'price_note', 'is_active'],
       super_admins: ['id', 'name', 'username', 'password_hash', 'token_version', 'created_at'],
       super_admin_sessions: ['sid_hash', 'super_admin_id', 'token_version', 'expires_at', 'created_at'],
@@ -90,6 +90,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       demo_requests: ['id', 'name', 'email', 'phone', 'company_name', 'team_size', 'message', 'status', 'consented_at', 'approved_by', 'company_id', 'created_at', 'updated_at'],
       coupons: ['id', 'code', 'discount_type', 'discount_value', 'expires_at', 'max_uses', 'uses', 'is_active', 'created_at'],
       company_price_overrides: ['company_id', 'unit_price_paise', 'currency', 'created_by', 'note', 'updated_at'],
+      entitlement_notifications: ['id', 'company_id', 'event_key', 'notification_type', 'recipient_email', 'status', 'attempts', 'created_at', 'last_attempt_at', 'sent_at'],
       control_schema_migrations: ['version', 'applied_at']
     };
     for (const [table, columns] of Object.entries(expectedColumns)) {
@@ -98,7 +99,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       assert.deepEqual(columnResult.rows.map(column => column.name), columns, `expected columns on ${table}`);
     }
     const migrations = await client.execute('SELECT version FROM control_schema_migrations');
-    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, CURRENT_SCHEMA_VERSION]);
+    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, CURRENT_SCHEMA_VERSION]);
     const pricing = await client.execute('SELECT monthly_price_paise, yearly_discount_pct, yearly_price_paise, tax_pct, currency, is_current FROM pricing_versions');
     assert.deepEqual(pricing.rows.map(row => [Number(row.monthly_price_paise), Number(row.yearly_discount_pct), Number(row.yearly_price_paise), Number(row.tax_pct), row.currency, Number(row.is_current)]), [[19900, 10, 214920, 18, 'INR', 1]]);
     const pricingSettings = await client.execute('SELECT trial_days, trial_max_users, trial_storage_limit_mb, grace_period_days, read_only_period_days, trial_approval_mode, seat_addition_billing FROM pricing_settings WHERE id = 1');

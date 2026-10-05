@@ -140,7 +140,7 @@ function createBackupManager({
   async function companyRecord(companyId) {
     const controlDb = await getDatabase();
     const result = await controlDb.execute({
-      sql: `SELECT id, code, name, status, tenant_db_name, tenant_db_url, tenant_db_token_encrypted
+      sql: `SELECT id, code, name, status, tenant_db_name, tenant_db_url, tenant_db_token_encrypted, trial_policy_version
         FROM companies WHERE id = ? AND status <> 'deleted' LIMIT 1`,
       args: [Number(companyId)]
     });
@@ -169,6 +169,9 @@ function createBackupManager({
   } = {}) {
     const company = await companyRecord(companyId);
     if (!company) throw new Error('Company not found.');
+    if (Number(company.trial_policy_version) === 1) {
+      throw new Error('Backups are not included during the trial period.');
+    }
     const controlDb = await getDatabase();
     const key = String(backupKey).replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 80);
     const filename = `${company.code}-${kind}-${key}.json`;
@@ -538,13 +541,16 @@ function createBackupManager({
   async function processDueCompanyDeletions({ date = now() } = {}) {
     const controlDb = await getDatabase();
     const due = await controlDb.execute({
-      sql: "SELECT id, code, name, tenant_db_name, tenant_db_url, tenant_db_token_encrypted FROM companies WHERE status = 'cancelled' AND delete_after <= ? ORDER BY id",
+      sql: `SELECT id, code, name, status, trial_policy_version, tenant_db_name, tenant_db_url, tenant_db_token_encrypted
+        FROM companies WHERE (status = 'cancelled' OR (status = 'trial' AND trial_policy_version = 1))
+          AND delete_after <= ? ORDER BY id`,
       args: [date.toISOString()]
     });
     const results = [];
     for (const company of due.rows || []) {
       try {
-        const finalBackup = await createCompanyBackup(company.id, {
+        const isUnbackedTrial = Number(company.trial_policy_version) === 1;
+        const finalBackup = isUnbackedTrial ? null : await createCompanyBackup(company.id, {
           kind: 'final', backupKey: dayKey(date), requireTelegram: Boolean(getTelegram().configured)
         });
         const tenantDb = getTenantDb();
@@ -625,13 +631,14 @@ function createBackupManager({
           sql: `UPDATE companies SET status = 'deleted', name = 'Deleted company', owner_name = NULL,
             owner_email = NULL, owner_phone = NULL, tenant_db_url = '', tenant_db_token_encrypted = '',
             tenant_db_name = NULL, max_users_override = NULL, storage_limit_mb_override = NULL,
-            notes = '', delete_after = NULL WHERE id = ? AND status = 'cancelled'`,
+            notes = '', delete_after = NULL WHERE id = ?
+              AND ((status = 'cancelled') OR (status = 'trial' AND trial_policy_version = 1))`,
           args: [Number(company.id)]
         });
         await controlDb.execute({ sql: 'DELETE FROM web_sessions WHERE company_id = ?', args: [String(company.id)] });
         await audit(company.id, 'Company permanently deleted',
-          `Final backup ${finalBackup.id} completed; deleted ${uniquePointers.length} tenant database(s), ${seenMessages.size} Telegram file/location messages, and ${localFiles.size} local files.`);
-        results.push({ companyId: Number(company.id), status: 'deleted', backupId: finalBackup.id });
+          `${finalBackup ? `Final backup ${finalBackup.id} completed` : 'Expired trial deleted without a backup'}; deleted ${uniquePointers.length} tenant database(s), ${seenMessages.size} Telegram file/location messages, and ${localFiles.size} local files.`);
+        results.push({ companyId: Number(company.id), status: 'deleted', backupId: finalBackup?.id ?? null });
       } catch (error) {
         await audit(company.id, 'Company permanent deletion failed', error.message);
         if (!error.backupAlerted) await alertFailure(company.id, 'permanent deletion');

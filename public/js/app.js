@@ -9,6 +9,28 @@ let forcedPasswordModalOpen = false;
 let modalReturnFocus = null;
 let modalCloseHandler = null;
 
+function updateCompanyAccessBanner(state, message = '', reasons = []) {
+  const app = $('#app');
+  if (!app) return;
+  let banner = $('#company-access-banner');
+  const isTrial = state === 'full' && reasons.includes('trial_active');
+  if (!['grace', 'read_only', 'locked'].includes(state) && !isTrial) {
+    banner?.remove();
+    return;
+  }
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'company-access-banner';
+    banner.setAttribute('role', 'status');
+    banner.setAttribute('aria-live', 'polite');
+    app.prepend(banner);
+  }
+  banner.className = `company-access-banner ${isTrial ? 'trial' : state}`;
+  banner.textContent = message || (state === 'grace'
+    ? 'Payment is due. Full access continues during the grace period.'
+    : state === 'read_only' ? 'This workspace is read-only.' : 'This workspace is locked.');
+}
+
 async function api(path, opts = {}) {
   const res = await fetch('/api' + path, {
     headers: { 'Content-Type': 'application/json' },
@@ -16,6 +38,12 @@ async function api(path, opts = {}) {
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
+  const accessState = res.headers.get('X-Company-Access-State');
+  if (accessState) {
+    let accessReasons = [];
+    try { accessReasons = JSON.parse(res.headers.get('X-Company-Access-Reasons') || '[]'); } catch (error) { accessReasons = []; }
+    updateCompanyAccessBanner(accessState, res.headers.get('X-Company-Access-Message') || '', accessReasons);
+  }
   let data = null;
   try { data = await res.json(); } catch (e) { /* no body */ }
   if (res.status === 401 && path !== '/auth/login' && path !== '/auth/change-password' && ME) {
@@ -31,6 +59,7 @@ async function api(path, opts = {}) {
     showSelfPasswordModal(true);
   }
   if (!res.ok) {
+    if (data?.access_state) updateCompanyAccessBanner(data.access_state, data.error || '', data.reasons || []);
     const error = new Error((data && data.error) || `Request failed (${res.status} ${res.statusText})`);
     error.status = res.status;
     error.mustChangePassword = Boolean(data?.must_change_password);

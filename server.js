@@ -20,6 +20,8 @@ const { collectUsageSnapshots } = require('./usage-snapshots');
 const { createBackupManager } = require('./backup-manager');
 const { logCompanyEvent } = require('./http-errors');
 const { createUserErrorReporter } = require('./user-error-reporter');
+const { createEntitlementMiddleware, createEntitlementService } = require('./entitlements');
+const { createEntitlementScheduler } = require('./entitlement-scheduler');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -48,6 +50,9 @@ function verifyUnsafeRequestOrigin(req, res, next) {
 
 const db = require('./db');
 const reportUserError = createUserErrorReporter({ getDatabase: getControlDatabase, isConfigured: hasControlDatabaseConfiguration });
+const entitlements = createEntitlementService({ getDatabase: getControlDatabase, isConfigured: hasControlDatabaseConfiguration });
+const entitlementMiddleware = createEntitlementMiddleware(entitlements);
+const entitlementScheduler = createEntitlementScheduler({ getDatabase: getControlDatabase, isConfigured: hasControlDatabaseConfiguration });
 const backupManager = createBackupManager({ tenantDatabase: db });
 let backupMaintenanceRunning = false;
 
@@ -402,6 +407,7 @@ app.use((req, res, next) => {
   if (req.method === 'POST' && ['/api/auth/login', '/api/auth/logout', '/api/auth/end-support'].includes(req.path)) return next();
   return requireAuth(req, res, next);
 });
+app.use(entitlementMiddleware);
 app.use((req, res, next) => {
   res.set('Accept-CH', 'Sec-CH-UA-Model, Sec-CH-UA-Platform-Version');
   next();
@@ -429,6 +435,22 @@ app.use((error, req, res, next) => {
 });
 
 let server;
+let dailyMaintenanceRunning = false;
+async function runDailyMaintenance() {
+  if (dailyMaintenanceRunning) return;
+  dailyMaintenanceRunning = true;
+  try {
+    try {
+      await entitlementScheduler.runEntitlementMaintenance();
+    } catch (error) {
+      logCompanyEvent(null, 'entitlement_maintenance_failed');
+    }
+    await runBackupMaintenance();
+  } finally {
+    dailyMaintenanceRunning = false;
+  }
+}
+
 const startupPromise = (async () => {
   await db.ready;
   try {
@@ -465,8 +487,8 @@ const startupPromise = (async () => {
     setInterval(() => collectUsageSnapshots()
       .then(count => console.log(`Collected usage snapshots for ${count} registered company workspace(s).`))
       .catch(() => logCompanyEvent(null, 'usage_snapshot_collection_failed')), 24 * 60 * 60 * 1000);
-    runBackupMaintenance();
-    setInterval(runBackupMaintenance, 24 * 60 * 60 * 1000);
+    runDailyMaintenance();
+    setInterval(runDailyMaintenance, 24 * 60 * 60 * 1000);
   });
 })().catch(error => {
   logCompanyEvent(null, 'server_startup_failed');

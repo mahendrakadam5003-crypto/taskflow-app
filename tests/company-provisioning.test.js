@@ -40,6 +40,7 @@ async function createControlDatabase({ failAudit = false } = {}) {
       if (sql.includes('FROM plans WHERE id')) {
         return { rows: [1, 2, 3, 4, 5].includes(Number(args[0])) ? [{ id: Number(args[0]) }] : [] };
       }
+      if (sql.includes('FROM pricing_settings WHERE id = 1')) return { rows: [{ trial_days: 7 }] };
       throw new Error(`Unexpected control database query: ${sql}`);
     },
     async transaction() {
@@ -56,7 +57,8 @@ async function createControlDatabase({ failAudit = false } = {}) {
               ownerEmail: statement.args[3],
               status: 'trial',
               planId: statement.args[4],
-              trialEndsAt: statement.args[5]
+              trialEndsAt: statement.args[5],
+              trialPolicyVersion: statement.sql.includes('trial_policy_version') ? 1 : null
             };
             pendingCompanies.push(row);
             return { lastInsertRowid: row.id };
@@ -143,11 +145,12 @@ test('company provisioning creates isolated local tenant databases with one-time
       company.code,
       company.status,
       Number(company.planId),
-      company.trialEndsAt
+      company.trialEndsAt,
+      company.trialPolicyVersion
     ]), [
-      ['solo-test', 'trial', 1, '2026-10-12'],
-      ['small-test', 'trial', 2, '2026-10-12'],
-      ['business-test', 'trial', 3, '2026-10-12']
+      ['solo-test', 'trial', 1, '2026-10-12', 1],
+      ['small-test', 'trial', 2, '2026-10-12', 1],
+      ['business-test', 'trial', 3, '2026-10-12', 1]
     ]);
     assert.deepEqual(controlDb.audit.map(entry => [entry.action, Number(entry.superAdminId)]), [
       ['Company provisioned', 1],

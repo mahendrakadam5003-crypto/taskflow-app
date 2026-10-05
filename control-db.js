@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 9;
+const CURRENT_SCHEMA_VERSION = 10;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -374,6 +374,26 @@ const CONTROL_MIGRATIONS = [{
     { sql: `UPDATE plans SET price_note = 'Existing plan; subscription billing not configured' WHERE price_note = 'Free three-month test'`, args: [] },
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [9] }
   ]
+}, {
+  version: 10,
+  statements: [
+    'ALTER TABLE companies ADD COLUMN trial_policy_version INTEGER',
+    `CREATE TABLE IF NOT EXISTS entitlement_notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      event_key TEXT NOT NULL,
+      notification_type TEXT NOT NULL,
+      recipient_email TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sending', 'sent', 'failed')),
+      attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_attempt_at TEXT,
+      sent_at TEXT,
+      UNIQUE(company_id, event_key)
+    )`,
+    'CREATE INDEX IF NOT EXISTS entitlement_notifications_status_idx ON entitlement_notifications(status, created_at)',
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [10] }
+  ]
 }];
 
 function getControlDatabaseConfig(environment = process.env) {
@@ -457,6 +477,15 @@ async function migrateControlDatabase(client) {
         }
         await client.execute(statement);
       }
+    } else if (migration.version === 10) {
+      const companiesTable = await client.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'companies'");
+      if (companiesTable.rows?.length) {
+        const columns = await client.execute('PRAGMA table_info(companies)');
+        if (!columns.rows.some(row => row.name === 'trial_policy_version')) {
+          await client.execute(migration.statements[0]);
+        }
+      }
+      for (const statement of migration.statements.slice(1)) await client.execute(statement);
     } else {
       await client.batch(migration.statements, 'write');
     }

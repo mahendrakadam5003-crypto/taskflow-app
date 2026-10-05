@@ -67,7 +67,7 @@ function createCompanyProvisioner({
   return async function provisionCompany(body, admin) {
     const input = validateProvisioningInput(body);
     const controlDb = await getDatabase();
-    const [companyCodeResult, planResult] = await Promise.all([
+    const [companyCodeResult, planResult, pricingSettingsResult] = await Promise.all([
       controlDb.execute({
         sql: 'SELECT id FROM companies WHERE code = ? LIMIT 1',
         args: [input.code]
@@ -75,7 +75,8 @@ function createCompanyProvisioner({
       controlDb.execute({
         sql: 'SELECT id FROM plans WHERE id = ? AND is_active = 1 LIMIT 1',
         args: [input.planId]
-      })
+      }),
+      controlDb.execute({ sql: 'SELECT trial_days FROM pricing_settings WHERE id = 1', args: [] })
     ]);
     if (companyCodeResult.rows?.[0]) throw new ProvisioningError('That company code is already in use.', 409);
     if (!planResult.rows?.[0]) throw new ProvisioningError('Choose an active plan.', 400);
@@ -83,7 +84,11 @@ function createCompanyProvisioner({
     const databaseName = `tf-${input.code}`;
     const oneTimePassword = crypto.randomBytes(24).toString('base64url');
     const passwordHash = await hashPassword(oneTimePassword);
-    const trialEndsAt = new Date(now().getTime() + TRIAL_LENGTH_DAYS * 24 * 60 * 60 * 1000)
+    const configuredTrialDays = Number(pricingSettingsResult.rows?.[0]?.trial_days);
+    const trialDays = Number.isSafeInteger(configuredTrialDays) && configuredTrialDays >= 1 && configuredTrialDays <= 60
+      ? configuredTrialDays
+      : TRIAL_LENGTH_DAYS;
+    const trialEndsAt = new Date(now().getTime() + trialDays * 24 * 60 * 60 * 1000)
       .toISOString().slice(0, 10);
     let tenantDatabaseUrl;
     let tenantDatabaseToken;
@@ -129,8 +134,8 @@ function createCompanyProvisioner({
       const insertResult = await transaction.execute({
         sql: `INSERT INTO companies (
           code, name, owner_name, owner_email, status, plan_id, trial_ends_at,
-          tenant_db_url, tenant_db_token_encrypted, notes, tenant_db_name
-        ) VALUES (?, ?, ?, ?, 'trial', ?, ?, ?, ?, ?, ?)`,
+          tenant_db_url, tenant_db_token_encrypted, notes, tenant_db_name, trial_policy_version
+        ) VALUES (?, ?, ?, ?, 'trial', ?, ?, ?, ?, ?, ?, 1)`,
         args: [
           input.code,
           input.name,

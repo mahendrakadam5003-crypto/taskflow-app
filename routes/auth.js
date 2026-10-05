@@ -192,6 +192,14 @@ router.post('/login', loginIpLimiter, loginUsernameLimiter, loginCompanyLimiter,
         read_only: true
       });
     }
+    if (req.companyAccessState?.state === 'locked' && user.role !== 'admin') {
+      return res.status(402).json({
+        error: req.companyAccessState.message,
+        access_state: 'locked',
+        reasons: req.companyAccessState.reasons,
+        billing_required: true
+      });
+    }
 
     await setAuthenticatedSession(req, user);
     if (req.companyTenantId != null && String(req.companyTenantId) !== LEGACY_TENANT_ID) {
@@ -307,7 +315,8 @@ router.get('/me', requireAuth, async (req, res) => {
       },
       plan: planUsage.plan,
       features: planUsage.features,
-      usage: planUsage.usage
+      usage: planUsage.usage,
+      access: req.companyAccessState || { state: 'full', reasons: [] }
     });
   } catch (err) {
     sendInternalError(res, err, 'Current user lookup failed');
@@ -415,7 +424,7 @@ router.post('/users', requireAdmin, async (req, res) => {
       { sql: 'SELECT last_insert_rowid() AS id', args: [] }
     ]);
     if (Number(inserted?.[0]?.rowsAffected ?? inserted?.[0]?.changes ?? 0) !== 1) {
-      return res.status(403).json({ error: 'User limit reached. Contact support to upgrade.' });
+      return res.status(403).json({ error: 'User limit reached - add seats.' });
     }
     const userId = Number(inserted?.[1]?.rows?.[0]?.id);
     if (!Number.isSafeInteger(userId) || userId < 1) throw new Error('New user record was not returned after insert.');
@@ -494,7 +503,7 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
           AND (? IS NULL OR (SELECT COUNT(*) FROM users WHERE active = 1) < ?)`)
         .run(id, userLimit, userLimit);
       if (Number(activation?.changes ?? activation?.rowsAffected ?? 0) !== 1) {
-        return res.status(403).json({ error: 'User limit reached. Contact support to upgrade.' });
+        return res.status(403).json({ error: 'User limit reached - add seats.' });
       }
     }
     

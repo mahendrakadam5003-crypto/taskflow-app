@@ -135,7 +135,7 @@ function createCompanyContextMiddleware({
         }).catch(next);
       }
       return resolveCompanyById(companyId).then(company => {
-        if (!company || ['cancelled', 'deleted'].includes(company.status)) {
+        if (!company || company.status === 'deleted') {
           return destroySession(req).then(() => {
             res.clearCookie('taskflow.sid.v2', { path: '/' });
             return res.status(403).json({ error: 'This company workspace is no longer available.' });
@@ -149,7 +149,7 @@ function createCompanyContextMiddleware({
       if (!hasControlDatabaseConfiguration(environment)) return runLegacyContext(req, next);
       return resolveCompany(defaultCompanyCode).then(company => {
         if (!company) return runLegacyContext(req, next);
-        if (!['trial', 'active', 'suspended'].includes(company.status)) {
+        if (!['trial', 'active', 'suspended', 'cancelled'].includes(company.status)) {
           return res.status(401).json({ error: 'Company code or login credentials are incorrect.' });
         }
         return runCompanyContext(company, next, req);
@@ -169,7 +169,7 @@ function createCompanyContextMiddleware({
     }
 
     return resolveCompany(explicitCompanyCode).then(company => {
-      if (!company || !['trial', 'active', 'suspended'].includes(company.status)) {
+      if (!company || !['trial', 'active', 'suspended', 'cancelled'].includes(company.status)) {
         return res.status(401).json({ error: 'Company code or login credentials are incorrect.' });
       }
       return runCompanyContext(company, next, req);

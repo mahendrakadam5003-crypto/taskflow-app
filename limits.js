@@ -4,6 +4,9 @@ const crypto = require('node:crypto');
 const { getControlDatabase } = require('./control-db');
 const { hasControlDatabaseConfiguration, LEGACY_TENANT_ID } = require('./tenant-manager');
 const db = require('./db');
+const { createEntitlementScheduler } = require('./entitlement-scheduler');
+
+const entitlementScheduler = createEntitlementScheduler();
 
 const FEATURE_NAMES = ['attendance', 'reimbursements', 'export'];
 const ENABLED_FEATURES = Object.freeze(Object.fromEntries(FEATURE_NAMES.map(name => [name, true])));
@@ -124,6 +127,10 @@ function createPlanLimits({
     const percentUsed = plan?.storageLimitBytes != null
       ? Number(((storageBytes / plan.storageLimitBytes) * 100).toFixed(1))
       : null;
+    const warningThreshold = percentUsed >= 95 ? 95 : percentUsed >= 80 ? 80 : null;
+    if (plan?.companyId && warningThreshold) {
+      void entitlementScheduler.notifyStorageWarning(plan.companyId, warningThreshold, storageBytes, plan.storageLimitBytes);
+    }
     return {
       plan: plan ? {
         id: plan.planId ?? null,
@@ -138,7 +145,7 @@ function createPlanLimits({
         fileBytes,
         storageBytes,
         percentUsed,
-        warningThreshold: percentUsed >= 95 ? 95 : percentUsed >= 80 ? 80 : null,
+        warningThreshold,
         trialEndsAt: plan?.trialEndsAt || null
       }
     };

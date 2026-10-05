@@ -374,6 +374,7 @@ test('user seats are enforced for creation and reactivation, and deactivation fr
       body: { name: 'Over limit', username: 'over-limit', password: 'valid-password-123' }
     });
     assert.equal(denied.status, 403);
+    assert.deepEqual(await denied.json(), { error: 'User limit reached - add seats.' });
 
     const deactivate = await request('/users/2', { method: 'PUT', cookie: adminCookie, body: { active: false } });
     assert.equal(deactivate.status, 200);
@@ -387,6 +388,7 @@ test('user seats are enforced for creation and reactivation, and deactivation fr
 
     const deniedReactivation = await request('/users/2', { method: 'PUT', cookie: adminCookie, body: { active: true } });
     assert.equal(deniedReactivation.status, 403);
+    assert.deepEqual(await deniedReactivation.json(), { error: 'User limit reached - add seats.' });
     const freeSeat = await request(`/users/${newUserId}`, { method: 'PUT', cookie: adminCookie, body: { active: false } });
     assert.equal(freeSeat.status, 200);
     const reactivated = await request('/users/2', { method: 'PUT', cookie: adminCookie, body: { active: true } });
