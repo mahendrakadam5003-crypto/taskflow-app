@@ -14,6 +14,7 @@ let overviewData = null;
 let activeCompanyDetail = null;
 let planRecords = [];
 let demoRequests = [];
+let livePricing = null;
 let companyQuickFilter = 'all';
 let companySort = { key: 'name', direction: 1 };
 
@@ -597,6 +598,7 @@ async function previewPricing() {
 
 async function loadPricing() {
   const result = await request('pricing');
+  livePricing = result.pricing;
   populatePricingForm(result.pricing);
   renderPricingPreview({
     preview: result.preview,
@@ -771,6 +773,34 @@ async function loadCompanyDetail(companyId) {
   }
 }
 
+function roundHalfUp(numerator, denominator) {
+  return (numerator * 2n + denominator) / (denominator * 2n);
+}
+
+function getDemoRequestPricingSuggestion(item) {
+  if (!livePricing || !Array.isArray(livePricing.tiers) || !livePricing.tiers.length) return null;
+  const teamSize = Number(item.teamSize);
+  if (!Number.isSafeInteger(teamSize) || teamSize < 1) return null;
+  const expectedTierName = teamSize <= 10 ? 'team' : 'enterprise';
+  const coversTeamSize = tier => teamSize >= tier.minSeats && (tier.maxSeats === null || teamSize <= tier.maxSeats);
+  const tier = livePricing.tiers.find(candidate => candidate.name.trim().toLowerCase() === expectedTierName && coversTeamSize(candidate))
+    || livePricing.tiers.find(coversTeamSize);
+  if (!tier || !Number.isSafeInteger(tier.monthlyPricePaise) || tier.monthlyPricePaise < 0) return null;
+  const subtotal = BigInt(tier.monthlyPricePaise) * BigInt(teamSize);
+  const taxTenths = BigInt(Math.round(Number(livePricing.taxPct) * 10));
+  const taxDenominator = livePricing.taxInclusive ? 1000n + taxTenths : 1000n;
+  const tax = roundHalfUp(subtotal * taxTenths, taxDenominator);
+  const total = livePricing.taxInclusive ? subtotal : subtotal + tax;
+  if (total > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return {
+    tier,
+    teamSize,
+    monthlyTotalPaise: Number(total),
+    currency: livePricing.currency,
+    taxInclusive: livePricing.taxInclusive
+  };
+}
+
 function renderDemoRequests() {
   const newCount = demoRequests.filter(item => item.status === 'new').length;
   document.getElementById('demo-request-count').textContent = `${newCount} new`;
@@ -778,25 +808,41 @@ function renderDemoRequests() {
   tabCount.textContent = String(newCount);
   tabCount.classList.toggle('hidden', newCount < 1);
   document.getElementById('demo-request-list').innerHTML = demoRequests.length
-    ? demoRequests.map(item => `<article class="record-row"><div>
+    ? demoRequests.map(item => {
+      const suggestion = getDemoRequestPricingSuggestion(item);
+      const suggestionText = suggestion
+        ? `<small>Estimated monthly total at ${suggestion.teamSize} seats: ${formatPaise(suggestion.monthlyTotalPaise, suggestion.currency)} (${suggestion.taxInclusive ? 'GST included' : 'GST added'}).</small>`
+        : '<small>Live pricing estimate unavailable; check Plans &amp; Pricing before quoting.</small>';
+      return `<article class="record-row"><div>
         <strong>${escapeHtml(item.companyName)} · ${escapeHtml(item.name)}</strong>
         <small>${escapeHtml(item.email)}${item.phone ? ` · ${escapeHtml(item.phone)}` : ''} · team ${Number(item.teamSize)}</small>
+        <small><strong>SUGGESTED PLAN: ${escapeHtml(suggestion?.tier.name || 'Unavailable')}</strong></small>
+        ${suggestionText}
         ${item.message ? `<small>${escapeHtml(item.message)}</small>` : ''}
         <small>Request #${item.id} · ${escapeHtml(formatDate(item.createdAt))} · ${escapeHtml(item.status)}</small>
       </div><div class="record-actions">${item.status === 'new'
         ? `<button class="button button-primary" type="button" data-demo-approve="${item.id}">Approve</button><button class="button button-quiet" type="button" data-demo-reject="${item.id}">Reject</button>`
-        : `<button class="button button-primary" type="button" data-demo-provision="${item.id}">Create trial</button>`}</div></article>`).join('')
+        : `<button class="button button-primary" type="button" data-demo-provision="${item.id}">Create trial</button>`}</div></article>`;
+    }).join('')
     : '<p class="muted">No demo requests are awaiting action.</p>';
 }
 
 async function loadDemoRequests() {
   const errorTarget = document.getElementById('demo-request-load-error');
   errorTarget.classList.add('hidden');
+  const pricingLoad = livePricing
+    ? Promise.resolve(null)
+    : loadPricing().then(() => null).catch(error => error);
   try {
-    const result = await request('demo-requests');
+    const [result, pricingError] = await Promise.all([request('demo-requests'), pricingLoad]);
     demoRequests = result.requests || [];
     renderDemoRequests();
+    if (pricingError) {
+      errorTarget.textContent = `Live pricing could not be loaded, so request estimates are unavailable. ${pricingError.message}`;
+      errorTarget.classList.remove('hidden');
+    }
   } catch (error) {
+    await pricingLoad;
     errorTarget.textContent = error.message;
     errorTarget.classList.remove('hidden');
   }
@@ -814,6 +860,12 @@ function prefillDemoRequest(item) {
   document.getElementById('demo-request-id').value = String(item.id);
   const trialPlan = planRecords.find(plan => plan.name.toLowerCase() === 'trial');
   if (trialPlan) document.getElementById('new-company-plan').value = String(trialPlan.id);
+  const suggestion = getDemoRequestPricingSuggestion(item);
+  const suggestionTarget = document.getElementById('company-pricing-suggestion');
+  suggestionTarget.textContent = suggestion
+    ? `Suggested pricing tier: ${suggestion.tier.name} for ${suggestion.teamSize} seats; estimated monthly total ${formatPaise(suggestion.monthlyTotalPaise, suggestion.currency)} (${suggestion.taxInclusive ? 'GST included' : 'GST added'}). The Trial entitlement remains selected; pricing and feature access are separate.`
+    : 'Live pricing suggestion unavailable. The Trial entitlement remains selected; check Plans & Pricing before quoting.';
+  suggestionTarget.classList.remove('hidden');
   activateControlPage('companies');
   document.getElementById('company-form').scrollIntoView({ block: 'start', behavior: 'smooth' });
   document.getElementById('new-company-code').focus();
@@ -1345,6 +1397,9 @@ companyForm.addEventListener('submit', async event => {
       createdCompanyDetails.classList.add('hidden');
     }, { once: true });
     companyForm.reset();
+    document.getElementById('demo-request-id').value = '';
+    document.getElementById('company-pricing-suggestion').replaceChildren();
+    document.getElementById('company-pricing-suggestion').classList.add('hidden');
     managementMessage.textContent = `New company provisioned with its own database and a trial through ${formatDate(result.company.trialEndsAt)}.`;
     managementMessage.classList.remove('hidden');
     await loadOverview();

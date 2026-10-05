@@ -83,6 +83,7 @@ footer span { padding: 0 6px; color: var(--accent); }
 .provision-form .company-setting { width: 100%; max-width: none; min-height: 46px; }
 .provision-form button, .provision-form .message { grid-column: 1 / -1; }
 .provision-form button { justify-content: center; margin-top: 18px; }
+.form-suggestion { grid-column: 1 / -1; margin: 2px 0 0; padding: 10px 12px; border: 1px solid rgba(118, 166, 255, .28); border-radius: 8px; background: rgba(118, 166, 255, .08); color: #bed2ff; font-size: 11px; line-height: 1.6; }
 .optional-label { color: #75869c; font-weight: 400; }
 .created-details { margin: 0 24px 24px; padding: 16px; border: 1px solid rgba(69, 214, 196, .24); border-radius: 10px; background: rgba(69, 214, 196, .08); color: #c9f4ee; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 .created-details h3 { margin: 0 0 8px; color: #9aeee2; font-size: 15px; }

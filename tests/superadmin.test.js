@@ -122,6 +122,17 @@ test('super-admin companies table supports attention filters, seat limits, billi
   assert.match(script, /function compareCompanyValues/);
 });
 
+test('super-admin demo requests use live pricing tiers and keep pricing separate from trial entitlements', async () => {
+  const page = await fs.readFile(path.join(__dirname, '..', 'public', 'superadmin.html'), 'utf8');
+  assert.match(page, /id="company-pricing-suggestion"/);
+  const script = await fs.readFile(path.join(__dirname, '..', 'public', 'js', 'superadmin.js'), 'utf8');
+  assert.match(script, /teamSize <= 10 \? 'team' : 'enterprise'/);
+  assert.match(script, /livePricing\.tiers\.find/);
+  assert.match(script, /Estimated monthly total at/);
+  assert.match(script, /The Trial entitlement remains selected; pricing and feature access are separate\./);
+  assert.match(script, /Live pricing estimate unavailable/);
+});
+
 test('startup bootstrap creates and can privately reset only the configured super-admin', async () => {
   let storedAdmin = null;
   const auditEntries = [];
@@ -956,13 +967,17 @@ test('super-admin can approve and reject queued demo requests for manual trial s
     const headers = { Cookie: login.headers.get('set-cookie').split(';', 1)[0] };
     const inbox = await fetch(`${baseUrl}/demo-requests`, { headers });
     assert.equal(inbox.status, 200);
-    assert.equal((await inbox.json()).requests.length, 2);
+    const inboxData = await inbox.json();
+    assert.equal(inboxData.requests.length, 2);
+    assert.deepEqual(inboxData.requests.map(item => item.teamSize).sort(), [2, 5]);
 
     const approved = await fetch(`${baseUrl}/demo-requests/${first.lastInsertRowid}/approve`, {
       method: 'POST', headers
     });
     assert.equal(approved.status, 200);
     assert.equal((await approved.json()).status, 'approved');
+    const companyCount = await controlDb.execute('SELECT COUNT(*) AS count FROM companies');
+    assert.equal(Number(companyCount.rows[0].count), 1, 'approval must not create a company automatically');
     const rejected = await fetch(`${baseUrl}/demo-requests/${second.lastInsertRowid}/reject`, {
       method: 'POST', headers
     });
