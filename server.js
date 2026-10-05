@@ -397,14 +397,17 @@ const startupPromise = (async () => {
     console.error(`Super-admin bootstrap failed; the company workspace will continue without it: ${error.message}`);
   }
   await cleanupExpiredSessions();
+  try {
+    const count = await collectUsageSnapshots();
+    console.log(`Collected usage snapshots for ${count} registered company workspace(s).`);
+  } catch (error) {
+    console.error('Initial usage snapshot collection failed:', error.message);
+  }
   server = app.listen(PORT, bindAddress, () => {
     console.log(`TaskFlow operational server running on ${bindAddress}:${PORT}`);
     cleanupExpiredUploads().catch(err => console.error('Startup cleanup failed:', err));
     setInterval(() => cleanupExpiredUploads().catch(err => console.error('Upload cleanup failed:', err.message)), 24 * 60 * 60 * 1000);
     setInterval(() => cleanupExpiredSessions().catch(err => console.error('Session cleanup failed:', err.message)), 24 * 60 * 60 * 1000);
-    collectUsageSnapshots()
-      .then(count => console.log(`Collected usage snapshots for ${count} registered company workspace(s).`))
-      .catch(err => console.error('Initial usage snapshot collection failed:', err.message));
     setInterval(() => collectUsageSnapshots()
       .then(count => console.log(`Collected usage snapshots for ${count} registered company workspace(s).`))
       .catch(err => console.error('Usage snapshot collection failed:', err.message)), 24 * 60 * 60 * 1000);

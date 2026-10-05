@@ -253,7 +253,7 @@ test('super-admin login uses an isolated hashed session and protects the read-on
     assert.equal(data.companies[0].planName, 'Team');
     assert.equal(data.companies[0].userCount, 7);
     assert.equal(data.companies[0].planId, 2);
-    assert.deepEqual(data.plans.map(plan => plan.name), ['Solo', 'Team', 'Business']);
+    assert.deepEqual(data.plans.map(plan => plan.name), ['Solo', 'Team', 'Business', 'Internal / Unlimited']);
 
     await fetch(`${baseUrl}/logout`, {
       method: 'POST',

@@ -70,10 +70,15 @@ test('existing company registration is idempotent and preserves company login an
     });
 
     const company = await client.execute({
-      sql: 'SELECT code, name, status, tenant_db_url, tenant_db_token_encrypted FROM companies WHERE id = ?',
+      sql: `SELECT c.code, c.name, c.status, c.plan_id, p.name AS plan_name,
+          c.tenant_db_url, c.tenant_db_token_encrypted
+        FROM companies c LEFT JOIN plans p ON p.id = c.plan_id WHERE c.id = ?`,
       args: [first.companyId]
     });
     assert.equal(company.rows.length, 1);
+    assert.equal(company.rows[0].status, 'active');
+    assert.equal(company.rows[0].plan_name, 'Internal / Unlimited');
+    assert.equal(company.rows[0].plan_id != null, true);
     assert.equal(company.rows[0].tenant_db_url, environment.TURSO_DATABASE_URL);
     assert.equal(
       decryptTenantDatabaseToken(company.rows[0].tenant_db_token_encrypted, encryptionKey),
@@ -96,6 +101,32 @@ test('existing company registration is idempotent and preserves company login an
       args: [first.companyId]
     });
     assert.deepEqual(audit.rows.map(row => row.action), ['Existing company linked']);
+
+    const soloPlan = await client.execute("SELECT id FROM plans WHERE name = 'Solo'");
+    await client.execute({
+      sql: "UPDATE companies SET status = 'suspended', plan_id = ? WHERE id = ?",
+      args: [Number(soloPlan.rows[0].id), first.companyId]
+    });
+    const repeatedRegistration = await register();
+    assert.equal(repeatedRegistration.status, 'already-registered');
+    const preservedStatus = await client.execute({
+      sql: `SELECT c.status, p.name AS plan_name FROM companies c
+        LEFT JOIN plans p ON p.id = c.plan_id WHERE c.id = ?`,
+      args: [first.companyId]
+    });
+    assert.equal(preservedStatus.rows[0].status, 'suspended', 'registration must not undo a manual status change');
+    assert.equal(preservedStatus.rows[0].plan_name, 'Internal / Unlimited');
+    const auditAfterRepair = await client.execute({
+      sql: 'SELECT action FROM super_admin_audit WHERE company_id = ? ORDER BY id',
+      args: [first.companyId]
+    });
+    assert.deepEqual(auditAfterRepair.rows.map(row => row.action), [
+      'Existing company linked',
+      'Internal plan assigned'
+    ]);
+
+    const unchangedUsers = await client.execute('SELECT id, username, password_hash, role FROM users');
+    assert.deepEqual(unchangedUsers.rows, existingUsers.rows);
   } finally {
     await close();
   }

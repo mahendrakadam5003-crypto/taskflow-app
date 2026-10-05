@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -131,6 +131,22 @@ const CONTROL_MIGRATIONS = [{
       expires_at INTEGER NOT NULL
     )`,
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [4] }
+  ]
+}, {
+  version: 5,
+  statements: [
+    {
+      sql: `INSERT INTO plans (name, max_users, storage_limit_mb, features_json, price_note, is_active)
+        VALUES (?, NULL, NULL, ?, ?, 1)
+        ON CONFLICT(name) DO UPDATE SET max_users = NULL, storage_limit_mb = NULL,
+          features_json = excluded.features_json, price_note = excluded.price_note, is_active = 1`,
+      args: [
+        'Internal / Unlimited',
+        JSON.stringify({ attendance: true, reimbursements: true, export: true }),
+        'Existing company unlimited plan'
+      ]
+    },
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [5] }
   ]
 }];
 

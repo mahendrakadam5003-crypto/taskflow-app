@@ -42,11 +42,34 @@ async function registerLegacyCompany({
         WHERE lower(tenant_db_url) = lower(?) LIMIT 1`,
       args: [database.url]
     });
+    const internalPlan = await transaction.execute({
+      sql: "SELECT id FROM plans WHERE name = 'Internal / Unlimited' LIMIT 1",
+      args: []
+    });
+    const internalPlanId = Number(internalPlan.rows?.[0]?.id);
+    if (!Number.isSafeInteger(internalPlanId) || internalPlanId < 1) {
+      throw new Error('The Internal / Unlimited plan is missing from the control database.');
+    }
     if (matchingDatabase.rows?.[0]) {
+      const companyId = Number(matchingDatabase.rows[0].id);
+      const currentCompany = await transaction.execute({
+        sql: 'SELECT plan_id FROM companies WHERE id = ? LIMIT 1',
+        args: [companyId]
+      });
+      if (Number(currentCompany.rows?.[0]?.plan_id) !== internalPlanId) {
+        await transaction.execute({
+          sql: 'UPDATE companies SET plan_id = ? WHERE id = ?',
+          args: [internalPlanId, companyId]
+        });
+        await transaction.execute({
+          sql: 'INSERT INTO super_admin_audit (company_id, action, details) VALUES (?, ?, ?)',
+          args: [companyId, 'Internal plan assigned', 'Assigned the existing company the Internal / Unlimited plan.']
+        });
+      }
       await transaction.commit();
       return {
         status: 'already-registered',
-        companyId: Number(matchingDatabase.rows[0].id),
+        companyId,
         code: matchingDatabase.rows[0].code,
         name: matchingDatabase.rows[0].name
       };
@@ -62,11 +85,12 @@ async function registerLegacyCompany({
 
     const inserted = await transaction.execute({
       sql: `INSERT INTO companies (
-        code, name, status, tenant_db_url, tenant_db_token_encrypted, notes
-      ) VALUES (?, ?, 'active', ?, ?, ?)`,
+        code, name, status, plan_id, tenant_db_url, tenant_db_token_encrypted, notes
+      ) VALUES (?, ?, 'active', ?, ?, ?, ?)`,
       args: [
         code,
         name,
+        internalPlanId,
         database.url,
         encryptedToken,
         'Existing TaskFlow workspace registered without moving or changing company data.'

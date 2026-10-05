@@ -23,17 +23,28 @@ test('control database migration is versioned, repeatable, and seeds sample plan
     assert.equal(await migrateControlDatabase(client), CURRENT_SCHEMA_VERSION);
 
     const plansResult = await client.execute('SELECT id, name, max_users, storage_limit_mb, features_json, price_note FROM plans ORDER BY id');
-    assert.equal(plansResult.rows.length, 3);
-    assert.deepEqual(plansResult.rows.map(plan => [plan.name, Number(plan.max_users), plan.storage_limit_mb == null ? null : Number(plan.storage_limit_mb)]), [
+    assert.equal(plansResult.rows.length, 4);
+    assert.deepEqual(plansResult.rows.map(plan => [
+      plan.name,
+      plan.max_users == null ? null : Number(plan.max_users),
+      plan.storage_limit_mb == null ? null : Number(plan.storage_limit_mb)
+    ]), [
       ['Solo', 1, 1024],
       ['Team', 10, 10240],
-      ['Business', 50, null]
+      ['Business', 50, null],
+      ['Internal / Unlimited', null, null]
     ]);
     assert.deepEqual(JSON.parse(plansResult.rows[0].features_json), {
       attendance: true,
       reimbursements: true,
       export: true
     });
+    assert.deepEqual(JSON.parse(plansResult.rows[3].features_json), {
+      attendance: true,
+      reimbursements: true,
+      export: true
+    });
+    assert.equal(plansResult.rows[3].price_note, 'Existing company unlimited plan');
     assert.equal(plansResult.rows[0].price_note, 'custom test note', 'rerunning migration preserves edited plan data');
 
     const tokenCiphertext = encryptTenantDatabaseToken('tenant-token-for-schema-test', '42'.repeat(32));
@@ -72,7 +83,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       assert.deepEqual(columnResult.rows.map(column => column.name), columns, `expected columns on ${table}`);
     }
     const migrations = await client.execute('SELECT version FROM control_schema_migrations');
-    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, 3, CURRENT_SCHEMA_VERSION]);
+    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, 3, 4, CURRENT_SCHEMA_VERSION]);
   } finally {
     await client.close();
   }
@@ -181,6 +192,15 @@ test('control schema migration preserves existing super-admin login identifiers'
       password_hash TEXT NOT NULL,
       token_version INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    await client.execute(`CREATE TABLE plans (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      max_users INTEGER,
+      storage_limit_mb INTEGER,
+      features_json TEXT NOT NULL,
+      price_note TEXT NOT NULL DEFAULT '',
+      is_active INTEGER NOT NULL DEFAULT 1
     )`);
     await client.execute("INSERT INTO control_schema_migrations (version) VALUES (1), (2)");
     await client.execute({
