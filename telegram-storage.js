@@ -4,6 +4,10 @@ const FormData = require('form-data');
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
 const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || null;
 
+function isConfigured() {
+  return Boolean(TELEGRAM_TOKEN && CHANNEL_ID);
+}
+
 function assertConfigured() {
   if (!TELEGRAM_TOKEN || !CHANNEL_ID) {
     throw new Error('Telegram storage is not configured (missing TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID).');
@@ -55,8 +59,10 @@ async function streamFromTelegram(fileId, res, metadata = {}) {
   if (!filePath) throw new Error('Telegram did not return a file path.');
   const response = await axios.get(`https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`, { responseType: 'stream' });
   const filename = metadata.originalName || filePath.split('/').pop() || 'attachment';
-  res.setHeader('Content-Disposition', `inline; filename="${String(filename).replace(/["\r\n]/g, '_')}"`);
-  if (response.headers['content-type']) res.setHeader('Content-Type', response.headers['content-type']);
+  const disposition = metadata.disposition === 'attachment' ? 'attachment' : 'inline';
+  res.setHeader('Content-Disposition', `${disposition}; filename="${String(filename).replace(/["\r\n]/g, '_')}"`);
+  const contentType = metadata.mimeType || response.headers['content-type'];
+  if (contentType) res.setHeader('Content-Type', contentType);
   response.data.pipe(res);
 }
 
@@ -102,4 +108,4 @@ async function sendLocationToTelegram(latitude, longitude, caption) {
   }
 }
 
-module.exports = { uploadToTelegram, streamFromTelegram, deleteTelegramMessage, sendLocationToTelegram };
+module.exports = { isConfigured, uploadToTelegram, streamFromTelegram, deleteTelegramMessage, sendLocationToTelegram };

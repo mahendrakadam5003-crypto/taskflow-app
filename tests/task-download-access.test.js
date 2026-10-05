@@ -2,14 +2,12 @@ const assert = require('node:assert/strict');
 const { after, before, test } = require('node:test');
 const express = require('express');
 const session = require('express-session');
-const { Readable } = require('node:stream');
 
 const dbPath = require.resolve('../db');
 const authPath = require.resolve('../routes/auth');
 const auditPath = require.resolve('../audit');
 const storagePath = require.resolve('../telegram-storage');
-const axiosPath = require.resolve('axios');
-const originals = new Map([dbPath, authPath, auditPath, storagePath, axiosPath].map(modulePath => [modulePath, require.cache[modulePath]]));
+const originals = new Map([dbPath, authPath, auditPath, storagePath].map(modulePath => [modulePath, require.cache[modulePath]]));
 const originalTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
 let telegramRequests = 0;
 let attachmentQueries = 0;
@@ -54,14 +52,23 @@ require.cache[authPath] = {
   }
 };
 require.cache[auditPath] = { id: auditPath, filename: auditPath, loaded: true, exports: { logActivity: async () => {} } };
-require.cache[storagePath] = { id: storagePath, filename: storagePath, loaded: true, exports: { uploadToTelegram: async () => {} } };
-const axiosMock = async () => ({ headers: { 'content-type': 'application/pdf' }, data: Readable.from(['test attachment']) });
-axiosMock.get = async url => {
-  telegramRequests += 1;
-  assert.ok(url.includes(encodeURIComponent(fileIdFromDb)));
-  return { data: { result: { file_path: 'documents/private.pdf' } } };
+require.cache[storagePath] = {
+  id: storagePath,
+  filename: storagePath,
+  loaded: true,
+  exports: {
+    isConfigured: () => true,
+    uploadToTelegram: async () => {},
+    streamFromTelegram: async (fileId, res, metadata) => {
+      telegramRequests += 1;
+      assert.equal(fileId, fileIdFromDb);
+      assert.equal(metadata.disposition, 'attachment');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.end('test attachment');
+    },
+    deleteTelegramMessage: async () => true
+  }
 };
-require.cache[axiosPath] = { id: axiosPath, filename: axiosPath, loaded: true, exports: axiosMock };
 process.env.TELEGRAM_BOT_TOKEN = 'test-token';
 
 const tasksRouter = require('../routes/tasks');

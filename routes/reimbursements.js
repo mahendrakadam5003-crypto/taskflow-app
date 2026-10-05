@@ -7,7 +7,7 @@ const { logActivity } = require('../audit');
 const { csvValue } = require('../csv');
 const { requireAuth, requireAdmin } = require('./auth');
 const { logRequestEvent, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
-const { uploadToTelegram, streamFromTelegram, deleteTelegramMessage } = require('../telegram-storage');
+const storageProvider = require('../storage-provider');
 const { parseMoneyAmount } = require('../lib/money');
 const { businessDate } = require('../lib/business-date');
 const { requireFeature, reserveUpload, releaseUpload, StorageLimitError } = require('../limits');
@@ -85,7 +85,7 @@ async function uploadReceiptFiles(files, req) {
   try {
     for (const [index, file] of files.entries()) {
       if (index > 0) await new Promise(resolve => setTimeout(resolve, 350));
-      const attachment = await uploadToTelegram(file);
+      const attachment = await storageProvider.upload(file, { companyId: req.companyTenantId });
       uploaded.push({ attachment, file });
     }
     return uploaded;
@@ -108,7 +108,7 @@ async function cleanupUploadedReceipts(uploaded, reimbursementId = null, req = n
   }
   for (const { attachment } of uploaded) {
     try {
-      await deleteTelegramMessage(attachment.messageId);
+      await storageProvider.delete({ fileId: attachment.fileId, messageId: attachment.messageId });
     } catch (error) {
       logRequestEvent(req, 'receipt_file_cleanup_failed');
     }
@@ -302,7 +302,7 @@ router.get('/receipts/:fileId', async (req, res) => {
     }
     if (!linkedClaim) return res.status(404).json({ error: 'Receipt not found.' });
     if (!attachment) return res.status(403).json({ error: 'You do not have access to this receipt.' });
-    await streamFromTelegram(req.params.fileId, res, { originalName: attachment?.original_name });
+    await storageProvider.stream(req.params.fileId, res, { originalName: attachment?.original_name });
   } catch (error) {
     sendInternalError(res, error, 'Receipt download failed');
   }
@@ -544,7 +544,7 @@ router.delete('/:id', requireAdmin, async (req, res) => {
     for (const fileId of telegramFileIds) {
       const messageId = messagesByFileId.get(fileId);
       if (!messageId) continue;
-      try { await deleteTelegramMessage(messageId); }
+      try { await storageProvider.delete({ fileId, messageId }); }
       catch (error) { logRequestEvent(req, 'receipt_delete_failed'); }
     }
     res.json({ ok: true });

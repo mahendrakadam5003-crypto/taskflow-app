@@ -4,13 +4,12 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { gunzipSync } = require('zlib');
-const axios = require('axios');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const db = require('../db');
 const { requireAuth, requireAdmin } = require('./auth');
 const { logActivity } = require('../audit');
 const { logRequestEvent, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
-const { uploadToTelegram, deleteTelegramMessage } = require('../telegram-storage');
+const storageProvider = require('../storage-provider');
 const { parseMoneyAmount, parsePaymentAmounts } = require('../lib/money');
 const { businessDate } = require('../lib/business-date');
 const { getPlanUsage, reserveUpload, releaseUpload, requireFeature, StorageLimitError } = require('../limits');
@@ -67,7 +66,6 @@ const asanaImportProgress = new Map();
 // Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID in the environment to enable
 // uploads/downloads; without them, those two endpoints return a clear error
 // instead of silently failing.
-const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
 const commentUploadTypes = new Map([
   ['.jpg', 'image/jpeg'],
   ['.jpeg', 'image/jpeg'],
@@ -244,8 +242,8 @@ async function requireProjectTaskAccess(req, res, next) {
 // ---- ATTACHMENT DOWNLOAD ----
 router.get('/download/:fileId', async (req, res) => {
   try {
-    if (!TELEGRAM_TOKEN) {
-      return res.status(503).json({ error: 'File storage is not configured (missing TELEGRAM_BOT_TOKEN).' });
+    if (!storageProvider.isConfigured()) {
+      return res.status(503).json({ error: 'File storage is not configured.' });
     }
     const { fileId } = req.params;
     if (typeof fileId !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(fileId)) {
@@ -268,16 +266,11 @@ router.get('/download/:fileId', async (req, res) => {
     if (!taskExists) return res.status(404).json({ error: 'Attachment not found.' });
     if (!attachment) return res.status(403).json({ error: 'You do not have access to this attachment.' });
 
-    const fileInfoRes = await axios.get(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${encodeURIComponent(fileId)}`);
-    const filePath = fileInfoRes.data.result.file_path;
-
-    const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;
-    const response = await axios({ method: 'get', url: fileUrl, responseType: 'stream' });
-    const filename = attachment?.original_name || path.basename(filePath) || 'attachment';
-    const contentType = attachment?.mime_type || response.headers['content-type'];
-    res.setHeader('Content-Disposition', `attachment; filename="${String(filename).replace(/["\r\n]/g, '_')}"`);
-    if (contentType) res.setHeader('Content-Type', contentType);
-    response.data.pipe(res);
+    await storageProvider.stream(fileId, res, {
+      originalName: attachment.original_name,
+      mimeType: attachment.mime_type,
+      disposition: 'attachment'
+    });
   } catch (error) {
     logRequestEvent(req, 'attachment_download_failed');
     sendInternalError(res, error, 'File download failed');
@@ -961,7 +954,7 @@ router.post('/admin/asana-import/:projectId/attachments', requireAdmin, uploadRa
         continue;
       }
       reservation = await reserveUpload(req, file.size);
-      stored = await uploadToTelegram(file);
+      stored = await storageProvider.upload(file, { companyId: req.companyTenantId });
       await db.batch([
         {
           sql: 'INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, task_id, file_size) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -976,7 +969,7 @@ router.post('/admin/asana-import/:projectId/attachments', requireAdmin, uploadRa
       results.push({ filename, status: 'imported', task: task.title });
     } catch (error) {
       if (stored?.messageId) {
-        try { await deleteTelegramMessage(stored.messageId); }
+        try { await storageProvider.delete({ fileId: stored.fileId, messageId: stored.messageId }); }
         catch (cleanupError) { logRequestEvent(req, 'asana_attachment_cleanup_failed'); }
       }
       if (reservation) {
@@ -1638,7 +1631,7 @@ router.post('/tasks/:id/comments', requireTaskCheckinToComment, uploadRateLimit,
       const reservation = await reserveUpload(req, req.file.size);
       let attachment;
       try {
-        attachment = await uploadToTelegram(req.file);
+        attachment = await storageProvider.upload(req.file, { companyId: req.companyTenantId });
         const results = await db.batch([
           {
             sql: 'INSERT INTO telegram_attachments (file_id, message_id, original_name, mime_type, uploaded_by, task_id, file_size) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -1653,7 +1646,7 @@ router.post('/tasks/:id/comments', requireTaskCheckinToComment, uploadRateLimit,
         return res.json({ ok: true, id: results?.[1]?.lastInsertRowid });
       } catch (error) {
         if (attachment?.messageId) {
-          try { await deleteTelegramMessage(attachment.messageId); }
+          try { await storageProvider.delete({ fileId: attachment.fileId, messageId: attachment.messageId }); }
           catch (cleanupError) { logRequestEvent(req, 'comment_attachment_cleanup_failed'); }
         }
         try { await releaseUpload(reservation); }
