@@ -38,9 +38,9 @@ For super-admin sign-in, set `SUPERADMIN_USERNAME` and `SUPERADMIN_PASSWORD` as 
 
 Alternatively, run `npm run migrate:control` and then `npm run superadmin:create` from a trusted terminal with `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, and the bootstrap variables set.
 
-The bootstrap refuses to add or replace accounts if one already exists and never prints the password. Sign in at `/superadmin`; this login is separate from the company admin login. The overview is read-only. It lists only companies in the control database. The existing company will not appear there until its registry is linked in Phase 4; it continues using the same database and company login in the meantime.
+The bootstrap refuses to add or replace accounts if one already exists and never prints the password. Sign in at `/superadmin`; this login is separate from the company admin login. The overview is read-only and lists companies registered in the control tables. The existing company is linked automatically on startup, using its existing Turso database and company login.
 
-Render generates `APP_ENCRYPTION_KEY` for the deployment. For other installs, set it to a private 32-byte key encoded as 64 hexadecimal characters; generate one with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Back up this key securely and do not rotate it casually: registered tenant database tokens cannot be decrypted without the same key.
+Create `APP_ENCRYPTION_KEY` yourself as a private 32-byte key encoded as 64 hexadecimal characters; generate one locally with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Set it as a Render secret, and keep a backup in a password manager or other secure storage that you control outside Render. It is not company data, but registered database tokens cannot be decrypted without this key. Preserve the same key when moving to another host; do not commit it, send it in chat, or rotate it casually.
 
 The existing-company registry link runs automatically after app startup. To invoke it manually, run `npm run company:register-existing` with the same Turso credentials and encryption key. It is safe to repeat and refuses to reuse a company code that points to a different database.
 

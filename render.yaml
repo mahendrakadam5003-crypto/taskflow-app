@@ -11,7 +11,7 @@ services:
       - key: SESSION_SECRET
         generateValue: true
       - key: APP_ENCRYPTION_KEY
-        generateValue: true
+        sync: false
       - key: TURSO_DATABASE_URL
         sync: false
       - key: TURSO_AUTH_TOKEN
