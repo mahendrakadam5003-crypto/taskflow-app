@@ -3,6 +3,8 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { rateLimit } = require('express-rate-limit');
 const db = require('../db');
+const { LEGACY_TENANT_ID } = require('../tenant-manager');
+const { clearCompanyContextCookie, setCompanyContextCookie } = require('../company-context');
 const { logActivity } = require('../audit');
 const { asyncHandler, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 
@@ -70,6 +72,8 @@ async function setAuthenticatedSession(req, user) {
   req.session.role = user.role;
   req.session.name = user.name;
   req.session.tokenVersion = Number(user.token_version);
+  req.session.companyId = req.companyTenantId ?? LEGACY_TENANT_ID;
+  req.session.companyCode = req.companyCode || null;
   await saveSession(req);
 }
 
@@ -86,6 +90,10 @@ async function deleteUserSessions(userId) {
 async function requireAuth(req, res, next) {
   if (!req.session || !req.session.userId) {
     return res.status(401).json({ error: 'Not logged in' });
+  }
+  if (req.companyTenantId !== undefined
+    && String(req.session.companyId ?? LEGACY_TENANT_ID) !== String(req.companyTenantId)) {
+    return rejectInvalidSession(req, res);
   }
   try {
     const user = await db.prepare('SELECT role, name, active, must_change_password, token_version FROM users WHERE id = ?').get(req.session.userId);
@@ -125,6 +133,11 @@ router.post('/login', loginIpLimiter, loginUsernameLimiter, async (req, res) => 
     }
 
     await setAuthenticatedSession(req, user);
+    if (req.companyCode) {
+      setCompanyContextCookie(res, req.companyCode, { secure: req.secure });
+    } else if (req.clearCompanyContextCookie) {
+      clearCompanyContextCookie(res, { secure: req.secure });
+    }
     res.json({ id: user.id, name: user.name, username: user.username, role: user.role, must_change_password: mustChangePassword(user) });
   } catch (error) {
     logFailedLogin(req, req.body?.username);
@@ -135,6 +148,7 @@ router.post('/login', loginIpLimiter, loginUsernameLimiter, async (req, res) => 
 router.post('/logout', (req, res) => {
   req.session.destroy(error => {
     res.clearCookie(sessionCookieName, { path: '/' });
+    clearCompanyContextCookie(res, { secure: req.secure });
     if (error) return sendInternalError(res, error, 'Logout failed');
     res.json({ ok: true });
   });

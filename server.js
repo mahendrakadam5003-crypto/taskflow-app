@@ -11,7 +11,7 @@ const helmet = require('helmet');
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
-const { LEGACY_TENANT_ID } = require('./tenant-manager');
+const { createCompanyContextMiddleware } = require('./company-context');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -347,7 +347,7 @@ app.use(helmet({
 }));
 app.use(express.json({ limit: '2mb' }));
 app.use(verifyUnsafeRequestOrigin);
-app.use((req, res, next) => db.runWithTenant(LEGACY_TENANT_ID, next));
+app.use(createCompanyContextMiddleware({ runWithTenant: db.runWithTenant }));
 app.use((req, res, next) => {
   res.set('Accept-CH', 'Sec-CH-UA-Model, Sec-CH-UA-Platform-Version');
   next();

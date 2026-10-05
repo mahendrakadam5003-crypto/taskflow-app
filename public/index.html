@@ -12,7 +12,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/taskflow.svg">
 <link rel="icon" href="/icons/taskflow.svg">
-<link rel="stylesheet" href="/css/style.css?v=20260930-11">
+<link rel="stylesheet" href="/css/style.css?v=20260930-12">
 <link rel="stylesheet" href="/css/theme.css?v=6">
 <link rel="preload" href="/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
 </head>
@@ -51,6 +51,9 @@
     <div class="login-mark"><svg class="icon" aria-hidden="true"><use href="#icon-flow"></use></svg><span>TaskFlow</span></div>
     <p class="login-sub">Internal workspace — tasks &amp; attendance</p>
     <form id="login-form">
+      <label>Company code <span class="login-optional">(optional for the existing workspace)</span>
+        <input type="text" id="login-company-code" autocomplete="organization" maxlength="63" autocapitalize="none" spellcheck="false">
+      </label>
       <label>Username
         <input type="text" id="login-username" autocomplete="username" required>
       </label>

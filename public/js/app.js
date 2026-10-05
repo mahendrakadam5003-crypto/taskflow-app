@@ -647,12 +647,17 @@ if (loginForm) {
     
     const userField = $('#login-username');
     const passField = $('#login-password');
+    const companyField = $('#login-company-code');
     if (!userField || !passField) return;
 
     try {
       const rawLogin = await api('/auth/login', {
         method: 'POST',
-        body: { username: userField.value.trim(), password: passField.value },
+        body: {
+          username: userField.value.trim(),
+          password: passField.value,
+          company_code: companyField?.value.trim() || ''
+        },
       });
       ME = Array.isArray(rawLogin) ? rawLogin[0] : rawLogin;
       if (ME.must_change_password) showSelfPasswordModal(true);

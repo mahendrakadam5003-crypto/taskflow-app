@@ -7,7 +7,23 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { createClient } = require('@libsql/client');
 const { test } = require('node:test');
-const { createTenantManager, localTenantDatabaseUrl } = require('../tenant-manager');
+const {
+  createTenantManager,
+  hasControlDatabaseConfiguration,
+  localTenantDatabaseUrl
+} = require('../tenant-manager');
+
+test('shared Turso credentials enable registered-tenant enumeration', () => {
+  assert.equal(hasControlDatabaseConfiguration({
+    TURSO_DATABASE_URL: 'libsql://taskflow.turso.io',
+    TURSO_AUTH_TOKEN: 'token'
+  }), true);
+  assert.equal(hasControlDatabaseConfiguration({ USE_LOCAL_DB: '1' }), false);
+  assert.equal(hasControlDatabaseConfiguration({
+    CONTROL_DATABASE_URL: 'libsql://control.turso.io',
+    CONTROL_AUTH_TOKEN: 'token'
+  }), true);
+});
 
 test('local tenant databases use safe company-code filenames', () => {
   const tenantRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'taskflow-tenants-test-'));

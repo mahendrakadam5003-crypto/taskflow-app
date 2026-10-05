@@ -44,7 +44,7 @@ Create `APP_ENCRYPTION_KEY` yourself as a private 32-byte key encoded as 64 hexa
 
 The existing-company registry link runs automatically after app startup. To invoke it manually, run `npm run company:register-existing` with the same Turso credentials and encryption key. It is safe to repeat and refuses to reuse a company code that points to a different database.
 
-Tenant database access is scoped to an async company context; database calls without a context fail instead of falling back to a shared database. The existing web app login and requests continue to use the same Turso database as the `legacy` tenant; company-code login and per-company request routing remain later work. In local multi-tenant tests, registered tenants use separate `tenants/<company-code>.db` files. Run `npm run migrate:all` to lazily initialize the legacy database and every registered trial, active, or suspended tenant database.
+The company sign-in accepts an optional company code. Leave it blank to continue using the existing workspace and credentials as before, or enter `existing-company` to sign into that workspace through the registered company route. The signed company selection stays with the session, and requests are routed to that company's tenant database. New companies use their own registered database and code. In local multi-tenant tests, registered tenants use separate `tenants/<company-code>.db` files. Run `npm run migrate:all` to lazily initialize the legacy database and every registered trial, active, or suspended tenant database.
 
 The local server listens on `127.0.0.1:3000`. Open `http://127.0.0.1:3000` on the PC itself. Local installs do not accept connections from other LAN devices.
 

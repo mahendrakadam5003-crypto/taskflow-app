@@ -9,6 +9,12 @@ const { initTenantSchema } = require('./tenant-schema');
 
 const LEGACY_TENANT_ID = 'legacy';
 
+function hasControlDatabaseConfiguration(environment = process.env) {
+  const hasControlOverride = Boolean(environment.CONTROL_DATABASE_URL || environment.CONTROL_AUTH_TOKEN);
+  if (hasControlOverride) return true;
+  return Boolean(environment.TURSO_DATABASE_URL && environment.TURSO_AUTH_TOKEN);
+}
+
 function createLegacyClient(environment = process.env, clientFactory = createClient) {
   if (environment.USE_LOCAL_DB === '1') {
     console.warn('Using the explicitly enabled local SQLite database.');
@@ -166,8 +172,7 @@ function createTenantManager({
   };
 
   async function listActiveTenantIds() {
-    const hasControlConfiguration = Boolean(environment.CONTROL_DATABASE_URL || environment.CONTROL_AUTH_TOKEN);
-    if (!hasControlConfiguration) return [LEGACY_TENANT_ID];
+    if (!hasControlDatabaseConfiguration(environment)) return [LEGACY_TENANT_ID];
 
     const controlDatabase = await getControlDatabase();
     const result = await controlDatabase.execute(
@@ -205,4 +210,11 @@ function createTenantManager({
   return { closeAll, db, getCurrentTenantId, getTenantClient, ready, runForEachTenant, runWithTenant };
 }
 
-module.exports = { LEGACY_TENANT_ID, createLegacyClient, createTenantManager, localTenantDatabaseUrl, normalizeTenantId };
+module.exports = {
+  LEGACY_TENANT_ID,
+  createLegacyClient,
+  createTenantManager,
+  hasControlDatabaseConfiguration,
+  localTenantDatabaseUrl,
+  normalizeTenantId
+};
