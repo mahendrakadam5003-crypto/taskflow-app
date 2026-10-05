@@ -22,6 +22,20 @@ test('trial remains full-access through its end date and locks afterward', () =>
   assert.deepEqual(ended.reasons, ['trial_ended']);
 });
 
+test('an unpaid invoice does not extend a trial or start payment grace before the paid period', () => {
+  const subscription = { status: 'past_due', current_period_end: '2026-11-06T12:00:00.000Z' };
+  assert.equal(getCompanyAccessState(company, {
+    subscription,
+    now: fixedNow('2026-10-06T12:00:00.000Z')
+  }).state, 'full');
+  const endedTrial = getCompanyAccessState(company, {
+    subscription,
+    now: fixedNow('2026-10-07T00:00:00.000Z')
+  });
+  assert.equal(endedTrial.state, 'locked');
+  assert.deepEqual(endedTrial.reasons, ['trial_ended']);
+});
+
 test('suspension locks access regardless of subscription state', () => {
   assert.equal(getCompanyAccessState({ ...company, status: 'suspended' }, {
     subscription: { status: 'active', current_period_end: '2027-01-01T00:00:00Z' },

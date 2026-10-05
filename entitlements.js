@@ -39,7 +39,9 @@ function getCompanyAccessState(company, {
   const graceEnd = periodEnd == null ? null : periodEnd + graceDays * 86400000;
   const readOnlyEnd = graceEnd == null ? null : graceEnd + readOnlyDays * 86400000;
 
-  if (subscription?.status === 'past_due'
+  const pastDuePeriodEnded = subscription?.status === 'past_due'
+    && (periodEnd == null || nowTime > periodEnd);
+  if (pastDuePeriodEnded
     || (subscription?.status === 'active' && periodEnd != null && nowTime > periodEnd)) {
     if (graceEnd == null) {
       return accessResult('locked', 'payment_overdue', 'This workspace is locked because its payment period could not be confirmed.');

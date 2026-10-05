@@ -22,6 +22,7 @@ const { logCompanyEvent } = require('./http-errors');
 const { createUserErrorReporter } = require('./user-error-reporter');
 const { createEntitlementMiddleware, createEntitlementService } = require('./entitlements');
 const { createEntitlementScheduler } = require('./entitlement-scheduler');
+const { createPublicRouter } = require('./routes/public');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -53,6 +54,7 @@ const reportUserError = createUserErrorReporter({ getDatabase: getControlDatabas
 const entitlements = createEntitlementService({ getDatabase: getControlDatabase, isConfigured: hasControlDatabaseConfiguration });
 const entitlementMiddleware = createEntitlementMiddleware(entitlements);
 const entitlementScheduler = createEntitlementScheduler({ getDatabase: getControlDatabase, isConfigured: hasControlDatabaseConfiguration });
+const publicRouter = createPublicRouter({ getDatabase: getControlDatabase, isConfigured: hasControlDatabaseConfiguration });
 const backupManager = createBackupManager({ tenantDatabase: db });
 let backupMaintenanceRunning = false;
 
@@ -402,6 +404,7 @@ app.use((req, res, next) => {
 });
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api/')
+    || req.path === '/api/public/pricing'
     || req.path === '/api/superadmin'
     || req.path.startsWith('/api/superadmin/')) return next();
   if (req.method === 'POST' && ['/api/auth/login', '/api/auth/logout', '/api/auth/end-support'].includes(req.path)) return next();
@@ -414,7 +417,11 @@ app.use((req, res, next) => {
 });
 
 app.get(['/superadmin', '/superadmin.html'], createSuperAdminPageHandler(path.join(__dirname, 'public', 'superadmin.html')));
-app.use('/api/superadmin', createSuperAdminRouter({ secureCookies: isRender || isTailscaleServe }));
+app.use('/api/superadmin', createSuperAdminRouter({
+  secureCookies: isRender || isTailscaleServe,
+  invalidatePublicPricing: publicRouter.invalidateCache
+}));
+app.use('/api/public', publicRouter.router);
 
 app.use('/api/auth', authRouter);
 app.use('/api', tasksRouter);

@@ -17,7 +17,7 @@ test('API route modules cannot open tenant database clients directly', () => {
     const source = fs.readFileSync(path.join(routeDirectory, file), 'utf8');
     assert.doesNotMatch(source, directClientPattern, `${file} must use the tenant-bound database module`);
     assert.doesNotMatch(source, tenantEscapeHatchPattern, `${file} must not bypass the active company context`);
-    if (file !== 'superadmin.js') {
+    if (!['superadmin.js', 'public.js'].includes(file)) {
       assert.match(source, /require\(['"]\.\.\/db['"]\)/, `${file} must use the tenant-bound database module`);
     }
   }

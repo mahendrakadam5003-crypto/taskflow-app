@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 10;
+const CURRENT_SCHEMA_VERSION = 11;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -393,6 +393,15 @@ const CONTROL_MIGRATIONS = [{
     )`,
     'CREATE INDEX IF NOT EXISTS entitlement_notifications_status_idx ON entitlement_notifications(status, created_at)',
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [10] }
+  ]
+}, {
+  version: 11,
+  statements: [
+    `CREATE TABLE IF NOT EXISTS invoice_sequences (
+      year INTEGER PRIMARY KEY,
+      last_number INTEGER NOT NULL DEFAULT 0 CHECK (last_number >= 0)
+    )`,
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [11] }
   ]
 }];
 

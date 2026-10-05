@@ -13,6 +13,13 @@ function createFixture({
   storageLimitMb = 1,
   maxUsersOverride = null,
   storageLimitMbOverride = null,
+  maxUsers = 2,
+  companyStatus = 'active',
+  trialPolicyVersion = null,
+  trialMaxUsers = 3,
+  trialStorageLimitMb = 1024,
+  subscriptionSeats = null,
+  subscriptionStatus = null,
   features = { attendance: true, reimbursements: false, export: true }
 } = {}) {
   const fileUsage = new Map();
@@ -22,13 +29,19 @@ function createFixture({
         rows: [{
           company_id: 1,
           code: 'limit-test',
+          company_status: companyStatus,
+          trial_policy_version: trialPolicyVersion,
           trial_ends_at: '2027-01-03',
           plan_id: 1,
           plan_name: 'Test Plan',
-          max_users: 2,
+          max_users: maxUsers,
           storage_limit_mb: storageLimitMb,
           max_users_override: maxUsersOverride,
           storage_limit_mb_override: storageLimitMbOverride,
+          trial_max_users: trialMaxUsers,
+          trial_storage_limit_mb: trialStorageLimitMb,
+          subscription_seats: subscriptionSeats,
+          subscription_status: subscriptionStatus,
           features_json: JSON.stringify(features)
         }]
       };
@@ -98,6 +111,25 @@ test('company-specific limit overrides take precedence over plan defaults', asyn
   const usage = await limits.getPlanUsage(req);
   assert.equal(usage.plan.maxUsers, 1);
   assert.equal(usage.plan.storageLimitBytes, 2 * 1024 * 1024);
+});
+
+test('new policy trials use configured trial seat and storage caps', async () => {
+  const { limits, req } = createFixture({
+    maxUsers: 10,
+    storageLimitMb: 10240,
+    companyStatus: 'trial',
+    trialPolicyVersion: 1,
+    trialMaxUsers: 3,
+    trialStorageLimitMb: 1024
+  });
+  const plan = await limits.getPlan(req);
+  assert.equal(plan.maxUsers, 3);
+  assert.equal(plan.storageLimitBytes, 1024 * 1024 * 1024);
+});
+
+test('paid subscription seats override the assigned plan seat default', async () => {
+  const { limits, req } = createFixture({ maxUsers: 2, subscriptionSeats: 5, subscriptionStatus: 'active' });
+  assert.equal((await limits.getPlan(req)).maxUsers, 5);
 });
 
 test('company storage usage activates the 80 percent warning before the 95 percent warning', async () => {

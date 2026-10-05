@@ -56,10 +56,18 @@ function createPlanLimits({
     const isLegacy = String(companyId) === LEGACY_TENANT_ID;
     const companyCode = String(environment.LEGACY_COMPANY_CODE || 'existing-company').trim().toLowerCase();
     const result = await controlDb.execute({
-        sql: `SELECT c.id AS company_id, c.code, c.trial_ends_at, c.max_users_override,
+        sql: `SELECT c.id AS company_id, c.code, c.status AS company_status, c.trial_policy_version,
+            c.trial_ends_at, c.max_users_override,
           c.storage_limit_mb_override, p.id AS plan_id, p.name AS plan_name,
-          p.max_users, p.storage_limit_mb, p.features_json
-        FROM companies c LEFT JOIN plans p ON p.id = c.plan_id
+            p.max_users, p.storage_limit_mb, p.features_json,
+            s.status AS subscription_status, s.seats AS subscription_seats,
+            ps.trial_max_users, ps.trial_storage_limit_mb
+          FROM companies c LEFT JOIN plans p ON p.id = c.plan_id
+          LEFT JOIN pricing_settings ps ON ps.id = 1
+          LEFT JOIN subscriptions s ON s.id = (
+            SELECT latest.id FROM subscriptions latest WHERE latest.company_id = c.id
+            ORDER BY latest.id DESC LIMIT 1
+          )
         WHERE ${isLegacy ? 'c.code = ?' : 'c.id = ?'} LIMIT 1`,
       args: [isLegacy ? companyCode : Number(companyId)]
     });
@@ -68,10 +76,19 @@ function createPlanLimits({
       if (isLegacy) return null;
       throw new Error(`No plan information is registered for company ID ${companyId}.`);
     }
-    const maxUsers = row.max_users_override == null
+    let maxUsers = row.max_users_override == null
       ? (row.max_users == null ? null : Number(row.max_users)) : Number(row.max_users_override);
-    const storageLimitMb = row.storage_limit_mb_override == null
+    if (row.subscription_seats != null && ['active', 'past_due'].includes(row.subscription_status)) {
+      maxUsers = Number(row.subscription_seats);
+    }
+    let storageLimitMb = row.storage_limit_mb_override == null
       ? row.storage_limit_mb : row.storage_limit_mb_override;
+    if (row.company_status === 'trial' && Number(row.trial_policy_version) === 1) {
+      const trialMaxUsers = Number(row.trial_max_users ?? 3);
+      const trialStorageLimitMb = Number(row.trial_storage_limit_mb ?? 1024);
+      maxUsers = maxUsers == null ? trialMaxUsers : Math.min(maxUsers, trialMaxUsers);
+      storageLimitMb = storageLimitMb == null ? trialStorageLimitMb : Math.min(Number(storageLimitMb), trialStorageLimitMb);
+    }
     if (maxUsers !== null && (!Number.isSafeInteger(maxUsers) || maxUsers < 0)) {
       throw new Error('The assigned company plan has an invalid user limit.');
     }

@@ -8,6 +8,9 @@ const { rateLimit } = require('express-rate-limit');
 const { getControlDatabase } = require('../control-db');
 const { provisionCompany: defaultProvisionCompany, ProvisioningError } = require('../company-provisioning');
 const { createBackupManager } = require('../backup-manager');
+const { getPricing, savePricing, validatePricingInput } = require('../pricing-service');
+const { calculateInvoiceAmounts } = require('../lib/pricing');
+const { createManualSubscriptionInvoice, markManualInvoicePaid } = require('../billing-service');
 
 const COOKIE_NAME = 'taskflow.superadmin.sid';
 const SESSION_DURATION_MS = 4 * 60 * 60 * 1000;
@@ -101,7 +104,8 @@ function createSuperAdminRouter({
   provisionCompany = defaultProvisionCompany,
   tenantDatabase,
   backupDirectory = path.join(__dirname, '..', 'backups'),
-  backupManager
+  backupManager,
+  invalidatePublicPricing = () => {}
 } = {}) {
   const router = express.Router();
   const loginLimiter = rateLimit({
@@ -207,6 +211,139 @@ function createSuperAdminRouter({
     clearSessionCookie(res, { secureCookies });
     res.set('Cache-Control', 'no-store');
     return res.json({ authenticated: false });
+  }));
+
+  router.get('/pricing', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const controlDb = await getDatabase();
+    const pricing = await getPricing(controlDb);
+    const subscriptions = await controlDb.execute("SELECT COUNT(*) AS count FROM subscriptions WHERE status IN ('active', 'past_due')");
+    const preview = [1, 10, 50].map(seats => ({
+      seats,
+      monthly: calculateInvoiceAmounts({
+        unitPricePaise: pricing.monthlyPricePaise,
+        seats,
+        taxPctTenths: Math.round(pricing.taxPct * 10),
+        taxInclusive: pricing.taxInclusive
+      }),
+      yearly: calculateInvoiceAmounts({
+        unitPricePaise: pricing.yearlyPricePaise,
+        seats,
+        taxPctTenths: Math.round(pricing.taxPct * 10),
+        taxInclusive: pricing.taxInclusive
+      })
+    }));
+    res.set('Cache-Control', 'no-store');
+    return res.json({ pricing, preview, affectedExistingSubscriptions: Number(subscriptions.rows?.[0]?.count || 0) });
+  }));
+
+  router.post('/pricing', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const currentPassword = typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
+    if (!currentPassword || Buffer.byteLength(currentPassword, 'utf8') > 72) {
+      return res.status(400).json({ error: 'Re-enter your super-admin password to confirm pricing changes.' });
+    }
+    const controlDb = await getDatabase();
+    const passwordResult = await controlDb.execute({
+      sql: 'SELECT password_hash FROM super_admins WHERE id = ? LIMIT 1',
+      args: [admin.id]
+    });
+    if (!passwordResult.rows?.[0] || !await bcrypt.compare(currentPassword, passwordResult.rows[0].password_hash)) {
+      return res.status(401).json({ error: 'Super-admin password confirmation failed.' });
+    }
+    const parsed = validatePricingInput(req.body);
+    if (!parsed) return res.status(400).json({ error: 'Check prices, percentages, trial settings, limits, currency, and effective date.' });
+    const saved = await savePricing(controlDb, admin, parsed);
+    invalidatePublicPricing();
+    res.set('Cache-Control', 'no-store');
+    return res.json({ saved: true, pricing: saved });
+  }));
+
+  router.post('/pricing/preview', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const pricing = validatePricingInput(req.body);
+    if (!pricing) return res.status(400).json({ error: 'Check prices, percentages, trial settings, limits, currency, and effective date.' });
+    const controlDb = await getDatabase();
+    const subscriptions = await controlDb.execute("SELECT COUNT(*) AS count FROM subscriptions WHERE status IN ('active', 'past_due')");
+    const preview = [1, 10, 50].map(seats => ({
+      seats,
+      monthly: calculateInvoiceAmounts({
+        unitPricePaise: pricing.monthlyPricePaise,
+        seats,
+        taxPctTenths: pricing.taxTenths,
+        taxInclusive: pricing.taxInclusive === 1
+      }),
+      yearly: calculateInvoiceAmounts({
+        unitPricePaise: pricing.yearlyPricePaise,
+        seats,
+        taxPctTenths: pricing.taxTenths,
+        taxInclusive: pricing.taxInclusive === 1
+      })
+    }));
+    return res.json({ preview, affectedExistingSubscriptions: Number(subscriptions.rows?.[0]?.count || 0) });
+  }));
+
+  router.post('/companies/:companyId/subscriptions', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    const seats = Number(req.body?.seats);
+    const billingCycle = req.body?.billingCycle;
+    if (!Number.isSafeInteger(companyId) || companyId < 1 || !Number.isSafeInteger(seats) || !['monthly', 'yearly'].includes(billingCycle)) {
+      return res.status(400).json({ error: 'Choose a valid company, billing cycle, and whole-number seat count.' });
+    }
+    const controlDb = await getDatabase();
+    try {
+      const invoice = await createManualSubscriptionInvoice(controlDb, admin, { companyId, billingCycle, seats });
+      res.set('Cache-Control', 'no-store');
+      return res.status(201).json(invoice);
+    } catch (error) {
+      if (/Company not found/.test(String(error.message))) return res.status(404).json({ error: error.message });
+      if (/already has a paid subscription/.test(String(error.message))) return res.status(409).json({ error: error.message });
+      if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+      throw error;
+    }
+  }));
+
+  router.get('/companies/:companyId/invoices', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    if (!Number.isSafeInteger(companyId) || companyId < 1) return res.status(400).json({ error: 'Choose a valid company.' });
+    const controlDb = await getDatabase();
+    const result = await controlDb.execute({
+      sql: `SELECT id, subscription_id, number, period_start, period_end, seats, unit_price_paise,
+        subtotal_paise, discount_paise, tax_paise, total_paise, currency, tax_pct, status, paid_at, created_at
+        FROM invoices WHERE company_id = ? ORDER BY created_at DESC, id DESC LIMIT 100`,
+      args: [companyId]
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ invoices: result.rows || [] });
+  }));
+
+  router.post('/companies/:companyId/invoices/:invoiceId/paid', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    const invoiceId = Number(req.params.invoiceId);
+    const providerRef = typeof req.body?.providerRef === 'string' ? req.body.providerRef.trim().slice(0, 200) : '';
+    if (!Number.isSafeInteger(companyId) || companyId < 1 || !Number.isSafeInteger(invoiceId) || invoiceId < 1) {
+      return res.status(400).json({ error: 'Choose a valid company and invoice.' });
+    }
+    const controlDb = await getDatabase();
+    try {
+      const payment = await markManualInvoicePaid(controlDb, admin, { companyId, invoiceId, providerRef });
+      res.set('Cache-Control', 'no-store');
+      return res.json(payment);
+    } catch (error) {
+      if (/Open invoice not found/.test(String(error.message))) return res.status(404).json({ error: error.message });
+      if (/already paid or changed/.test(String(error.message))) return res.status(409).json({ error: error.message });
+      if (error instanceof TypeError) return res.status(400).json({ error: error.message });
+      throw error;
+    }
   }));
 
   router.get('/user-errors', handle(async (req, res) => {
@@ -596,6 +733,66 @@ function createSuperAdminRouter({
       return res.json({ id: planId, ...plan });
     } catch (error) {
       if (/unique constraint/i.test(String(error.message))) return res.status(409).json({ error: 'A plan with that name already exists.' });
+      throw error;
+    }
+  }));
+
+  router.post('/companies/:companyId/subscriptions', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    const seats = Number(req.body?.seats);
+    const billingCycle = req.body?.billingCycle;
+    if (!Number.isSafeInteger(companyId) || companyId < 1 || !Number.isSafeInteger(seats) || !['monthly', 'yearly'].includes(billingCycle)) {
+      return res.status(400).json({ error: 'Choose a valid company, billing cycle, and whole-number seat count.' });
+    }
+    const controlDb = await getDatabase();
+    try {
+      const invoice = await createManualSubscriptionInvoice(controlDb, admin, { companyId, billingCycle, seats });
+      res.set('Cache-Control', 'no-store');
+      return res.status(201).json(invoice);
+    } catch (error) {
+      if (/Company not found/.test(String(error.message))) return res.status(404).json({ error: error.message });
+      if (/already has a paid subscription/.test(String(error.message))) return res.status(409).json({ error: error.message });
+      if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
+      throw error;
+    }
+  }));
+
+  router.get('/companies/:companyId/invoices', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    if (!Number.isSafeInteger(companyId) || companyId < 1) return res.status(400).json({ error: 'Choose a valid company.' });
+    const controlDb = await getDatabase();
+    const result = await controlDb.execute({
+      sql: `SELECT id, subscription_id, number, period_start, period_end, seats, unit_price_paise,
+        subtotal_paise, discount_paise, tax_paise, total_paise, currency, tax_pct, status, paid_at, created_at
+        FROM invoices WHERE company_id = ? ORDER BY created_at DESC, id DESC LIMIT 100`,
+      args: [companyId]
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ invoices: result.rows || [] });
+  }));
+
+  router.post('/companies/:companyId/invoices/:invoiceId/paid', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const companyId = Number(req.params.companyId);
+    const invoiceId = Number(req.params.invoiceId);
+    const providerRef = typeof req.body?.providerRef === 'string' ? req.body.providerRef.trim().slice(0, 200) : '';
+    if (!Number.isSafeInteger(companyId) || companyId < 1 || !Number.isSafeInteger(invoiceId) || invoiceId < 1) {
+      return res.status(400).json({ error: 'Choose a valid company and invoice.' });
+    }
+    const controlDb = await getDatabase();
+    try {
+      const payment = await markManualInvoicePaid(controlDb, admin, { companyId, invoiceId, providerRef });
+      res.set('Cache-Control', 'no-store');
+      return res.json(payment);
+    } catch (error) {
+      if (/Open invoice not found/.test(String(error.message))) return res.status(404).json({ error: error.message });
+      if (/already paid or changed/.test(String(error.message))) return res.status(409).json({ error: error.message });
+      if (error instanceof TypeError) return res.status(400).json({ error: error.message });
       throw error;
     }
   }));
