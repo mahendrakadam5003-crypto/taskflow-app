@@ -13,7 +13,7 @@ function runInIsolatedDatabase(script) {
     USE_LOCAL_DB: '1',
     INITIAL_ADMIN_PASSWORD: 'IsolatedSchemaTestPassword123'
   };
-  const source = `const db = require(${JSON.stringify(dbPath)});\ndb.ready.then(async () => {\n${script}\n}).catch(error => { console.error(error); process.exitCode = 1; });`;
+  const source = `const db = require(${JSON.stringify(dbPath)});\ndb.ready.then(() => db.runWithTenant('legacy', async () => {\n${script}\n})).catch(error => { console.error(error); process.exitCode = 1; });`;
 
   try {
     const result = spawnSync(process.execPath, ['-e', source], {

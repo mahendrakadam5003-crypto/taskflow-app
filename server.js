@@ -11,6 +11,7 @@ const helmet = require('helmet');
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
+const { LEGACY_TENANT_ID } = require('./tenant-manager');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -80,7 +81,7 @@ class TursoSessionStore extends session.Store {
 
 async function cleanupExpiredSessions() {
   await db.ready;
-  await db.deleteExpiredSessions(Date.now());
+  await db.runForEachTenant(() => db.deleteExpiredSessions(Date.now()));
 }
 
 // ========================================================
@@ -180,7 +181,7 @@ async function clearTelegramReferences(fileId) {
   }
 }
 
-async function cleanupExpiredUploads() {
+async function cleanupExpiredUploadsForCurrentTenant() {
   await db.ready;
   const settings = await db.prepare(`SELECT key, value FROM settings WHERE key IN ('attachment_retention_days', 'attendance_location_retention_days')`).all();
   const settingValues = Object.fromEntries((settings || []).map(row => [row.key || row.KEY, row.value ?? row.VALUE]));
@@ -328,6 +329,11 @@ async function cleanupExpiredUploads() {
   if (removed) console.log(`Expired ${removed} attachment or location record(s) under configured retention settings.`);
 }
 
+async function cleanupExpiredUploads() {
+  await db.ready;
+  await db.runForEachTenant(() => cleanupExpiredUploadsForCurrentTenant());
+}
+
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -338,6 +344,7 @@ app.use(helmet({
 }));
 app.use(express.json({ limit: '2mb' }));
 app.use(verifyUnsafeRequestOrigin);
+app.use((req, res, next) => db.runWithTenant(LEGACY_TENANT_ID, next));
 app.use((req, res, next) => {
   res.set('Accept-CH', 'Sec-CH-UA-Model, Sec-CH-UA-Platform-Version');
   next();

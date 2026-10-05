@@ -36,6 +36,8 @@ The separate control database stores company registry, plans, super-admin accoun
 
 Run `npm run migrate:control` to create or safely upgrade the control schema. Migrations are versioned and repeatable. The initial Solo, Team, and Business plans have limits of 1, 10, and 50 users and 1 GB, 10 GB, and unlimited storage, respectively; these are seed defaults, not enforced limits yet.
 
+Tenant database access is scoped to an async company context; database calls without a context fail instead of falling back to a shared database. Until company-code login and the existing-company registry are introduced in later phases, the web app continues to use the same existing Turso database as the temporary `legacy` tenant. In local multi-tenant tests, registered tenants use separate `tenants/<company-code>.db` files. Run `npm run migrate:all` to lazily initialize the legacy database and every registered trial, active, or suspended tenant database. The existing app URL and login are unchanged in this phase.
+
 The local server listens on `127.0.0.1:3000`. Open `http://127.0.0.1:3000` on the PC itself. Local installs do not accept connections from other LAN devices.
 
 On an empty database, the app creates the first admin account with username `admin` and a random one-time password printed to the server console. Set `INITIAL_ADMIN_PASSWORD` before first startup to provide your own initial password instead. The admin must change that password at first login. Existing databases are not reseeded.
