@@ -98,6 +98,9 @@ function renderSummary(summary) {
 
 function renderUserErrors(result) {
   document.getElementById('user-error-count').textContent = `${result.pendingCount} open`;
+  const tabCount = document.getElementById('user-error-tab-count');
+  tabCount.textContent = String(result.pendingCount);
+  tabCount.classList.toggle('hidden', result.pendingCount < 1);
   const list = document.getElementById('user-error-list');
   list.innerHTML = result.errors.length
     ? result.errors.map(error => {
@@ -144,12 +147,47 @@ function formatDate(value) {
 }
 
 function showControlPage(page) {
-  document.getElementById('control-overview-page').classList.toggle('hidden', page !== 'overview');
-  document.getElementById('plans-page').classList.toggle('hidden', page !== 'plans');
+  const tabPage = page === 'detail' ? 'companies' : page;
+  const pages = {
+    overview: 'control-overview-page',
+    companies: 'companies-page',
+    requests: 'requests-page',
+    plans: 'plans-page',
+    billing: 'billing-page',
+    activity: 'activity-page'
+  };
+  Object.entries(pages).forEach(([name, id]) => {
+    document.getElementById(id).classList.toggle('hidden', name !== tabPage || page === 'detail');
+  });
   document.getElementById('company-detail-page').classList.toggle('hidden', page !== 'detail');
   document.querySelectorAll('[data-admin-page]').forEach(button => {
-    button.classList.toggle('active', button.dataset.adminPage === page || (page === 'detail' && button.dataset.adminPage === 'overview'));
+    const selected = button.dataset.adminPage === tabPage;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-selected', String(selected));
+    button.tabIndex = selected ? 0 : -1;
   });
+}
+
+function currentPageFromHash() {
+  const page = window.location.hash.slice(1);
+  return ['overview', 'companies', 'requests', 'plans', 'billing', 'activity'].includes(page)
+    ? page
+    : 'overview';
+}
+
+async function activateControlPage(page, { updateHash = true } = {}) {
+  showControlPage(page);
+  if (updateHash && window.location.hash !== `#${page}`) {
+    window.history.pushState(null, '', `#${page}`);
+  }
+  try {
+    if (page === 'plans') await Promise.all([loadPlans(), loadPricing()]);
+    if (page === 'requests') await loadDemoRequests();
+    if (page === 'activity') await loadUserErrors();
+  } catch (error) {
+    overviewError.textContent = error.message;
+    overviewError.classList.remove('hidden');
+  }
 }
 
 function getFilteredCompanies() {
@@ -651,8 +689,11 @@ async function loadCompanyDetail(companyId) {
 }
 
 function renderDemoRequests() {
-  document.getElementById('demo-request-count').textContent =
-    `${demoRequests.filter(item => item.status === 'new').length} new`;
+  const newCount = demoRequests.filter(item => item.status === 'new').length;
+  document.getElementById('demo-request-count').textContent = `${newCount} new`;
+  const tabCount = document.getElementById('demo-request-tab-count');
+  tabCount.textContent = String(newCount);
+  tabCount.classList.toggle('hidden', newCount < 1);
   document.getElementById('demo-request-list').innerHTML = demoRequests.length
     ? demoRequests.map(item => `<article class="record-row"><div>
         <strong>${escapeHtml(item.companyName)} · ${escapeHtml(item.name)}</strong>
@@ -690,7 +731,7 @@ function prefillDemoRequest(item) {
   document.getElementById('demo-request-id').value = String(item.id);
   const trialPlan = planRecords.find(plan => plan.name.toLowerCase() === 'trial');
   if (trialPlan) document.getElementById('new-company-plan').value = String(trialPlan.id);
-  showControlPage('overview');
+  activateControlPage('companies');
   document.getElementById('company-form').scrollIntoView({ block: 'start', behavior: 'smooth' });
   document.getElementById('new-company-code').focus();
 }
@@ -704,6 +745,12 @@ async function loadOverview() {
     renderCompanies(data.companies, data.plans);
     overviewError.classList.add('hidden');
     showOverview();
+    if (!['overview', 'companies', 'requests', 'plans', 'billing', 'activity'].includes(window.location.hash.slice(1))) {
+      window.history.replaceState(null, '', '#overview');
+    }
+    const initialPage = currentPageFromHash();
+    showControlPage(initialPage);
+    if (initialPage === 'plans') activateControlPage('plans', { updateHash: false });
     loadUserErrors();
     loadDemoRequests();
   } catch (error) {
@@ -715,18 +762,28 @@ async function loadOverview() {
 }
 
 document.querySelectorAll('[data-admin-page]').forEach(button => {
-  button.addEventListener('click', async () => {
-    if (button.dataset.adminPage === 'plans') {
-      showControlPage('plans');
-      try { await Promise.all([loadPlans(), loadPricing()]); } catch (error) {
-        overviewError.textContent = error.message;
-        overviewError.classList.remove('hidden');
-      }
-      return;
-    }
-    showControlPage('overview');
-    document.getElementById('company-form').scrollIntoView({ block: 'start', behavior: 'smooth' });
+  button.addEventListener('click', () => {
+    activateControlPage(button.dataset.adminPage);
   });
+  button.addEventListener('keydown', event => {
+    const tabs = [...document.querySelectorAll('[data-admin-page]')];
+    const index = tabs.indexOf(button);
+    const nextIndex = event.key === 'ArrowRight' ? (index + 1) % tabs.length
+      : event.key === 'ArrowLeft' ? (index - 1 + tabs.length) % tabs.length
+        : event.key === 'Home' ? 0
+          : event.key === 'End' ? tabs.length - 1
+            : -1;
+    if (nextIndex < 0) return;
+    event.preventDefault();
+    tabs[nextIndex].focus();
+    activateControlPage(tabs[nextIndex].dataset.adminPage);
+  });
+});
+
+window.addEventListener('hashchange', () => {
+  const page = currentPageFromHash();
+  if (window.location.hash !== `#${page}`) window.history.replaceState(null, '', `#${page}`);
+  activateControlPage(page, { updateHash: false });
 });
 
 document.getElementById('company-search').addEventListener('input', getFilteredCompanies);
@@ -784,7 +841,7 @@ document.getElementById('company-rows').addEventListener('click', event => {
 });
 
 document.getElementById('company-detail-back').addEventListener('click', () => {
-  showControlPage('overview');
+  showControlPage('companies');
   document.getElementById('company-search').focus();
 });
 

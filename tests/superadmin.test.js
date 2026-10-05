@@ -71,6 +71,27 @@ test('super-admin plans and pricing page explains the entitlement and price spli
   assert.match(page, /Landing-page highlights are edited in these pricing tiers and must match the feature checkboxes on the plan you assign: Attendance, Reimbursements, and Data export\./);
 });
 
+test('super-admin sections use accessible hash-addressable tabs and keep requests and activity separate', async () => {
+  const page = await fs.readFile(path.join(__dirname, '..', 'public', 'superadmin.html'), 'utf8');
+  assert.match(page, /<nav class="control-nav" role="tablist"/);
+  for (const name of ['overview', 'companies', 'requests', 'plans', 'billing', 'activity']) {
+    assert.match(page, new RegExp(`id="admin-tab-${name}"[^>]*role="tab"`));
+    assert.match(page, new RegExp(`id="${name === 'overview' ? 'control-overview-page' : `${name}-page`}"[^>]*role="tabpanel"`));
+  }
+  assert.match(page, /data-admin-page="overview">Overview</);
+  assert.match(page, /data-admin-page="companies">Companies</);
+  assert.match(page, /data-admin-page="requests">Requests/);
+  assert.match(page, /data-admin-page="plans">Plans &amp; Pricing</);
+  assert.match(page, /data-admin-page="billing">Billing</);
+  assert.match(page, /data-admin-page="activity">Activity/);
+  assert.match(page, /id="requests-page"[\s\S]*?id="demo-request-inbox"/);
+  assert.match(page, /id="activity-page"[\s\S]*?id="user-error-inbox"/);
+  const script = await fs.readFile(path.join(__dirname, '..', 'public', 'js', 'superadmin.js'), 'utf8');
+  assert.match(script, /window\.history\.pushState\(null, '', `#\$\{page\}`\)/);
+  assert.match(script, /event\.key === 'ArrowRight'/);
+  assert.match(script, /window\.addEventListener\('hashchange'/);
+});
+
 test('startup bootstrap creates and can privately reset only the configured super-admin', async () => {
   let storedAdmin = null;
   const auditEntries = [];
