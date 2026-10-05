@@ -93,6 +93,7 @@ function createBillingFixture() {
               total_paise: Number(args[10]),
               currency: args[11],
               tax_pct: Number(args[12]),
+              due_at: args[13],
               status: 'open'
             };
             invoices.push(row);
@@ -176,6 +177,7 @@ test('manual invoice locks current price, numbers invoices, and activates the pe
   assert.equal(first.unitPricePaise, 19900);
   assert.equal(first.totalPaise, 281784);
   assert.equal(first.status, 'open');
+  assert.equal(fixture.invoices[0].due_at, now.toISOString());
   assert.equal(fixture.subscriptions[0].status, 'past_due');
   assert.equal(fixture.companies.get(1).status, 'trial');
   assert.equal(fixture.subscriptions[0].current_period_end, first.periodEnd);
@@ -222,6 +224,7 @@ test('approved subscription changes use the original price version and replace t
   assert.equal(invoice.unitPricePaise, 214920);
   assert.equal(invoice.billingCycle, 'yearly');
   assert.equal(invoice.periodStart, '2026-11-06T12:00:00.000Z');
+  assert.equal(fixture.invoices[0].due_at, '2026-10-06T12:00:00.000Z');
   assert.equal(fixture.billingRequests[0].status, 'invoiced');
   assert.equal(fixture.billingRequests[0].previous_subscription_id, 9);
   assert.equal(fixture.subscriptions.find(item => item.id === 9).status, 'active');

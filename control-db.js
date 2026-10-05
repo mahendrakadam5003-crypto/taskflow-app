@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 14;
+const CURRENT_SCHEMA_VERSION = 15;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -459,6 +459,14 @@ const CONTROL_MIGRATIONS = [{
     )`,
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [14] }
   ]
+}, {
+  version: 15,
+  statements: [
+    'ALTER TABLE invoices ADD COLUMN due_at TEXT',
+    'UPDATE invoices SET due_at = created_at WHERE due_at IS NULL',
+    'CREATE INDEX IF NOT EXISTS invoices_status_due_idx ON invoices(status, due_at)',
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [15] }
+  ]
 }];
 
 function getControlDatabaseConfig(environment = process.env) {
@@ -549,6 +557,12 @@ async function migrateControlDatabase(client) {
         if (!columns.rows.some(row => row.name === 'trial_policy_version')) {
           await client.execute(migration.statements[0]);
         }
+      }
+      for (const statement of migration.statements.slice(1)) await client.execute(statement);
+    } else if (migration.version === 15) {
+      const columns = await client.execute('PRAGMA table_info(invoices)');
+      if (!columns.rows.some(column => column.name === 'due_at')) {
+        await client.execute(migration.statements[0]);
       }
       for (const statement of migration.statements.slice(1)) await client.execute(statement);
     } else {

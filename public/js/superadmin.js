@@ -74,14 +74,21 @@ function formatBytes(value) {
 }
 
 function renderSummary(summary) {
+  const formatCurrencyAmounts = amounts => Object.keys(amounts || {}).sort()
+    .map(currency => formatPaise(amounts[currency], currency)).join(' · ') || formatPaise(0, 'INR');
   const cards = [
     { label: 'Registered companies', value: summary.companyCount, caption: 'In the control database' },
-    { label: 'Trials running', value: summary.trialCount, caption: `${summary.trialEndingSoonCount} ending within 2 days` },
+    { label: 'Active companies', value: summary.activeCount, caption: 'Company workspaces' },
+    { label: 'Trials', value: summary.trialCount, caption: `${summary.trialsEndingIn7DaysCount} ending in the next 7 days` },
     { label: 'Active paid', value: summary.activePaidCount, caption: `${summary.paidSeats.toLocaleString()} paid seats` },
     { label: 'Suspended', value: summary.suspendedCount, caption: 'Company workspaces' },
     { label: 'Cancelled', value: summary.cancelledCount, caption: 'Company workspaces' },
-    { label: 'MRR', value: formatPaise(summary.monthlyRecurringRevenuePaise, 'INR'), caption: 'From active subscriptions' },
+    { label: 'Estimated MRR', value: formatPaise(summary.monthlyRecurringRevenuePaise, 'INR'), caption: 'Active subscriptions · tax excluded' },
     { label: 'ARR', value: formatPaise(summary.annualRecurringRevenuePaise, 'INR'), caption: 'Monthly recurring revenue × 12' },
+    { label: 'Trials ending soon', value: summary.trialsEndingIn7DaysCount, caption: 'Within the next 7 days' },
+    { label: 'Open invoices', value: `${summary.openInvoiceCount} · ${formatCurrencyAmounts(summary.openInvoiceAmountsPaise)}`, caption: 'Not yet overdue · total due' },
+    { label: 'Overdue invoices', value: `${summary.overdueInvoiceCount} · ${formatCurrencyAmounts(summary.overdueInvoiceAmountsPaise)}`, caption: 'Past due date · total due' },
+    { label: 'New demo requests', value: summary.newDemoRequestCount, caption: 'Awaiting review' },
     {
       label: 'Storage used / allocated',
       value: `${formatBytes(summary.totalStorageBytes)} / ${summary.allocatedStorageBytes == null ? 'Unlimited' : formatBytes(summary.allocatedStorageBytes)}`,

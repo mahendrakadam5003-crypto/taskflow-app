@@ -92,6 +92,19 @@ test('super-admin sections use accessible hash-addressable tabs and keep request
   assert.match(script, /window\.addEventListener\('hashchange'/);
 });
 
+test('super-admin overview displays the requested company, revenue, invoice, and demo KPIs', async () => {
+  const script = await fs.readFile(path.join(__dirname, '..', 'public', 'js', 'superadmin.js'), 'utf8');
+  assert.match(script, /label: 'Active companies'/);
+  assert.match(script, /label: 'Trials'/);
+  assert.match(script, /label: 'Suspended'/);
+  assert.match(script, /label: 'Estimated MRR'.*tax excluded/s);
+  assert.match(script, /label: 'Trials ending soon'.*next 7 days/s);
+  assert.match(script, /label: 'Open invoices'/);
+  assert.match(script, /label: 'Overdue invoices'/);
+  assert.match(script, /label: 'New demo requests'/);
+  assert.match(script, /formatCurrencyAmounts/);
+});
+
 test('startup bootstrap creates and can privately reset only the configured super-admin', async () => {
   let storedAdmin = null;
   const auditEntries = [];
@@ -302,23 +315,59 @@ test('super-admin login uses an isolated hashed session and protects the read-on
       ) VALUES (1, 'monthly', 3, 19900, 'active', '2026-10-01', '2026-11-01')`,
       args: []
     });
+    await controlDb.execute({
+      sql: `INSERT INTO subscriptions (
+        company_id, billing_cycle, seats, unit_price_paise, status, current_period_start, current_period_end
+      ) VALUES (1, 'yearly', 2, 12000, 'active', '2026-10-01', '2027-10-01')`,
+      args: []
+    });
+    const trialEndsAt = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
+    await controlDb.execute({
+      sql: `INSERT INTO companies (code, name, status, plan_id, trial_ends_at, tenant_db_url, tenant_db_token_encrypted, created_at)
+        VALUES (?, ?, 'trial', 2, ?, ?, ?, '2000-01-01')`,
+      args: ['trial-company', 'Trial Company', trialEndsAt, 'libsql://trial.example', 'encrypted-token']
+    });
+    await controlDb.execute({
+      sql: `INSERT INTO invoices (
+        company_id, number, period_start, period_end, seats, unit_price_paise, subtotal_paise,
+        discount_paise, tax_paise, total_paise, currency, tax_pct, status, due_at
+      ) VALUES (1, ?, '2026-10-01', '2026-11-01', 1, 10000, 10000, 0, 1800, 11800, 'INR', 18, 'open', ?)`,
+      args: ['INV-OVERDUE-1', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()]
+    });
+    await controlDb.execute({
+      sql: `INSERT INTO invoices (
+        company_id, number, period_start, period_end, seats, unit_price_paise, subtotal_paise,
+        discount_paise, tax_paise, total_paise, currency, tax_pct, status, due_at
+      ) VALUES (1, ?, '2026-10-01', '2026-11-01', 1, 5000, 5000, 0, 0, 5000, 'USD', 0, 'open', ?)`,
+      args: ['INV-OPEN-1', new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()]
+    });
+    await controlDb.execute({
+      sql: `INSERT INTO demo_requests (name, email, company_name, status, consented_at)
+        VALUES ('Request Owner', 'request@example.test', 'Request Co', 'new', datetime('now'))`
+    });
     const overview = await fetch(`${baseUrl}/overview`, { headers: { Cookie: cookieHeader.split(';')[0] } });
     assert.equal(overview.status, 200);
     const data = await overview.json();
     assert.deepEqual(data.summary, {
-      companyCount: 1,
-      trialCount: 0,
+      companyCount: 2,
+      trialCount: 1,
       activeCount: 1,
       activePaidCount: 1,
       trialEndingSoonCount: 0,
+      trialsEndingIn7DaysCount: 1,
       suspendedCount: 0,
       cancelledCount: 0,
-      paidSeats: 3,
-      monthlyRecurringRevenuePaise: 59700,
-      annualRecurringRevenuePaise: 716400,
+      paidSeats: 5,
+      monthlyRecurringRevenuePaise: 61700,
+      annualRecurringRevenuePaise: 740400,
+      openInvoiceCount: 1,
+      openInvoiceAmountsPaise: { USD: 5000 },
+      overdueInvoiceCount: 1,
+      overdueInvoiceAmountsPaise: { INR: 11800 },
+      newDemoRequestCount: 1,
       totalUsers: 7,
       totalStorageBytes: 6144,
-      allocatedStorageBytes: 10737418240
+      allocatedStorageBytes: 21474836480
     });
     assert.equal(data.companies[0].name, 'Test Company');
     assert.equal(data.companies[0].planName, 'Team');

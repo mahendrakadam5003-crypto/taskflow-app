@@ -544,7 +544,7 @@ function createSuperAdminRouter({
     const admin = await getAuthenticatedAdmin(req);
     if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
     const controlDb = await getDatabase();
-    const [statusResult, companiesResult, plansResult, subscriptionsResult] = await Promise.all([
+    const [statusResult, companiesResult, plansResult, subscriptionsResult, invoicesResult, demoRequestsResult] = await Promise.all([
       controlDb.execute(`SELECT status, COUNT(*) AS company_count
         FROM companies WHERE status <> 'deleted' GROUP BY status`),
         controlDb.execute(`SELECT c.id, c.code, c.name, c.owner_name, c.owner_email, c.status, c.plan_id,
@@ -562,7 +562,11 @@ function createSuperAdminRouter({
       controlDb.execute(`SELECT id, name, max_users, storage_limit_mb
         FROM plans WHERE is_active = 1 ORDER BY id`),
       controlDb.execute(`SELECT company_id, billing_cycle, seats, unit_price_paise
-        FROM subscriptions WHERE status = 'active'`)
+        FROM subscriptions WHERE status = 'active'`),
+      controlDb.execute(`SELECT total_paise, currency, due_at
+        FROM invoices WHERE status = 'open'`),
+      controlDb.execute(`SELECT COUNT(*) AS new_request_count
+        FROM demo_requests WHERE status = 'new' AND company_id IS NULL`)
     ]);
     const companies = companiesResult.rows.map(row => ({
       id: Number(row.id),
@@ -611,13 +615,52 @@ function createSuperAdminRouter({
       || !Number.isSafeInteger(paidSeats)) {
       throw new Error('Active subscription totals exceed the supported range.');
     }
-    const twoDaysFromNow = Date.now() + 2 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const twoDaysFromNow = now + 2 * 24 * 60 * 60 * 1000;
+    const sevenDaysFromNow = now + 7 * 24 * 60 * 60 * 1000;
     const trialEndingSoonCount = companies.filter(company => {
       if (company.status !== 'trial' || !company.trialEndsAt) return false;
       const end = new Date(/^\d{4}-\d{2}-\d{2}$/.test(company.trialEndsAt)
         ? `${company.trialEndsAt}T23:59:59.999Z` : company.trialEndsAt).getTime();
-      return Number.isFinite(end) && end >= Date.now() && end <= twoDaysFromNow;
+      return Number.isFinite(end) && end >= now && end <= twoDaysFromNow;
     }).length;
+    const trialsEndingIn7DaysCount = companies.filter(company => {
+      if (company.status !== 'trial' || !company.trialEndsAt) return false;
+      const end = new Date(/^\d{4}-\d{2}-\d{2}$/.test(company.trialEndsAt)
+        ? `${company.trialEndsAt}T23:59:59.999Z` : company.trialEndsAt).getTime();
+      return Number.isFinite(end) && end >= now && end <= sevenDaysFromNow;
+    }).length;
+    const invoiceTotals = {
+      open: { count: 0, amounts: new Map() },
+      overdue: { count: 0, amounts: new Map() }
+    };
+    for (const invoice of invoicesResult.rows || []) {
+      const amountPaise = Number(invoice.total_paise);
+      const currency = String(invoice.currency || 'INR').trim().toUpperCase();
+      if (!Number.isSafeInteger(amountPaise) || amountPaise < 0 || !/^[A-Z]{3}$/.test(currency)) {
+        throw new Error('An open invoice has invalid amount or currency data.');
+      }
+      const dueAt = invoice.due_at ? new Date(invoice.due_at).getTime() : NaN;
+      if (!Number.isFinite(dueAt)) throw new Error('An open invoice has an invalid due date.');
+      const bucket = dueAt < now ? invoiceTotals.overdue : invoiceTotals.open;
+      const total = (bucket.amounts.get(currency) || 0n) + BigInt(amountPaise);
+      if (total > BigInt(Number.MAX_SAFE_INTEGER) || !Number.isSafeInteger(bucket.count + 1)) {
+        throw new Error('Open invoice totals exceed the supported range.');
+      }
+      bucket.amounts.set(currency, total);
+      bucket.count += 1;
+    }
+    const invoiceSummary = Object.fromEntries(Object.entries(invoiceTotals).map(([status, totals]) => [
+      status,
+      {
+        count: totals.count,
+        amountsPaise: Object.fromEntries([...totals.amounts].map(([currency, amount]) => [currency, Number(amount)]))
+      }
+    ]));
+    const newDemoRequestCount = Number(demoRequestsResult.rows?.[0]?.new_request_count || 0);
+    if (!Number.isSafeInteger(newDemoRequestCount) || newDemoRequestCount < 0) {
+      throw new Error('The new demo request count is invalid.');
+    }
     const storageAllocationUnlimited = companies.some(company => company.storageLimitMb === null);
     const allocatedStorageBytes = storageAllocationUnlimited ? null
       : companies.reduce((total, company) => total + company.storageLimitMb * 1024 * 1024, 0);
@@ -630,11 +673,17 @@ function createSuperAdminRouter({
         activeCount: statusCounts.active || 0,
         activePaidCount: paidCompanyIds.size,
         trialEndingSoonCount,
+        trialsEndingIn7DaysCount,
         suspendedCount: statusCounts.suspended || 0,
         cancelledCount: statusCounts.cancelled || 0,
         paidSeats,
         monthlyRecurringRevenuePaise: Number(monthlyRecurringRevenuePaise),
         annualRecurringRevenuePaise: Number(annualRecurringRevenuePaise),
+        openInvoiceCount: invoiceSummary.open.count,
+        openInvoiceAmountsPaise: invoiceSummary.open.amountsPaise,
+        overdueInvoiceCount: invoiceSummary.overdue.count,
+        overdueInvoiceAmountsPaise: invoiceSummary.overdue.amountsPaise,
+        newDemoRequestCount,
         totalUsers: latestUsage.reduce((total, company) => total + company.userCount, 0),
         totalStorageBytes: latestUsage.reduce((total, company) => total + company.dbBytes + company.filesBytes, 0),
         allocatedStorageBytes

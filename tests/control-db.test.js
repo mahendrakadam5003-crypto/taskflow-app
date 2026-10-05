@@ -84,7 +84,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       pricing_versions: ['id', 'monthly_price_paise', 'yearly_discount_pct', 'yearly_price_paise', 'tax_pct', 'currency', 'effective_from', 'created_by', 'note', 'is_current', 'created_at'],
       pricing_tiers: ['id', 'pricing_version_id', 'tier_key', 'name', 'tagline', 'highlights', 'min_seats', 'max_seats', 'monthly_price_paise', 'yearly_price_paise', 'sort_order'],
       subscriptions: ['id', 'company_id', 'billing_cycle', 'seats', 'unit_price_paise', 'discount_pct', 'pricing_version_id', 'status', 'current_period_start', 'current_period_end', 'cancel_at_period_end', 'provider', 'provider_subscription_id', 'created_at'],
-      invoices: ['id', 'company_id', 'subscription_id', 'number', 'period_start', 'period_end', 'seats', 'unit_price_paise', 'subtotal_paise', 'discount_paise', 'tax_paise', 'total_paise', 'currency', 'tax_pct', 'status', 'paid_at', 'provider_payment_id', 'created_at'],
+      invoices: ['id', 'company_id', 'subscription_id', 'number', 'period_start', 'period_end', 'seats', 'unit_price_paise', 'subtotal_paise', 'discount_paise', 'tax_paise', 'total_paise', 'currency', 'tax_pct', 'status', 'paid_at', 'provider_payment_id', 'created_at', 'due_at'],
       payments: ['id', 'invoice_id', 'amount_paise', 'method', 'provider_ref', 'provider_event_id', 'raw_payload_hash', 'created_at'],
       subscription_events: ['id', 'company_id', 'subscription_id', 'actor_super_admin_id', 'event', 'details', 'created_at'],
       provider_webhook_events: ['id', 'provider', 'provider_event_id', 'payload_hash', 'processed_at'],
@@ -103,7 +103,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
     }
     const migrations = await client.execute('SELECT version FROM control_schema_migrations');
     assert.deepEqual(migrations.rows.map(row => Number(row.version)), [
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, CURRENT_SCHEMA_VERSION
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, CURRENT_SCHEMA_VERSION
     ]);
     const pricing = await client.execute('SELECT monthly_price_paise, yearly_discount_pct, yearly_price_paise, tax_pct, currency, is_current FROM pricing_versions');
     assert.deepEqual(pricing.rows.map(row => [Number(row.monthly_price_paise), Number(row.yearly_discount_pct), Number(row.yearly_price_paise), Number(row.tax_pct), row.currency, Number(row.is_current)]), [[19900, 10, 214920, 18, 'INR', 1]]);
@@ -124,7 +124,7 @@ test('control migration enforces manually approved trials without touching tenan
   try {
     await migrateControlDatabase(client);
     await client.execute("UPDATE pricing_settings SET trial_approval_mode = 'auto' WHERE id = 1");
-    await client.execute('DELETE FROM control_schema_migrations WHERE version IN (13, 14)');
+    await client.execute('DELETE FROM control_schema_migrations WHERE version IN (13, 14, 15)');
     assert.equal(await migrateControlDatabase(client), CURRENT_SCHEMA_VERSION);
     const result = await client.execute('SELECT trial_approval_mode FROM pricing_settings WHERE id = 1');
     assert.equal(result.rows[0].trial_approval_mode, 'manual');
@@ -141,7 +141,7 @@ test('pricing tier migration backfills every version without overwriting custom 
     await migrateControlDatabase(client);
     await client.execute('UPDATE pricing_versions SET monthly_price_paise = 30100, yearly_price_paise = 325080');
     await client.execute('DELETE FROM pricing_tiers');
-    await client.execute('DELETE FROM control_schema_migrations WHERE version = 14');
+    await client.execute('DELETE FROM control_schema_migrations WHERE version IN (14, 15)');
     await migrateControlDatabase(client);
     await migrateControlDatabase(client);
 
@@ -153,6 +153,44 @@ test('pricing tier migration backfills every version without overwriting custom 
     ]), [['standard', 'Standard', 1, null, 30100, 325080]]);
     const count = await client.execute('SELECT COUNT(*) AS count FROM pricing_tiers');
     assert.equal(Number(count.rows[0].count), 1);
+  } finally {
+    await client.close();
+  }
+});
+
+test('invoice due-date migration backfills issue dates without overwriting existing due dates', async () => {
+  const client = createClient({ url: 'file::memory:' });
+  try {
+    await migrateControlDatabase(client);
+    await client.execute({
+      sql: `INSERT INTO companies (code, name, tenant_db_url, tenant_db_token_encrypted)
+        VALUES (?, ?, ?, ?)`,
+      args: ['due-date-test', 'Due Date Test', 'libsql://due-date.example', 'encrypted-token']
+    });
+    await client.execute({
+      sql: `INSERT INTO invoices (
+        company_id, number, period_start, period_end, seats, unit_price_paise, subtotal_paise,
+        discount_paise, tax_paise, total_paise, currency, tax_pct, status, created_at
+      ) VALUES (1, ?, ?, ?, 1, 10000, 10000, 0, 1800, 11800, 'INR', 18, 'open', ?)`,
+      args: ['INV-DUE-DATE-TEST', '2026-01-01', '2026-02-01', '2026-01-03T00:00:00.000Z']
+    });
+
+    await client.execute('DELETE FROM control_schema_migrations WHERE version = 15');
+    await migrateControlDatabase(client);
+    let result = await client.execute({
+      sql: 'SELECT due_at, created_at FROM invoices WHERE number = ?',
+      args: ['INV-DUE-DATE-TEST']
+    });
+    assert.equal(result.rows[0].due_at, result.rows[0].created_at);
+
+    await client.execute("UPDATE invoices SET due_at = '2026-01-10T00:00:00.000Z' WHERE number = 'INV-DUE-DATE-TEST'");
+    await client.execute('DELETE FROM control_schema_migrations WHERE version = 15');
+    await migrateControlDatabase(client);
+    result = await client.execute({
+      sql: 'SELECT due_at FROM invoices WHERE number = ?',
+      args: ['INV-DUE-DATE-TEST']
+    });
+    assert.equal(result.rows[0].due_at, '2026-01-10T00:00:00.000Z');
   } finally {
     await client.close();
   }

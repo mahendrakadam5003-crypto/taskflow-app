@@ -89,6 +89,7 @@ async function createManualSubscriptionInvoice(controlDb, admin, { companyId, bi
   const invoicePeriodEnd = periodEnd(periodStart, billingCycle);
   const periodStartText = periodStart.toISOString();
   const invoicePeriodEndText = invoicePeriodEnd.toISOString();
+  const dueAtText = new Date(now).toISOString();
   const transaction = await controlDb.transaction('write');
   try {
     const number = await nextInvoiceNumber(transaction, periodStart.getUTCFullYear());
@@ -104,11 +105,11 @@ async function createManualSubscriptionInvoice(controlDb, admin, { companyId, bi
     const invoice = await transaction.execute({
       sql: `INSERT INTO invoices (
         company_id, subscription_id, number, period_start, period_end, seats, unit_price_paise,
-        subtotal_paise, discount_paise, tax_paise, total_paise, currency, tax_pct, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
+        subtotal_paise, discount_paise, tax_paise, total_paise, currency, tax_pct, due_at, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
       args: [normalizedCompanyId, subscriptionId, number, periodStartText, invoicePeriodEndText,
         seats, unitPricePaise, amounts.subtotalPaise, amounts.discountPaise, amounts.taxPaise,
-        amounts.totalPaise, pricing.currency, pricing.taxPct]
+        amounts.totalPaise, pricing.currency, pricing.taxPct, dueAtText]
     });
     await markBillingRequestInvoiced(transaction, admin, requestId, Number(invoice.lastInsertRowid));
     await transaction.execute({
@@ -225,6 +226,7 @@ async function createManualSubscriptionChangeInvoice(controlDb, admin, { company
     const invoicePeriodEnd = periodEnd(periodStart, requestedCycle);
     const periodStartText = periodStart.toISOString();
     const invoicePeriodEndText = invoicePeriodEnd.toISOString();
+    const dueAtText = new Date(now).toISOString();
     const amounts = calculateInvoiceAmounts({
       unitPricePaise,
       seats,
@@ -245,11 +247,11 @@ async function createManualSubscriptionChangeInvoice(controlDb, admin, { company
     const invoice = await transaction.execute({
       sql: `INSERT INTO invoices (
         company_id, subscription_id, number, period_start, period_end, seats, unit_price_paise,
-        subtotal_paise, discount_paise, tax_paise, total_paise, currency, tax_pct, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
+        subtotal_paise, discount_paise, tax_paise, total_paise, currency, tax_pct, due_at, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
       args: [normalizedCompanyId, subscriptionId, number, periodStartText, invoicePeriodEndText,
         seats, unitPricePaise, amounts.subtotalPaise, amounts.discountPaise, amounts.taxPaise,
-        amounts.totalPaise, currency, taxPct]
+        amounts.totalPaise, currency, taxPct, dueAtText]
     });
     const invoiceId = Number(invoice.lastInsertRowid);
     await markBillingRequestInvoiced(transaction, admin, normalizedRequestId, invoiceId, Number(current.id));
