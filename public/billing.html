@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#14213D">
+  <title>Billing &amp; Plan | TaskFlow</title>
+  <link rel="stylesheet" href="/css/billing.css">
+</head>
+<body>
+  <main class="billing-shell">
+    <header class="billing-header">
+      <a href="/" class="billing-brand">TaskFlow <span>/ Billing</span></a>
+      <div><a href="/" class="button button-secondary">Back to workspace</a><button id="refresh-button" class="button button-secondary" type="button">Refresh</button><button id="print-button" class="button button-primary" type="button">Print invoices</button></div>
+    </header>
+    <section class="billing-heading">
+      <p class="eyebrow">WORKSPACE ACCOUNT</p>
+      <h1>Billing &amp; Plan</h1>
+      <p id="company-name" class="muted">Loading billing details…</p>
+    </section>
+    <p id="billing-error" class="message error hidden" role="alert"></p>
+    <div id="billing-content" class="hidden">
+      <section id="trial-notice" class="trial-notice hidden" role="note">
+        Trial data may be deleted at any time after the trial ends. Export anything you need. No data retention or backup is guaranteed.
+      </section>
+      <section class="billing-cards">
+        <article class="billing-card"><span class="card-label">Workspace status</span><strong id="company-status">—</strong><small id="trial-date"></small></article>
+        <article class="billing-card"><span class="card-label">Current plan</span><strong id="plan-name">—</strong><small id="subscription-detail"></small></article>
+        <article class="billing-card"><span class="card-label">Seats</span><strong id="seat-usage">—</strong><small>Active users / allowed users</small></article>
+        <article class="billing-card"><span class="card-label">Storage</span><strong id="storage-usage">—</strong><small id="storage-detail"></small></article>
+      </section>
+      <p id="billing-updated" class="muted"></p>
+      <section class="billing-panel">
+        <div class="panel-heading"><div><p class="eyebrow">CURRENT RATES</p><h2>Per-seat pricing</h2></div></div>
+        <p id="price-summary" class="muted"></p>
+        <p class="manual-payment-note">Payments are currently handled manually. Contact your TaskFlow administrator to add seats, change your billing cycle, or arrange payment. Prices are shown for information only.</p>
+      </section>
+      <section class="billing-panel">
+        <div class="panel-heading"><div><p class="eyebrow">RECORDS</p><h2>Invoices</h2></div></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Invoice</th><th>Period</th><th>Seats</th><th>Total</th><th>Status</th><th>Paid</th></tr></thead>
+          <tbody id="invoice-rows"></tbody>
+        </table></div>
+        <p id="invoice-empty" class="muted hidden">No invoices are recorded for this workspace.</p>
+      </section>
+    </div>
+  </main>
+  <script src="/js/billing.js" defer></script>
+</body>
+</html>

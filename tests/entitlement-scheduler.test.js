@@ -17,7 +17,7 @@ async function insertCompany(client, { code, status, trialEndsAt, trialPolicyVer
   return Number(result.lastInsertRowid);
 }
 
-test('daily entitlement maintenance is idempotent and preserves legacy trial data', async () => {
+test('daily entitlement maintenance is idempotent and does not schedule tenant purges', async () => {
   const client = createClient({ url: 'file::memory:' });
   const deliveries = [];
   try {
@@ -53,7 +53,7 @@ test('daily entitlement maintenance is idempotent and preserves legacy trial dat
     const first = await scheduler.runEntitlementMaintenance();
     const second = await scheduler.runEntitlementMaintenance();
     assert.equal(first.remindersSent, 1);
-    assert.equal(first.trialsScheduledForDeletion, 1);
+    assert.equal(first.trialsScheduledForDeletion, 0);
     assert.equal(first.subscriptionsPastDue, 1);
     assert.equal(second.remindersSent, 0);
     assert.equal(deliveries.length, 1);
@@ -63,7 +63,7 @@ test('daily entitlement maintenance is idempotent and preserves legacy trial dat
       sql: 'SELECT id, delete_after FROM companies WHERE id IN (?, ?, ?) ORDER BY id',
       args: [trialSoonId, expiredNewTrialId, expiredLegacyTrialId]
     });
-    assert.deepEqual(deletionDates.rows.map(row => row.delete_after), [null, '2026-10-08', null]);
+    assert.deepEqual(deletionDates.rows.map(row => row.delete_after), [null, null, null]);
     const subscription = await client.execute({ sql: 'SELECT status FROM subscriptions WHERE company_id = ?', args: [paidCompanyId] });
     assert.equal(subscription.rows[0].status, 'past_due');
 

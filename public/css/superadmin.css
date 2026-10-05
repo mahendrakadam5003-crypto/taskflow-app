@@ -203,3 +203,28 @@ td { padding: 16px 18px; border-top: 1px solid var(--line); color: #d7e0eb; font
   .record-row > span { text-align: left; }
   .record-actions { justify-content: flex-start; }
 }
+
+.pricing-editor { margin-top: 22px; }
+.pricing-form { padding: 22px 24px; }
+.pricing-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 18px; }
+.pricing-form label { min-width: 0; }
+.pricing-form input:not([type="checkbox"]), .pricing-form select { width: 100%; min-height: 42px; margin-top: 7px; padding: 0 11px; border: 1px solid var(--line); border-radius: 8px; background: #111d2e; color: #edf2f8; }
+.pricing-form input:focus, .pricing-form select:focus { border-color: var(--accent); outline: 2px solid rgba(69, 214, 196, .14); }
+.pricing-form .pricing-check { display: flex; align-items: center; gap: 9px; }
+.pricing-form .pricing-check input { width: 17px; height: 17px; accent-color: var(--accent); }
+.pricing-preview { margin: 24px 0; padding: 0 16px 14px; border: 1px solid var(--line); border-radius: 10px; background: rgba(17, 29, 46, .55); }
+.pricing-preview .section-heading { margin: 0 -16px 12px; }
+.pricing-preview .muted { margin: 12px 0 0; }
+.pricing-form > label { max-width: 420px; }
+.pricing-form > .form-actions { margin-top: 18px; }
+
+@media (max-width: 760px) {
+  .pricing-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 540px) {
+  .pricing-fields { grid-template-columns: 1fr; }
+  .pricing-form { padding: 16px; }
+  .pricing-preview { padding-right: 10px; padding-left: 10px; }
+  .pricing-preview .section-heading { margin-right: -10px; margin-left: -10px; padding: 16px 10px; }
+}

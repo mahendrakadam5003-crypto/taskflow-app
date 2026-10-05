@@ -396,7 +396,7 @@ test('super-admin can update company status and plan without changing tenant cre
   }
 });
 
-test('cancelling a company schedules deletion in 30 days and reactivation clears the deadline', async () => {
+test('cancelling a company retains its data and does not schedule automatic deletion', async () => {
   const { controlDb, server, baseUrl } = await createApp();
   try {
     const login = await fetch(`${baseUrl}/login`, {
@@ -411,9 +411,7 @@ test('cancelling a company schedules deletion in 30 days and reactivation clears
     assert.equal(cancel.status, 200, await cancel.clone().text());
     const cancelledCompany = await controlDb.execute({ sql: 'SELECT status, delete_after FROM companies WHERE id = ?', args: [1] });
     assert.equal(cancelledCompany.rows[0].status, 'cancelled');
-    const remaining = new Date(cancelledCompany.rows[0].delete_after).getTime() - Date.now();
-    assert.ok(remaining <= 30 * 24 * 60 * 60 * 1000);
-    assert.ok(remaining > 29 * 24 * 60 * 60 * 1000);
+    assert.equal(cancelledCompany.rows[0].delete_after, null);
 
     const reactivate = await fetch(`${baseUrl}/companies/1`, {
       method: 'PUT', headers, body: JSON.stringify({ status: 'active', planId: 2 })

@@ -17,7 +17,7 @@ test('API route modules cannot open tenant database clients directly', () => {
     const source = fs.readFileSync(path.join(routeDirectory, file), 'utf8');
     assert.doesNotMatch(source, directClientPattern, `${file} must use the tenant-bound database module`);
     assert.doesNotMatch(source, tenantEscapeHatchPattern, `${file} must not bypass the active company context`);
-    if (!['superadmin.js', 'public.js'].includes(file)) {
+    if (!['superadmin.js', 'public.js', 'billing.js'].includes(file)) {
       assert.match(source, /require\(['"]\.\.\/db['"]\)/, `${file} must use the tenant-bound database module`);
     }
   }
@@ -31,6 +31,11 @@ test('tenant context middleware is installed before every API router', () => {
   assert.notEqual(contextPosition, -1);
   assert.ok(apiMounts.length > 0);
   for (const mount of apiMounts) assert.ok(mount.index > contextPosition, `${mount[0]} must follow tenant context middleware`);
+});
+
+test('scheduled maintenance never invokes automatic company deletion', () => {
+  const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+  assert.doesNotMatch(server, /processDueCompanyDeletions\s*\(/);
 });
 
 test('environment template contains placeholders only for secret values', () => {

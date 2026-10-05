@@ -104,7 +104,7 @@ function createEntitlementScheduler({
     const controlDb = await getDatabase();
     const [settingsResult, companiesResult] = await Promise.all([
       controlDb.execute('SELECT trial_days, grace_period_days, read_only_period_days FROM pricing_settings WHERE id = 1'),
-      controlDb.execute(`SELECT c.id, c.name, c.owner_email, c.status, c.trial_ends_at, c.delete_after,
+      controlDb.execute(`SELECT c.id, c.name, c.owner_email, c.status, c.trial_ends_at,
           c.trial_policy_version, s.id AS subscription_id, s.status AS subscription_status,
           s.current_period_end
         FROM companies c LEFT JOIN subscriptions s ON s.id = (
@@ -136,20 +136,6 @@ function createEntitlementScheduler({
             `Your TaskFlow trial ends on ${company.trial_ends_at}. ${TRIAL_DATA_NOTICE}`
           );
           if (sent) remindersSent += 1;
-        }
-        if (currentTime.getTime() > endTime && !company.delete_after) {
-          const deleteAfter = new Date(endTime + 7 * DAY_MS).toISOString().slice(0, 10);
-          const updated = await controlDb.execute({
-            sql: `UPDATE companies SET delete_after = ?
-              WHERE id = ? AND status = 'trial' AND trial_policy_version = 1 AND delete_after IS NULL`,
-            args: [deleteAfter, companyId]
-          });
-          if (Number(updated.rowsAffected || 0) === 1) trialsScheduledForDeletion += 1;
-          await controlDb.execute({
-            sql: `INSERT INTO super_admin_audit (company_id, action, details)
-              VALUES (?, ?, ?)`,
-            args: [companyId, 'Trial ended; deletion scheduled', `New-policy trial data scheduled for deletion after ${deleteAfter}.`]
-          });
         }
       }
 

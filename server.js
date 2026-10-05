@@ -23,6 +23,7 @@ const { createUserErrorReporter } = require('./user-error-reporter');
 const { createEntitlementMiddleware, createEntitlementService } = require('./entitlements');
 const { createEntitlementScheduler } = require('./entitlement-scheduler');
 const { createPublicRouter } = require('./routes/public');
+const { createBillingRouter } = require('./routes/billing');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -76,14 +77,6 @@ async function runBackupMaintenance() {
         if (restoreTestResults.length) console.log(`Monthly backup restore tests finished for ${restoreTestResults.length} company workspace(s).`);
       } catch (error) {
         logCompanyEvent(null, 'monthly_restore_test_pass_failed');
-      }
-    }
-    if (hasControlDatabaseConfiguration()) {
-      try {
-        const deletionResults = await backupManager.processDueCompanyDeletions();
-        if (deletionResults.length) console.log(`Company retirement pass finished for ${deletionResults.length} company workspace(s).`);
-      } catch (error) {
-        logCompanyEvent(null, 'company_retirement_pass_failed');
       }
     }
   } catch (error) {
@@ -422,6 +415,7 @@ app.use('/api/superadmin', createSuperAdminRouter({
   invalidatePublicPricing: publicRouter.invalidateCache
 }));
 app.use('/api/public', publicRouter.router);
+app.use('/api/billing', createBillingRouter({ getDatabase: getControlDatabase }));
 
 app.use('/api/auth', authRouter);
 app.use('/api', tasksRouter);

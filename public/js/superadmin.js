@@ -207,6 +207,88 @@ async function loadPlans() {
   renderPlanRows();
 }
 
+function formatPaise(value, currency) {
+  if (!Number.isSafeInteger(Number(value)) || Number(value) < 0) return '—';
+  const paise = BigInt(value);
+  const whole = paise / 100n;
+  const fraction = String(paise % 100n).padStart(2, '0');
+  return `${currency} ${new Intl.NumberFormat('en-IN').format(Number(whole))}.${fraction}`;
+}
+
+function getPricingFormData() {
+  const form = document.getElementById('pricing-form');
+  const data = Object.fromEntries(new FormData(form));
+  data.yearlyPriceOverride = '';
+  data.taxInclusive = document.getElementById('pricing-tax-inclusive').checked;
+  data.prorateSeats = document.getElementById('pricing-prorate').checked;
+  return data;
+}
+
+function populatePricingForm(pricing) {
+  const monthlyPaise = BigInt(pricing.monthlyPricePaise);
+  const monthlyPrice = `${monthlyPaise / 100n}.${String(monthlyPaise % 100n).padStart(2, '0')}`;
+  const values = {
+    'pricing-monthly': monthlyPrice,
+    'pricing-yearly-discount': pricing.yearlyDiscountPct,
+    'pricing-tax': pricing.taxPct,
+    'pricing-currency': pricing.currency,
+    'pricing-symbol': pricing.currencySymbol,
+    'pricing-trial-days': pricing.trialDays,
+    'pricing-trial-users': pricing.trialMaxUsers,
+    'pricing-trial-storage': pricing.trialStorageLimitMb,
+    'pricing-grace-days': pricing.gracePeriodDays,
+    'pricing-readonly-days': pricing.readOnlyPeriodDays,
+    'pricing-min-seats': pricing.minSeats,
+    'pricing-max-seats': pricing.maxSeats ?? '',
+    'pricing-storage-per-seat': pricing.defaultStoragePerSeatMb ?? '',
+    'pricing-seat-billing': pricing.seatAdditionBilling,
+    'pricing-price-scope': pricing.priceChangeScope,
+    'pricing-trial-approval': pricing.trialApprovalMode
+  };
+  for (const [id, value] of Object.entries(values)) document.getElementById(id).value = value;
+  document.getElementById('pricing-tax-inclusive').checked = pricing.taxInclusive;
+  document.getElementById('pricing-prorate').checked = pricing.prorateSeats;
+}
+
+function renderPricingPreview(result) {
+  const currency = document.getElementById('pricing-currency').value.trim().toUpperCase();
+  document.getElementById('pricing-preview-results').innerHTML = `
+    <div class="table-wrap"><table>
+      <thead><tr><th>Users</th><th>Monthly total</th><th>Yearly total</th></tr></thead>
+      <tbody>${result.preview.map(row => `<tr>
+        <td>${row.seats}</td>
+        <td>${formatPaise(row.monthly.totalPaise, currency)}</td>
+        <td>${formatPaise(row.yearly.totalPaise, currency)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  document.getElementById('pricing-affected-count').textContent =
+    `${result.affectedExistingSubscriptions} active or past-due subscription(s) exist. Existing prices stay locked unless next-renewal pricing is selected.`;
+}
+
+async function previewPricing() {
+  const errorTarget = document.getElementById('pricing-preview-error');
+  errorTarget.classList.add('hidden');
+  try {
+    const result = await request('pricing/preview', {
+      method: 'POST',
+      body: JSON.stringify(getPricingFormData())
+    });
+    renderPricingPreview(result);
+  } catch (error) {
+    errorTarget.textContent = error.message;
+    errorTarget.classList.remove('hidden');
+  }
+}
+
+async function loadPricing() {
+  const result = await request('pricing');
+  populatePricingForm(result.pricing);
+  renderPricingPreview({
+    preview: result.preview,
+    affectedExistingSubscriptions: result.affectedExistingSubscriptions
+  });
+}
+
 function resetPlanForm() {
   document.getElementById('plan-form').reset();
   document.getElementById('plan-id').value = '';
@@ -334,7 +416,7 @@ document.querySelectorAll('[data-admin-page]').forEach(button => {
   button.addEventListener('click', async () => {
     if (button.dataset.adminPage === 'plans') {
       showControlPage('plans');
-      try { await loadPlans(); } catch (error) {
+      try { await Promise.all([loadPlans(), loadPricing()]); } catch (error) {
         overviewError.textContent = error.message;
         overviewError.classList.remove('hidden');
       }
@@ -420,6 +502,31 @@ document.getElementById('plan-form').addEventListener('submit', async event => {
     showControlPage('plans');
     managementMessage.textContent = 'Plan saved.';
     managementMessage.classList.remove('hidden');
+  } catch (error) {
+    errorTarget.textContent = error.message;
+    errorTarget.classList.remove('hidden');
+  }
+});
+
+document.getElementById('pricing-preview-button').addEventListener('click', previewPricing);
+document.getElementById('pricing-form').addEventListener('change', event => {
+  if (event.target.id !== 'pricing-current-password') previewPricing();
+});
+document.getElementById('pricing-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const errorTarget = document.getElementById('pricing-form-error');
+  const successTarget = document.getElementById('pricing-form-success');
+  errorTarget.classList.add('hidden');
+  successTarget.classList.add('hidden');
+  try {
+    await request('pricing', {
+      method: 'POST',
+      body: JSON.stringify(getPricingFormData())
+    });
+    document.getElementById('pricing-current-password').value = '';
+    successTarget.textContent = 'A new pricing version has been saved.';
+    successTarget.classList.remove('hidden');
+    await loadPricing();
   } catch (error) {
     errorTarget.textContent = error.message;
     errorTarget.classList.remove('hidden');

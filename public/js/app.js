@@ -1014,6 +1014,8 @@ async function enterApp() {
   
   const navAdmin = $('#nav-admin');
   if (ME.role === 'admin' && navAdmin) navAdmin.style.display = '';
+  const billingLink = $('#admin-billing-link');
+  if (billingLink) billingLink.style.display = ME.role === 'admin' ? '' : 'none';
   
   try {
     const [paymentAccess, projectActionAccess, reimbursementAccess] = await Promise.all([

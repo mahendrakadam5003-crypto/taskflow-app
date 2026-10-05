@@ -540,9 +540,7 @@ function createSuperAdminRouter({
       || (hasNotes && (typeof notes !== 'string' || notes.length > 4000))) {
       return res.status(400).json({ error: 'Enter valid non-negative limit overrides and notes.' });
     }
-    const deleteAfter = body.status === 'cancelled'
-      ? company.delete_after || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
-      : null;
+    const deleteAfter = body.status === 'cancelled' ? company.delete_after : null;
 
     const changes = [];
     if (company.status !== body.status) changes.push(`status ${company.status} -> ${body.status}`);
@@ -553,8 +551,7 @@ function createSuperAdminRouter({
     if (currentMaxUsersOverride !== maxUsersOverride) changes.push('user limit override updated');
     if (currentStorageOverride !== storageLimitMbOverride) changes.push('storage limit override updated');
     if (notes !== company.notes) changes.push('company notes updated');
-    if (deleteAfter !== company.delete_after) changes.push(body.status === 'cancelled'
-      ? 'permanent deletion scheduled after 30 days' : 'permanent deletion schedule cleared');
+    if (deleteAfter !== company.delete_after) changes.push('permanent deletion schedule cleared');
     if (!changes.length) return res.json({ companyId, status: body.status, planId });
 
     const results = await controlDb.batch([

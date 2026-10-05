@@ -140,7 +140,7 @@
 
       <section id="plans-page" class="control-page hidden" aria-labelledby="plans-heading">
         <div class="section-heading page-section-heading">
-          <div><p class="eyebrow">CATALOG</p><h2 id="plans-heading">Plans</h2></div>
+          <div><p class="eyebrow">CATALOG</p><h2 id="plans-heading">Plans &amp; Pricing</h2></div>
         </div>
         <div class="plan-layout">
           <form id="plan-form" class="plan-form">
@@ -161,6 +161,45 @@
           </form>
           <div id="plan-rows" class="plan-list" aria-live="polite"></div>
         </div>
+        <section class="detail-panel detail-wide pricing-editor" aria-labelledby="pricing-editor-heading">
+          <div class="section-heading"><div><p class="eyebrow">VERSIONED SETTINGS</p><h3 id="pricing-editor-heading">Per-seat pricing and trial policy</h3></div></div>
+          <p class="footnote">Price changes create a new immutable version. Existing subscriptions retain their locked price unless you choose next-renewal pricing.</p>
+          <form id="pricing-form" class="pricing-form">
+            <div class="pricing-fields">
+              <label for="pricing-monthly">Monthly price per user (Rs.)<input id="pricing-monthly" name="monthlyPrice" inputmode="decimal" required></label>
+              <label for="pricing-yearly-discount">Yearly discount (%)<input id="pricing-yearly-discount" name="yearlyDiscountPct" type="number" min="0" max="100" step="0.1" required></label>
+              <label for="pricing-yearly-override">Yearly price override (Rs.)<span class="optional-label">Blank calculates from discount</span><input id="pricing-yearly-override" name="yearlyPriceOverride" inputmode="decimal"></label>
+              <label for="pricing-tax">Tax / GST (%)<input id="pricing-tax" name="taxPct" type="number" min="0" max="100" step="0.1" required></label>
+              <label for="pricing-currency">Currency code<input id="pricing-currency" name="currency" maxlength="3" required></label>
+              <label for="pricing-symbol">Currency symbol<input id="pricing-symbol" name="currencySymbol" maxlength="8" required></label>
+              <label class="pricing-check"><input id="pricing-tax-inclusive" name="taxInclusive" type="checkbox"> Prices include tax</label>
+              <label for="pricing-trial-days">Trial length (days)<input id="pricing-trial-days" name="trialDays" type="number" min="1" max="60" step="1" required></label>
+              <label for="pricing-trial-users">Trial users<input id="pricing-trial-users" name="trialMaxUsers" type="number" min="1" step="1" required></label>
+              <label for="pricing-trial-storage">Trial storage (MB)<input id="pricing-trial-storage" name="trialStorageLimitMb" type="number" min="0" step="1" required></label>
+              <label for="pricing-grace-days">Payment grace (days)<input id="pricing-grace-days" name="gracePeriodDays" type="number" min="0" step="1" required></label>
+              <label for="pricing-readonly-days">Read-only period (days)<input id="pricing-readonly-days" name="readOnlyPeriodDays" type="number" min="0" step="1" required></label>
+              <label for="pricing-min-seats">Minimum seats<input id="pricing-min-seats" name="minSeats" type="number" min="1" step="1" required></label>
+              <label for="pricing-max-seats">Maximum seats<span class="optional-label">Blank is unlimited</span><input id="pricing-max-seats" name="maxSeats" type="number" min="1" step="1"></label>
+              <label for="pricing-storage-per-seat">Default storage per seat (MB)<span class="optional-label">Blank disables</span><input id="pricing-storage-per-seat" name="defaultStoragePerSeatMb" type="number" min="0" step="1"></label>
+              <label for="pricing-seat-billing">Mid-cycle seat additions<select id="pricing-seat-billing" name="seatAdditionBilling"><option value="immediate">Bill immediately</option><option value="next_invoice">Add to next invoice</option></select></label>
+              <label for="pricing-price-scope">Price changes apply to<select id="pricing-price-scope" name="priceChangeScope"><option value="new_customers">New customers only</option><option value="existing_next_renewal">Existing customers at next renewal</option></select></label>
+              <label for="pricing-trial-approval">Trial approval<select id="pricing-trial-approval" name="trialApprovalMode"><option value="manual">Manual approval</option><option value="auto">Automatic after verification</option></select></label>
+              <label for="pricing-effective-date">Effective date<span class="optional-label">Blank means now</span><input id="pricing-effective-date" name="effectiveFrom" type="date"></label>
+              <label for="pricing-note">Version note<input id="pricing-note" name="note" maxlength="500"></label>
+              <label class="pricing-check"><input id="pricing-prorate" name="prorateSeats" type="checkbox"> Pro-rate mid-cycle seat additions</label>
+            </div>
+            <div class="pricing-preview">
+              <div class="section-heading"><div><p class="eyebrow">BEFORE YOU SAVE</p><h3>Price preview</h3></div><button id="pricing-preview-button" class="button button-quiet" type="button">Refresh preview</button></div>
+              <p id="pricing-preview-error" class="message error hidden" role="alert"></p>
+              <div id="pricing-preview-results" aria-live="polite"></div>
+              <p id="pricing-affected-count" class="muted"></p>
+            </div>
+            <label for="pricing-current-password">Re-enter super-admin password to save<input id="pricing-current-password" name="currentPassword" type="password" autocomplete="current-password" required></label>
+            <p id="pricing-form-error" class="message error hidden" role="alert"></p>
+            <p id="pricing-form-success" class="message success hidden" role="status"></p>
+            <div class="form-actions"><button class="button button-primary" type="submit">Save new pricing version</button></div>
+          </form>
+        </section>
       </section>
 
       <section id="company-detail-page" class="control-page hidden" aria-labelledby="company-detail-heading">
