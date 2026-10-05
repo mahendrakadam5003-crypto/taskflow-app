@@ -74,12 +74,18 @@ function saveSession(req) {
 }
 
 async function setAuthenticatedSession(req, user) {
+  const supportMode = req.session?.supportModeSuperAdminId == null ? null : {
+    supportModeSuperAdminId: req.session.supportModeSuperAdminId,
+    supportModeExpiresAt: req.session.supportModeExpiresAt,
+    supportModeCompanyName: req.session.supportModeCompanyName
+  };
   await regenerateSession(req);
   req.session.userId = Number(user.id);
   req.session.role = user.role;
   req.session.name = user.name;
   req.session.tokenVersion = Number(user.token_version);
   req.session.companyId = req.companyTenantId ?? LEGACY_TENANT_ID;
+  if (supportMode) Object.assign(req.session, supportMode);
   await saveSession(req);
 }
 
@@ -104,6 +110,19 @@ async function deleteUserSessions(userId, companyId) {
 async function requireAuth(req, res, next) {
   if (!req.session || !req.session.userId) {
     return res.status(401).json({ error: 'Not logged in' });
+  }
+  if (req.session.supportModeSuperAdminId != null
+    && (!Number.isFinite(Number(req.session.supportModeExpiresAt)) || Number(req.session.supportModeExpiresAt) <= Date.now())) {
+    try {
+      const controlDb = await getControlDatabase();
+      await controlDb.execute({
+        sql: 'INSERT INTO super_admin_audit (super_admin_id, company_id, action, details) VALUES (?, ?, ?, ?)',
+        args: [Number(req.session.supportModeSuperAdminId), Number(req.session.companyId), 'Support mode expired', 'The 30-minute support session expired.']
+      });
+    } catch (error) {
+      console.error('Support-mode expiry audit failed:', error.message);
+    }
+    return rejectInvalidSession(req, res);
   }
   if (req.companyTenantId !== undefined
     && String(req.session.companyId ?? LEGACY_TENANT_ID) !== String(req.companyTenantId)) {
@@ -176,6 +195,17 @@ router.post('/login', loginIpLimiter, loginUsernameLimiter, loginCompanyLimiter,
     }
 
     await setAuthenticatedSession(req, user);
+    if (req.companyTenantId != null && String(req.companyTenantId) !== LEGACY_TENANT_ID) {
+      try {
+        const controlDb = await getControlDatabase();
+        await controlDb.execute({
+          sql: 'UPDATE companies SET last_login_at = datetime(\'now\') WHERE id = ?',
+          args: [Number(req.companyTenantId)]
+        });
+      } catch (error) {
+        console.error('Company last-login timestamp could not be updated:', error.message);
+      }
+    }
     res.json({
       id: user.id,
       name: user.name,
@@ -190,13 +220,46 @@ router.post('/login', loginIpLimiter, loginUsernameLimiter, loginCompanyLimiter,
   }
 });
 
-router.post('/logout', (req, res) => {
-  req.session.destroy(error => {
-    res.clearCookie(sessionCookieName, { path: '/' });
-    clearCompanyContextCookie(res, { secure: req.secure });
-    if (error) return sendInternalError(res, error, 'Logout failed');
-    res.json({ ok: true });
-  });
+router.post('/logout', async (req, res) => {
+  try {
+    if (req.session?.supportModeSuperAdminId != null) {
+      const controlDb = await getControlDatabase();
+      await controlDb.execute({
+        sql: 'INSERT INTO super_admin_audit (super_admin_id, company_id, action, details) VALUES (?, ?, ?, ?)',
+        args: [Number(req.session.supportModeSuperAdminId), Number(req.session.companyId), 'Support mode ended', 'The company session was signed out.']
+      });
+    }
+    req.session.destroy(error => {
+      res.clearCookie(sessionCookieName, { path: '/' });
+      clearCompanyContextCookie(res, { secure: req.secure });
+      if (error) return sendInternalError(res, error, 'Logout failed');
+      res.json({ ok: true });
+    });
+  } catch (error) {
+    sendInternalError(res, error, 'Logout failed');
+  }
+});
+
+router.post('/end-support', async (req, res) => {
+  const superAdminId = Number(req.session?.supportModeSuperAdminId);
+  const companyId = Number(req.session?.companyId);
+  if (!Number.isSafeInteger(superAdminId) || superAdminId < 1 || !Number.isSafeInteger(companyId) || companyId < 1) {
+    return res.status(400).json({ error: 'No support session is active.' });
+  }
+  try {
+    const controlDb = await getControlDatabase();
+    await controlDb.execute({
+      sql: 'INSERT INTO super_admin_audit (super_admin_id, company_id, action, details) VALUES (?, ?, ?, ?)',
+      args: [superAdminId, companyId, 'Support mode ended', 'The super-admin ended the company support session.']
+    });
+    req.session.destroy(error => {
+      res.clearCookie(sessionCookieName, { path: '/' });
+      if (error) return sendInternalError(res, error, 'Support session could not be ended');
+      return res.json({ ended: true });
+    });
+  } catch (error) {
+    sendInternalError(res, error, 'Support session could not be ended');
+  }
 });
 
 router.post('/change-password', requireAuth, async (req, res) => {
@@ -239,6 +302,10 @@ router.get('/me', requireAuth, async (req, res) => {
       role: user.role,
       must_change_password: mustChangePassword(user),
       company_status: req.companyStatus,
+      supportMode: req.session.supportModeSuperAdminId == null ? null : {
+        companyName: req.session.supportModeCompanyName || req.companyName,
+        expiresAt: new Date(Number(req.session.supportModeExpiresAt)).toISOString()
+      },
       plan: planUsage.plan,
       features: planUsage.features,
       usage: planUsage.usage

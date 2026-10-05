@@ -72,6 +72,30 @@ body {
   font-size: 14px;
   font-weight: 600;
 }
+.support-mode-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 12px 20px 0;
+  padding: 12px 16px;
+  border: 1px solid #9e1b1b;
+  border-radius: var(--radius);
+  background: #b42318;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.support-mode-banner button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(255,255,255,.6);
+  border-radius: 6px;
+  background: #fff;
+  color: #8f1d18;
+  font-weight: 700;
+}
 button { font-family: inherit; cursor: pointer; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid rgba(61,131,97,.22); outline-offset: 2px; }
 input, select, textarea { font-family: inherit; font-size: 14px; }
@@ -449,6 +473,14 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .reimbursement-section-heading h3 { margin: 0; }
 
 /* ---------- Admin ---------- */
+.admin-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; border-bottom: 1px solid var(--line); }
+.admin-tab { min-height: 40px; padding: 0 14px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); font-weight: 650; }
+.admin-tab[aria-selected="true"] { border-bottom-color: var(--green); color: var(--ink); }
+.admin-tab-panel[hidden] { display: none; }
+.plan-usage-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.plan-usage-grid > div { min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: #f8faf9; }
+.plan-usage-grid dt { color: var(--muted); font-size: 12px; }
+.plan-usage-grid dd { margin: 7px 0 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
 .admin-block { background: rgba(255,255,255,.88); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; margin-bottom: 20px; box-shadow: 0 6px 20px rgba(20,33,61,.035); }
 .admin-block h3 { margin: 0 0 14px; font-size: 15px; }
 .admin-block.is-collapsible > h3 { display: flex; align-items: center; gap: 8px; }

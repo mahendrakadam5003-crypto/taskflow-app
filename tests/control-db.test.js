@@ -67,7 +67,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
     const tables = new Set(tablesResult.rows.map(row => row.name));
     const expectedColumns = {
       web_sessions: ['sid', 'data', 'user_id', 'company_id', 'expires_at'],
-      companies: ['id', 'code', 'name', 'owner_name', 'owner_email', 'owner_phone', 'status', 'plan_id', 'trial_ends_at', 'tenant_db_url', 'tenant_db_token_encrypted', 'notes', 'created_at'],
+      companies: ['id', 'code', 'name', 'owner_name', 'owner_email', 'owner_phone', 'status', 'plan_id', 'trial_ends_at', 'tenant_db_url', 'tenant_db_token_encrypted', 'notes', 'created_at', 'max_users_override', 'storage_limit_mb_override', 'last_login_at'],
       plans: ['id', 'name', 'max_users', 'storage_limit_mb', 'features_json', 'price_note', 'is_active'],
       super_admins: ['id', 'name', 'username', 'password_hash', 'token_version', 'created_at'],
       super_admin_sessions: ['sid_hash', 'super_admin_id', 'token_version', 'expires_at', 'created_at'],
@@ -83,7 +83,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       assert.deepEqual(columnResult.rows.map(column => column.name), columns, `expected columns on ${table}`);
     }
     const migrations = await client.execute('SELECT version FROM control_schema_migrations');
-    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, 3, 4, CURRENT_SCHEMA_VERSION]);
+    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, CURRENT_SCHEMA_VERSION]);
   } finally {
     await client.close();
   }

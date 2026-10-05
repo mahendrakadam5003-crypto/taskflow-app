@@ -48,6 +48,8 @@ To provision companies from **Super Admin → Add a company**, configure `TURSO_
 
 The super-admin overview records a usage snapshot for each trial, active, or suspended company at startup and once per day. Snapshots count active users, estimate database size from its SQLite page count, and total locally stored attachment files referenced by that company's records together with the tracked sizes of newly uploaded Telegram attachments. Snapshots older than one year are removed.
 
+At `/superadmin`, operators can search and filter companies, inspect usage history, maintain plans and company-specific limit overrides, add billing notes, and mark notes as paid. Support mode opens the selected company admin session for 30 minutes and is recorded in the super-admin audit log. **Backup now** writes a JSON snapshot of the tenant database under the application root's `backups/` directory; it includes sensitive company records and must be protected and included in the host's persistent backup plan. It does not copy local upload files or Telegram-hosted attachments, so back those up separately.
+
 The local server listens on `127.0.0.1:3000`. Open `http://127.0.0.1:3000` on the PC itself. Local installs do not accept connections from other LAN devices.
 
 On an empty database, the app creates the first admin account with username `admin` and a random one-time password printed to the server console. Set `INITIAL_ADMIN_PASSWORD` before first startup to provide your own initial password instead. The admin must change that password at first login. Existing databases are not reseeded.

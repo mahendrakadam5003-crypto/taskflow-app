@@ -9,7 +9,12 @@ const { createPlanLimits, StorageLimitError } = require('../limits');
 if (originalDbModule) require.cache[dbPath] = originalDbModule;
 else delete require.cache[dbPath];
 
-function createFixture({ storageLimitMb = 1, features = { attendance: true, reimbursements: false, export: true } } = {}) {
+function createFixture({
+  storageLimitMb = 1,
+  maxUsersOverride = null,
+  storageLimitMbOverride = null,
+  features = { attendance: true, reimbursements: false, export: true }
+} = {}) {
   const fileUsage = new Map();
   const controlDb = {
     async execute() {
@@ -22,6 +27,8 @@ function createFixture({ storageLimitMb = 1, features = { attendance: true, reim
           plan_name: 'Test Plan',
           max_users: 2,
           storage_limit_mb: storageLimitMb,
+          max_users_override: maxUsersOverride,
+          storage_limit_mb_override: storageLimitMbOverride,
           features_json: JSON.stringify(features)
         }]
       };
@@ -81,6 +88,16 @@ test('company plan usage is per-tenant database plus tracked uploaded bytes', as
   assert.equal(result.usage.fileBytes, 500_000);
   assert.equal(result.usage.storageBytes, 1_024_288);
   assert.equal(result.usage.warningThreshold, 95);
+});
+
+test('company-specific limit overrides take precedence over plan defaults', async () => {
+  const { limits, req } = createFixture({ maxUsersOverride: 1, storageLimitMbOverride: 2 });
+  const plan = await limits.getPlan(req);
+  assert.equal(plan.maxUsers, 1);
+  assert.equal(plan.storageLimitBytes, 2 * 1024 * 1024);
+  const usage = await limits.getPlanUsage(req);
+  assert.equal(usage.plan.maxUsers, 1);
+  assert.equal(usage.plan.storageLimitBytes, 2 * 1024 * 1024);
 });
 
 test('company storage usage activates the 80 percent warning before the 95 percent warning', async () => {

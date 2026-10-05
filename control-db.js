@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -148,6 +148,14 @@ const CONTROL_MIGRATIONS = [{
     },
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [5] }
   ]
+}, {
+  version: 6,
+  statements: [
+    'ALTER TABLE companies ADD COLUMN max_users_override INTEGER',
+    'ALTER TABLE companies ADD COLUMN storage_limit_mb_override INTEGER',
+    'ALTER TABLE companies ADD COLUMN last_login_at TEXT',
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [6] }
+  ]
 }];
 
 function getControlDatabaseConfig(environment = process.env) {
@@ -194,6 +202,17 @@ async function migrateControlDatabase(client) {
       await client.execute('CREATE INDEX IF NOT EXISTS web_sessions_company_user_idx ON web_sessions(company_id, user_id)');
       await client.execute('CREATE INDEX IF NOT EXISTS web_sessions_expires_at_idx ON web_sessions(expires_at)');
       await client.execute(migration.statements[1]);
+    } else if (migration.version === 6) {
+      const companiesTable = await client.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'companies'");
+      if (companiesTable.rows?.length) {
+        const columns = await client.execute('PRAGMA table_info(companies)');
+        const existingColumns = new Set(columns.rows.map(column => column.name));
+        for (const statement of migration.statements.slice(0, 3)) {
+          const columnName = statement.match(/ADD COLUMN (\w+)/)?.[1];
+          if (columnName && !existingColumns.has(columnName)) await client.execute(statement);
+        }
+      }
+      await client.execute(migration.statements[3]);
     } else {
       await client.batch(migration.statements, 'write');
     }

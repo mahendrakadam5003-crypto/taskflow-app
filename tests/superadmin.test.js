@@ -3,9 +3,13 @@
 const assert = require('node:assert/strict');
 const bcrypt = require('bcryptjs');
 const express = require('express');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const session = require('express-session');
 const { createClient } = require('@libsql/client');
 const { test } = require('node:test');
-const { COOKIE_NAME, createSuperAdminRouter } = require('../routes/superadmin');
+const { COOKIE_NAME, SUPPORT_MODE_DURATION_MS, createSuperAdminPageHandler, createSuperAdminRouter } = require('../routes/superadmin');
 const { migrateControlDatabase } = require('../control-db');
 const { bootstrapConfiguredSuperAdmin, createInitialSuperAdmin } = require('../scripts/create-superadmin');
 
@@ -165,7 +169,7 @@ test('startup bootstrap refuses to overwrite a different super-admin username', 
   assert.equal(rolledBack, true);
 });
 
-async function createApp({ provisionCompany } = {}) {
+async function createApp({ provisionCompany, tenantDatabase, backupDirectory } = {}) {
   const controlDb = createClient({ url: 'file::memory:' });
   await migrateControlDatabase(controlDb);
   const passwordHash = await bcrypt.hash('Superadmin-Test-Password-2026!', 4);
@@ -185,21 +189,43 @@ async function createApp({ provisionCompany } = {}) {
 
   const app = express();
   app.use(express.json());
+  app.use(session({
+    name: 'taskflow.sid.v2',
+    secret: 'superadmin-test-session-secret-at-least-32-chars',
+    resave: false,
+    saveUninitialized: false
+  }));
   app.use('/api/superadmin', createSuperAdminRouter({
     getDatabase: async () => controlDb,
     secureCookies: false,
-    provisionCompany
+    provisionCompany,
+    tenantDatabase,
+    backupDirectory
   }));
+  app.get(['/superadmin', '/superadmin.html'], createSuperAdminPageHandler(path.join(__dirname, 'missing-superadmin.html')));
+  app.get('/support-state', (req, res) => res.json({
+    userId: req.session.userId,
+    role: req.session.role,
+    companyId: req.session.companyId,
+    expiresAt: req.session.supportModeExpiresAt,
+    maxAge: req.session.cookie.maxAge
+  }));
+  app.get('/create-company-session', (req, res) => {
+    req.session.userId = 88;
+    req.session.role = 'admin';
+    req.session.save(error => error ? res.sendStatus(500) : res.json({ ok: true }));
+  });
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
-    res.status(500).json({ error: 'Unexpected test error.' });
+    res.status(500).json({ error: error.message });
   });
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   return {
     controlDb,
     server,
-    baseUrl: `http://127.0.0.1:${server.address().port}/api/superadmin`
+    baseUrl: `http://127.0.0.1:${server.address().port}/api/superadmin`,
+    origin: `http://127.0.0.1:${server.address().port}`
   };
 }
 
@@ -247,6 +273,7 @@ test('super-admin login uses an isolated hashed session and protects the read-on
       trialCount: 0,
       activeCount: 1,
       suspendedCount: 0,
+      cancelledCount: 0,
       totalUsers: 7,
       totalStorageBytes: 6144
     });
@@ -317,7 +344,14 @@ test('super-admin can update company status and plan without changing tenant cre
       body: JSON.stringify({ status: 'suspended', planId: 1 })
     });
     assert.equal(update.status, 200, await update.clone().text());
-    assert.deepEqual(await update.json(), { companyId: 1, status: 'suspended', planId: 1 });
+    assert.deepEqual(await update.json(), {
+      companyId: 1,
+      status: 'suspended',
+      planId: 1,
+      maxUsersOverride: null,
+      storageLimitMbOverride: null,
+      notes: ''
+    });
 
     const company = await controlDb.execute({
       sql: 'SELECT status, plan_id, tenant_db_url, tenant_db_token_encrypted FROM companies WHERE id = ?',
@@ -358,6 +392,149 @@ test('super-admin can update company status and plan without changing tenant cre
   } finally {
     await new Promise(resolve => server.close(resolve));
     await controlDb.close();
+  }
+});
+
+test('super-admin detail, plans, billing, reset, backup, support mode, and company route guard work together', async () => {
+  const backupDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'taskflow-backups-'));
+  const tenantAdmin = { id: 9, name: 'Tenant Admin', username: 'tenant-admin', token_version: 4 };
+  let tenantPasswordHash = 'old-password-hash';
+  let mustChangePassword = 0;
+  const tenantDatabase = {
+    runWithTenant(companyId, callback) {
+      assert.equal(companyId, 1);
+      return callback();
+    },
+    prepare(sql) {
+      return {
+        async get() {
+          if (sql.includes("WHERE role = 'admin'")) return { ...tenantAdmin };
+          if (sql.includes('SELECT username FROM users')) return { username: tenantAdmin.username };
+          return null;
+        },
+        async all() {
+          if (sql.includes('sqlite_master')) return [{ name: 'users' }];
+          if (sql.includes('SELECT * FROM "users"')) return [{ ...tenantAdmin, password_hash: tenantPasswordHash }];
+          return [];
+        },
+        async run(...args) {
+          if (sql.includes('UPDATE users SET password_hash')) {
+            tenantPasswordHash = args[0];
+            mustChangePassword = 1;
+            tenantAdmin.token_version += 1;
+            return { changes: 1 };
+          }
+          return { changes: 1 };
+        }
+      };
+    }
+  };
+  const { controlDb, server, baseUrl, origin } = await createApp({ tenantDatabase, backupDirectory });
+  try {
+    const unauthorizedDetail = await fetch(`${baseUrl}/companies/1`);
+    assert.equal(unauthorizedDetail.status, 401);
+    const unauthorizedPlan = await fetch(`${baseUrl}/plans`);
+    assert.equal(unauthorizedPlan.status, 401);
+
+    const companySessionResponse = await fetch(`${origin}/create-company-session`);
+    const companyCookie = companySessionResponse.headers.get('set-cookie').split(';', 1)[0];
+    const blockedPage = await fetch(`${origin}/superadmin`, { headers: { Cookie: companyCookie } });
+    assert.equal(blockedPage.status, 403);
+    const blockedHtml = await fetch(`${origin}/superadmin.html`, { headers: { Cookie: companyCookie } });
+    assert.equal(blockedHtml.status, 403);
+    const blockedApi = await fetch(`${baseUrl}/overview`, { headers: { Cookie: companyCookie } });
+    assert.equal(blockedApi.status, 401);
+
+    const login = await fetch(`${baseUrl}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'test owner', password: 'Superadmin-Test-Password-2026!' })
+    });
+    const cookie = login.headers.get('set-cookie').split(';', 1)[0];
+    const headers = { Cookie: cookie, 'Content-Type': 'application/json' };
+    const detailResponse = await fetch(`${baseUrl}/companies/1`, { headers });
+    assert.equal(detailResponse.status, 200, await detailResponse.clone().text());
+    const initialDetail = await detailResponse.json();
+    assert.equal(initialDetail.company.name, 'Test Company');
+    assert.equal(initialDetail.usageHistory.length, 1);
+    assert.equal(initialDetail.usageHistory[0].userCount, 7);
+
+    const update = await fetch(`${baseUrl}/companies/1`, {
+      method: 'PUT', headers,
+      body: JSON.stringify({ status: 'active', planId: 2, maxUsersOverride: 8, storageLimitMbOverride: 20, notes: 'Follow up next month.' })
+    });
+    assert.equal(update.status, 200);
+    const updatedDetail = await (await fetch(`${baseUrl}/companies/1`, { headers })).json();
+    assert.equal(updatedDetail.company.maxUsersOverride, 8);
+    assert.equal(updatedDetail.company.storageLimitMbOverride, 20);
+    assert.equal(updatedDetail.company.notes, 'Follow up next month.');
+
+    const planPayload = {
+      name: 'Launch', maxUsers: 12, storageLimitMb: 4096,
+      features: { attendance: true, reimbursements: false, export: true },
+      priceNote: 'INR 1,200 monthly', isActive: true
+    };
+    const createdPlan = await fetch(`${baseUrl}/plans`, { method: 'POST', headers, body: JSON.stringify(planPayload) });
+    assert.equal(createdPlan.status, 201);
+    const planId = (await createdPlan.json()).id;
+    const editedPlan = await fetch(`${baseUrl}/plans/${planId}`, {
+      method: 'PUT', headers,
+      body: JSON.stringify({ ...planPayload, priceNote: 'INR 1,500 monthly' })
+    });
+    assert.equal(editedPlan.status, 200);
+    const plans = await (await fetch(`${baseUrl}/plans`, { headers })).json();
+    assert.equal(plans.plans.find(plan => plan.id === planId).priceNote, 'INR 1,500 monthly');
+
+    const billing = await fetch(`${baseUrl}/companies/1/billing`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ amountText: 'INR 1,500', note: 'October subscription' })
+    });
+    assert.equal(billing.status, 201);
+    const billingId = (await billing.json()).id;
+    const paid = await fetch(`${baseUrl}/companies/1/billing/${billingId}/paid`, { method: 'POST', headers });
+    assert.equal(paid.status, 200);
+    const billingDetail = await (await fetch(`${baseUrl}/companies/1`, { headers })).json();
+    assert.ok(billingDetail.billingNotes[0].markedPaidAt);
+
+    const reset = await fetch(`${baseUrl}/companies/1/reset-admin-password`, { method: 'POST', headers });
+    assert.equal(reset.status, 200);
+    const resetDetails = await reset.json();
+    assert.equal(resetDetails.username, 'tenant-admin');
+    assert.equal(await bcrypt.compare(resetDetails.oneTimePassword, tenantPasswordHash), true);
+    assert.equal(mustChangePassword, 1);
+
+    const backup = await fetch(`${baseUrl}/companies/1/backups`, { method: 'POST', headers });
+    assert.equal(backup.status, 201, await backup.clone().text());
+    const backupDetails = await backup.json();
+    assert.equal(backupDetails.status, 'complete');
+    assert.equal(backupDetails.type, 'tenant-json-v1');
+    const backupFiles = await fs.readdir(backupDirectory);
+    assert.equal(backupFiles.length, 1);
+    const backupPayload = JSON.parse(await fs.readFile(path.join(backupDirectory, backupFiles[0]), 'utf8'));
+    assert.equal(backupPayload.tables.users[0].username, 'tenant-admin');
+
+    const support = await fetch(`${baseUrl}/companies/1/support-mode`, { method: 'POST', headers });
+    assert.equal(support.status, 200, await support.clone().text());
+    const supportData = await support.json();
+    const supportExpiresAt = new Date(supportData.expiresAt).getTime();
+    assert.ok(supportExpiresAt - Date.now() <= SUPPORT_MODE_DURATION_MS);
+    assert.ok(supportExpiresAt - Date.now() > SUPPORT_MODE_DURATION_MS - 5000);
+    const supportCookie = support.headers.get('set-cookie').split(';', 1)[0];
+    const supportState = await (await fetch(`${origin}/support-state`, { headers: { Cookie: supportCookie } })).json();
+    assert.equal(supportState.role, 'admin');
+    assert.equal(supportState.companyId, 1);
+    assert.equal(supportState.expiresAt, supportExpiresAt);
+    assert.ok(supportState.maxAge <= SUPPORT_MODE_DURATION_MS);
+
+    const audit = await controlDb.execute('SELECT action FROM super_admin_audit');
+    const actions = audit.rows.map(row => row.action);
+    for (const action of ['Company configuration updated', 'Plan created', 'Plan updated', 'Billing note added', 'Billing note marked paid', 'Company admin password reset', 'Company backup created', 'Support mode started']) {
+      assert.ok(actions.includes(action), `expected audit record for ${action}`);
+    }
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await controlDb.close();
+    await fs.rm(backupDirectory, { recursive: true, force: true });
   }
 });
 

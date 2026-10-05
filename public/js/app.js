@@ -436,6 +436,7 @@ function autoGrowComment() {
 
 // ---------- state ----------
 let ME = null;
+let supportModeTimer = null;
 let PROJECTS = [];
 let PROJECT_ACTION_ACCESS = {};
 let projectActionRefreshInProgress = false;
@@ -970,6 +971,7 @@ async function enterApp() {
     companyStatusBanner.textContent = messages.join(' ');
     companyStatusBanner.classList.toggle('hidden', messages.length === 0);
   }
+  renderSupportModeBanner();
 
   const features = ME.features || { attendance: true, reimbursements: true, export: true };
   $$('[data-feature]').forEach(element => {
@@ -1030,6 +1032,40 @@ async function enterApp() {
     const loginError = $('#login-error');
     if (loginError) loginError.textContent = `Unable to start the app: ${err.message}`;
   }
+}
+
+function renderSupportModeBanner() {
+  const banner = $('#support-mode-banner');
+  if (!banner) return;
+  if (supportModeTimer) clearInterval(supportModeTimer);
+  const supportMode = ME?.supportMode;
+  if (!supportMode) {
+    banner.classList.add('hidden');
+    return;
+  }
+  const expiresAt = new Date(supportMode.expiresAt).getTime();
+  const countdown = $('#support-mode-countdown');
+  const button = $('#end-support-mode');
+  const updateCountdown = () => {
+    const secondsRemaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+    const minutes = Math.floor(secondsRemaining / 60);
+    const seconds = String(secondsRemaining % 60).padStart(2, '0');
+    countdown.textContent = `${supportMode.companyName} · ${minutes}:${seconds} remaining`;
+    if (secondsRemaining === 0) button.textContent = 'Return to control panel';
+  };
+  updateCountdown();
+  supportModeTimer = setInterval(updateCountdown, 1000);
+  banner.classList.remove('hidden');
+  button.onclick = async () => {
+    button.disabled = true;
+    try {
+      await api('/auth/end-support', { method: 'POST' });
+      window.location.assign('/superadmin');
+    } catch (error) {
+      showAppNotification(error.message);
+      button.disabled = false;
+    }
+  };
 }
 
 // ---------- navigation panels controller ----------
@@ -3258,13 +3294,20 @@ async function renderAdmin() {
           </thead>
           <tbody id="admin-employees-table-body"></tbody>
         </table>
+      </div>
+
+      <div class="admin-block">
+        <h3>Plan &amp; Usage</h3>
+        <div id="plan-usage-panel"></div>
+        <p class="hint">Contact support to discuss plan changes or additional capacity. Payments are handled outside TaskFlow.</p>
       </div>`;
 
     const adminBlocks = Array.from(wrap.querySelectorAll(':scope > .admin-block'));
     const adminTabDefinitions = [
       { id: 'people', label: 'People & access', matches: /Departments|Reimbursement approval|Live tracking|Task check-in|Task work location|Payment History|Team members/i },
       { id: 'attendance', label: 'Attendance', matches: /Office location|Data retention|Attendance device/i },
-      { id: 'workspace', label: 'Workspace', matches: /Project data|Project and task permissions|Activity log/i }
+      { id: 'workspace', label: 'Workspace', matches: /Project data|Project and task permissions|Activity log/i },
+      { id: 'plan-usage', label: 'Plan & Usage', matches: /Plan & Usage/i }
     ];
     const adminTabs = document.createElement('div');
     adminTabs.className = 'admin-tabs';
@@ -3294,6 +3337,20 @@ async function renderAdmin() {
       const panel = adminPanels.find(candidate => candidate.id === `admin-panel-${matchingTab?.id}`);
       if (panel) panel.appendChild(block);
     });
+    const planUsagePanel = $('#plan-usage-panel');
+    if (planUsagePanel) {
+      const plan = ME.plan || {};
+      const usage = ME.usage || {};
+      const limitText = (used, limit, formatter = value => Number(value || 0).toLocaleString()) =>
+        `${formatter(used)} / ${limit == null ? 'Unlimited' : formatter(limit)}`;
+      planUsagePanel.innerHTML = `
+        <dl class="plan-usage-grid">
+          <div><dt>Plan</dt><dd>${escapeHtml(plan.name || 'No plan assigned')}</dd></div>
+          <div><dt>Active users</dt><dd>${escapeHtml(limitText(usage.activeUsers, plan.maxUsers))}</dd></div>
+          <div><dt>Storage</dt><dd>${escapeHtml(limitText(usage.storageBytes, plan.storageLimitBytes, value => formatStorageDisplay(0, value)))}</dd></div>
+          <div><dt>Trial ends</dt><dd>${escapeHtml(usage.trialEndsAt ? new Date(usage.trialEndsAt).toLocaleDateString() : 'Not in trial')}</dd></div>
+        </dl>`;
+    }
     const activateAdminTab = selected => {
       adminTabDefinitions.forEach(tab => {
         const button = $(`#admin-tab-${tab.id}`);

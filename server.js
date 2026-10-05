@@ -63,7 +63,7 @@ const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 
 const { router: authRouter, requireAuth } = require('./routes/auth');
-const { createSuperAdminRouter } = require('./routes/superadmin');
+const { createSuperAdminPageHandler, createSuperAdminRouter } = require('./routes/superadmin');
 const { bootstrapConfiguredSuperAdmin } = require('./scripts/create-superadmin');
 const { registerLegacyCompany } = require('./scripts/register-legacy-company');
 const tasksRouter = require('./routes/tasks');
@@ -343,7 +343,7 @@ app.use((req, res, next) => {
   if (!req.path.startsWith('/api/')
     || req.path === '/api/superadmin'
     || req.path.startsWith('/api/superadmin/')) return next();
-  if (req.method === 'POST' && ['/api/auth/login', '/api/auth/logout'].includes(req.path)) return next();
+  if (req.method === 'POST' && ['/api/auth/login', '/api/auth/logout', '/api/auth/end-support'].includes(req.path)) return next();
   return requireAuth(req, res, next);
 });
 app.use((req, res, next) => {
@@ -351,10 +351,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get('/superadmin', (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  res.sendFile(path.join(__dirname, 'public', 'superadmin.html'));
-});
+app.get(['/superadmin', '/superadmin.html'], createSuperAdminPageHandler(path.join(__dirname, 'public', 'superadmin.html')));
 app.use('/api/superadmin', createSuperAdminRouter({ secureCookies: isRender || isTailscaleServe }));
 
 app.use('/api/auth', authRouter);

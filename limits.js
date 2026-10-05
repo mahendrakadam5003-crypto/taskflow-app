@@ -53,7 +53,8 @@ function createPlanLimits({
     const isLegacy = String(companyId) === LEGACY_TENANT_ID;
     const companyCode = String(environment.LEGACY_COMPANY_CODE || 'existing-company').trim().toLowerCase();
     const result = await controlDb.execute({
-      sql: `SELECT c.id AS company_id, c.code, c.trial_ends_at, p.id AS plan_id, p.name AS plan_name,
+        sql: `SELECT c.id AS company_id, c.code, c.trial_ends_at, c.max_users_override,
+          c.storage_limit_mb_override, p.id AS plan_id, p.name AS plan_name,
           p.max_users, p.storage_limit_mb, p.features_json
         FROM companies c LEFT JOIN plans p ON p.id = c.plan_id
         WHERE ${isLegacy ? 'c.code = ?' : 'c.id = ?'} LIMIT 1`,
@@ -64,20 +65,23 @@ function createPlanLimits({
       if (isLegacy) return null;
       throw new Error(`No plan information is registered for company ID ${companyId}.`);
     }
+    const maxUsers = row.max_users_override == null
+      ? (row.max_users == null ? null : Number(row.max_users)) : Number(row.max_users_override);
+    const storageLimitMb = row.storage_limit_mb_override == null
+      ? row.storage_limit_mb : row.storage_limit_mb_override;
+    if (maxUsers !== null && (!Number.isSafeInteger(maxUsers) || maxUsers < 0)) {
+      throw new Error('The assigned company plan has an invalid user limit.');
+    }
     if (row.plan_id == null) {
       return {
         companyId: Number(row.company_id),
         companyCode: row.code,
         name: null,
         trialEndsAt: row.trial_ends_at || null,
-        maxUsers: null,
-        storageLimitBytes: null,
+        maxUsers,
+        storageLimitBytes: toBytes(storageLimitMb),
         features: ENABLED_FEATURES
       };
-    }
-    const maxUsers = row.max_users == null ? null : Number(row.max_users);
-    if (maxUsers !== null && (!Number.isSafeInteger(maxUsers) || maxUsers < 0)) {
-      throw new Error('The assigned company plan has an invalid user limit.');
     }
     return {
       companyId: Number(row.company_id),
@@ -86,7 +90,7 @@ function createPlanLimits({
       name: row.plan_name,
       trialEndsAt: row.trial_ends_at || null,
       maxUsers,
-      storageLimitBytes: toBytes(row.storage_limit_mb),
+      storageLimitBytes: toBytes(storageLimitMb),
       features: parseFeatures(row.features_json)
     };
   }

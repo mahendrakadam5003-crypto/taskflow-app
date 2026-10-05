@@ -10,6 +10,9 @@ const logoutButton = document.getElementById('logout-button');
 const companyForm = document.getElementById('company-form');
 const companyFormError = document.getElementById('company-form-error');
 const createdCompanyDetails = document.getElementById('created-company-details');
+let overviewData = null;
+let activeCompanyDetail = null;
+let planRecords = [];
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -72,7 +75,7 @@ function formatBytes(value) {
 function renderSummary(summary) {
   const cards = [
     { label: 'Registered companies', value: summary.companyCount, caption: 'In the control database' },
-    { label: 'Active companies', value: summary.activeCount, caption: `${summary.trialCount} currently in trial` },
+    { label: 'Companies by status', value: summary.activeCount, caption: `${summary.trialCount} trial · ${summary.suspendedCount} suspended · ${summary.cancelledCount} cancelled` },
     { label: 'Recorded users', value: summary.totalUsers.toLocaleString(), caption: 'Latest available snapshots' },
     { label: 'Recorded storage', value: formatBytes(summary.totalStorageBytes), caption: 'Database and local files; excludes Telegram' }
   ];
@@ -85,47 +88,190 @@ function renderSummary(summary) {
 }
 
 function renderCompanies(companies, plans) {
-  const emptyState = document.getElementById('empty-state');
-  const table = document.getElementById('company-table-wrap');
-  document.getElementById('company-total').textContent = `${companies.length} ${companies.length === 1 ? 'company' : 'companies'}`;
-  emptyState.classList.toggle('hidden', companies.length !== 0);
-  table.classList.toggle('hidden', companies.length === 0);
-  document.getElementById('company-rows').innerHTML = companies.map(company => {
-    const usageAvailable = company.userCount !== null;
-    const storage = usageAvailable ? formatBytes(company.dbBytes + company.filesBytes) : '—';
-    const statusOptions = ['trial', 'active', 'suspended', 'cancelled'].map(status =>
-      `<option value="${status}"${company.status === status ? ' selected' : ''}>${status[0].toUpperCase()}${status.slice(1)}</option>`
-    ).join('');
-    const planOptions = [
-      `<option value=""${company.planId === null ? ' selected' : ''}>No plan</option>`,
-      ...plans.map(plan => {
-        const userLimit = plan.maxUsers === null ? 'Unlimited users' : `${plan.maxUsers} users`;
-        const storageLimit = plan.storageLimitMb === null
-          ? 'Unlimited storage'
-          : `${formatBytes(plan.storageLimitMb * 1024 * 1024)} storage`;
-        return `<option value="${plan.id}"${company.planId === plan.id ? ' selected' : ''}>${escapeHtml(`${plan.name} (${userLimit}, ${storageLimit})`)}</option>`;
-      })
-    ].join('');
-    return `<tr>
-      <td><div class="company-name">${escapeHtml(company.name)}</div><div class="company-code">${escapeHtml(company.code)}</div></td>
-      <td><select class="company-setting" data-company-status="${company.id}" aria-label="Status for ${escapeHtml(company.name)}">${statusOptions}</select></td>
-      <td><select class="company-setting" data-company-plan="${company.id}" aria-label="Plan for ${escapeHtml(company.name)}">${planOptions}</select></td>
-      <td>${usageAvailable ? escapeHtml(company.userCount.toLocaleString()) : '—'}</td>
-      <td>${escapeHtml(storage)}</td>
-      <td><button class="button button-quiet company-save" type="button" data-company-save="${company.id}">Save</button></td>
-    </tr>`;
-  }).join('');
+  overviewData = overviewData || { companies, plans };
   const planSelect = document.getElementById('new-company-plan');
   const currentPlanId = planSelect.value;
   planSelect.innerHTML = plans.map(plan =>
     `<option value="${plan.id}">${escapeHtml(plan.name)}${plan.maxUsers === null ? ' — unlimited users' : ` — ${plan.maxUsers} users`}</option>`
   ).join('');
   if (plans.some(plan => String(plan.id) === currentPlanId)) planSelect.value = currentPlanId;
+  getFilteredCompanies();
+}
+
+function formatDate(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString([], { dateStyle: 'medium', timeStyle: value.includes(':') ? 'short' : undefined });
+}
+
+function showControlPage(page) {
+  document.getElementById('control-overview-page').classList.toggle('hidden', page !== 'overview');
+  document.getElementById('plans-page').classList.toggle('hidden', page !== 'plans');
+  document.getElementById('company-detail-page').classList.toggle('hidden', page !== 'detail');
+  document.querySelectorAll('[data-admin-page]').forEach(button => {
+    button.classList.toggle('active', button.dataset.adminPage === page || (page === 'detail' && button.dataset.adminPage === 'overview'));
+  });
+}
+
+function getFilteredCompanies() {
+  if (!overviewData) return [];
+  const search = document.getElementById('company-search').value.trim().toLowerCase();
+  const status = document.getElementById('company-status-filter').value;
+  const companies = overviewData.companies.filter(company => {
+    const matchesSearch = !search || `${company.name} ${company.code} ${company.ownerName || ''}`.toLowerCase().includes(search);
+    return matchesSearch && (!status || company.status === status);
+  });
+  const empty = document.getElementById('empty-state');
+  const table = document.getElementById('company-table-wrap');
+  document.getElementById('company-total').textContent = `${companies.length} ${companies.length === 1 ? 'company' : 'companies'}`;
+  empty.classList.toggle('hidden', companies.length !== 0 || overviewData.companies.length === 0);
+  table.classList.toggle('hidden', companies.length === 0);
+  if (companies.length === 0) {
+    empty.classList.remove('hidden');
+    const hasFilters = Boolean(search || status);
+    empty.querySelector('h3').textContent = hasFilters ? 'No matching companies' : 'No companies registered yet';
+    empty.querySelector('p').textContent = hasFilters
+      ? 'Adjust the search or status filter to see more companies.'
+      : 'Your existing company appears here once its workspace is registered in the control database.';
+  }
+  renderCompanyRows(companies);
+  return companies;
+}
+
+function renderCompanyRows(companies) {
+  const rows = document.getElementById('company-rows');
+  rows.innerHTML = companies.map(company => {
+    const usageAvailable = company.userCount !== null;
+    const storage = usageAvailable ? formatBytes(company.dbBytes + company.filesBytes) : '—';
+    const userLimit = company.maxUsers === null ? 'unlimited' : company.maxUsers.toLocaleString();
+    const storageLimit = company.storageLimitMb === null ? 'unlimited' : formatBytes(company.storageLimitMb * 1024 * 1024);
+    return `<tr>
+      <td><div class="company-name">${escapeHtml(company.name)}</div><div class="company-code">${escapeHtml(company.code)}</div></td>
+      <td>${escapeHtml(company.planName || 'No plan')}</td>
+      <td><span class="status status-${escapeHtml(company.status)}">${escapeHtml(company.status)}</span></td>
+      <td>${usageAvailable ? `${escapeHtml(company.userCount.toLocaleString())} / ${escapeHtml(userLimit)}` : '—'}</td>
+      <td>${escapeHtml(storage)} / ${escapeHtml(storageLimit)}</td>
+      <td>${escapeHtml(formatDate(company.trialEndsAt))}</td>
+      <td>${escapeHtml(formatDate(company.lastLoginAt))}</td>
+      <td><button class="button button-quiet company-open" type="button" data-company-open="${company.id}" aria-label="Open ${escapeHtml(company.name)}">Manage</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderPlanRows() {
+  document.getElementById('plan-rows').innerHTML = planRecords.map(plan => `
+    <article class="plan-row">
+      <div><h3>${escapeHtml(plan.name)}${plan.isActive ? '' : ' <span class="status status-cancelled">Inactive</span>'}</h3>
+        <p>${plan.maxUsers === null ? 'Unlimited users' : `${plan.maxUsers} users`} · ${plan.storageLimitMb === null ? 'Unlimited storage' : `${formatBytes(plan.storageLimitMb * 1024 * 1024)} storage`}</p>
+        <p>${escapeHtml(plan.priceNote || 'No price note')}</p>
+        <p class="plan-feature-list">${PLAN_FEATURE_NAMES.filter(name => plan.features[name]).map(escapeHtml).join(' · ') || 'No included features'}</p>
+      </div>
+      <button class="button button-quiet" type="button" data-plan-edit="${plan.id}">Edit</button>
+    </article>`).join('');
+}
+
+const PLAN_FEATURE_NAMES = ['attendance', 'reimbursements', 'export'];
+
+async function loadPlans() {
+  const result = await request('plans');
+  planRecords = result.plans;
+  renderPlanRows();
+}
+
+function resetPlanForm() {
+  document.getElementById('plan-form').reset();
+  document.getElementById('plan-id').value = '';
+  document.getElementById('plan-active').checked = true;
+  document.getElementById('plan-form-heading').textContent = 'Create plan';
+  document.getElementById('plan-cancel').classList.add('hidden');
+}
+
+function renderUsageHistory(history) {
+  const canvas = document.getElementById('usage-history-chart');
+  const empty = document.getElementById('usage-history-empty');
+  empty.classList.toggle('hidden', history.length > 0);
+  canvas.classList.toggle('hidden', history.length === 0);
+  if (!history.length) return;
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(320, canvas.clientWidth);
+  const height = 180;
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  const context = canvas.getContext('2d');
+  context.scale(ratio, ratio);
+  context.clearRect(0, 0, width, height);
+  const padding = { top: 15, right: 16, bottom: 28, left: 16 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const maxUsers = Math.max(1, ...history.map(item => item.userCount));
+  const maxStorage = Math.max(1, ...history.map(item => item.dbBytes + item.filesBytes));
+  const drawLine = (values, maximum, color) => {
+    context.beginPath();
+    context.strokeStyle = color;
+    context.lineWidth = 2;
+    values.forEach((value, index) => {
+      const x = padding.left + (history.length === 1 ? plotWidth / 2 : index * plotWidth / (history.length - 1));
+      const y = padding.top + plotHeight - (value / maximum) * plotHeight;
+      if (index === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
+    });
+    context.stroke();
+  };
+  drawLine(history.map(item => item.userCount), maxUsers, '#f4b942');
+  drawLine(history.map(item => item.dbBytes + item.filesBytes), maxStorage, '#45d6c4');
+  context.fillStyle = '#91a0b4';
+  context.font = '11px Inter, sans-serif';
+  const firstDate = new Date(history[0].takenAt).toLocaleDateString();
+  const lastDate = new Date(history.at(-1).takenAt).toLocaleDateString();
+  context.fillText(firstDate, padding.left, height - 7);
+  context.textAlign = 'right';
+  context.fillText(lastDate, width - padding.right, height - 7);
+}
+
+function renderCompanyRecords(detail) {
+  document.getElementById('backup-list').innerHTML = detail.backups.length
+    ? detail.backups.map(backup => `<div class="record-row"><div><strong>${escapeHtml(backup.type)}</strong><small>${escapeHtml(backup.location)} · ${escapeHtml(formatBytes(backup.sizeBytes))}</small></div><span>${escapeHtml(formatDate(backup.createdAt))} · ${escapeHtml(backup.status)}</span></div>`).join('')
+    : '<p class="muted">No backups have been recorded.</p>';
+  document.getElementById('billing-list').innerHTML = detail.billingNotes.length
+    ? detail.billingNotes.map(note => `<div class="record-row"><div><strong>${escapeHtml(note.amountText || 'Amount not specified')}</strong><small>${escapeHtml(note.note)}</small></div>${note.markedPaidAt
+      ? `<span>Paid ${escapeHtml(formatDate(note.markedPaidAt))}</span>`
+      : `<button class="button button-quiet" type="button" data-billing-paid="${note.id}">Mark as paid</button>`}</div>`).join('')
+    : '<p class="muted">No billing notes recorded.</p>';
+}
+
+async function loadCompanyDetail(companyId) {
+  document.getElementById('company-detail-error').classList.add('hidden');
+  try {
+    if (!planRecords.length) await loadPlans();
+    const detail = await request(`companies/${encodeURIComponent(companyId)}`);
+    activeCompanyDetail = detail;
+    const company = detail.company;
+    document.getElementById('company-detail-heading').textContent = company.name;
+    document.getElementById('company-detail-meta').textContent = `${company.code} · ${company.ownerEmail || 'No owner email'} · Trial ends ${formatDate(company.trialEndsAt)} · Last login ${formatDate(company.lastLoginAt)}`;
+    const statusSelect = document.getElementById('detail-status');
+    statusSelect.innerHTML = ['trial', 'active', 'suspended', 'cancelled'].map(status =>
+      `<option value="${status}"${company.status === status ? ' selected' : ''}>${status[0].toUpperCase()}${status.slice(1)}</option>`).join('');
+    const planSelect = document.getElementById('detail-plan');
+    const selectablePlans = planRecords.filter(plan => plan.isActive || plan.id === company.planId);
+    planSelect.innerHTML = `<option value="">No plan</option>${selectablePlans.map(plan =>
+      `<option value="${plan.id}"${company.planId === plan.id ? ' selected' : ''}>${escapeHtml(plan.name)}</option>`).join('')}`;
+    document.getElementById('detail-users-override').value = company.maxUsersOverride ?? '';
+    document.getElementById('detail-storage-override').value = company.storageLimitMbOverride ?? '';
+    document.getElementById('detail-notes').value = company.notes || '';
+    renderUsageHistory(detail.usageHistory);
+    renderCompanyRecords(detail);
+    showControlPage('detail');
+  } catch (error) {
+    const target = document.getElementById('company-detail-error');
+    target.textContent = error.message;
+    target.classList.remove('hidden');
+  }
 }
 
 async function loadOverview() {
   try {
     const data = await request('overview');
+    overviewData = data;
     document.getElementById('admin-name').textContent = data.admin.name;
     renderSummary(data.summary);
     renderCompanies(data.companies, data.plans);
@@ -138,6 +284,208 @@ async function loadOverview() {
     showOverview();
   }
 }
+
+document.querySelectorAll('[data-admin-page]').forEach(button => {
+  button.addEventListener('click', async () => {
+    if (button.dataset.adminPage === 'plans') {
+      showControlPage('plans');
+      try { await loadPlans(); } catch (error) {
+        overviewError.textContent = error.message;
+        overviewError.classList.remove('hidden');
+      }
+      return;
+    }
+    showControlPage('overview');
+    document.getElementById('company-form').scrollIntoView({ block: 'start', behavior: 'smooth' });
+  });
+});
+
+document.getElementById('company-search').addEventListener('input', getFilteredCompanies);
+document.getElementById('company-status-filter').addEventListener('change', getFilteredCompanies);
+
+document.getElementById('company-rows').addEventListener('click', event => {
+  const button = event.target.closest('[data-company-open]');
+  if (button) loadCompanyDetail(Number(button.dataset.companyOpen));
+});
+
+document.getElementById('company-detail-back').addEventListener('click', () => {
+  showControlPage('overview');
+  document.getElementById('company-search').focus();
+});
+
+document.getElementById('plan-rows').addEventListener('click', event => {
+  const button = event.target.closest('[data-plan-edit]');
+  if (!button) return;
+  const plan = planRecords.find(item => item.id === Number(button.dataset.planEdit));
+  if (!plan) return;
+  document.getElementById('plan-id').value = plan.id;
+  document.getElementById('plan-name').value = plan.name;
+  document.getElementById('plan-users').value = plan.maxUsers ?? '';
+  document.getElementById('plan-storage').value = plan.storageLimitMb ?? '';
+  document.getElementById('plan-attendance').checked = plan.features.attendance === true;
+  document.getElementById('plan-reimbursements').checked = plan.features.reimbursements === true;
+  document.getElementById('plan-export').checked = plan.features.export === true;
+  document.getElementById('plan-price-note').value = plan.priceNote || '';
+  document.getElementById('plan-active').checked = plan.isActive;
+  document.getElementById('plan-form-heading').textContent = `Edit ${plan.name}`;
+  document.getElementById('plan-cancel').classList.remove('hidden');
+  document.getElementById('plan-name').focus();
+});
+
+document.getElementById('plan-cancel').addEventListener('click', resetPlanForm);
+
+document.getElementById('plan-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const planId = document.getElementById('plan-id').value;
+  const body = {
+    name: document.getElementById('plan-name').value,
+    maxUsers: document.getElementById('plan-users').value || null,
+    storageLimitMb: document.getElementById('plan-storage').value || null,
+    features: {
+      attendance: document.getElementById('plan-attendance').checked,
+      reimbursements: document.getElementById('plan-reimbursements').checked,
+      export: document.getElementById('plan-export').checked
+    },
+    priceNote: document.getElementById('plan-price-note').value,
+    isActive: document.getElementById('plan-active').checked
+  };
+  const errorTarget = document.getElementById('plan-form-error');
+  errorTarget.classList.add('hidden');
+  try {
+    await request(planId ? `plans/${encodeURIComponent(planId)}` : 'plans', {
+      method: planId ? 'PUT' : 'POST', body: JSON.stringify(body)
+    });
+    resetPlanForm();
+    await Promise.all([loadPlans(), loadOverview()]);
+    showControlPage('plans');
+    managementMessage.textContent = 'Plan saved.';
+    managementMessage.classList.remove('hidden');
+  } catch (error) {
+    errorTarget.textContent = error.message;
+    errorTarget.classList.remove('hidden');
+  }
+});
+
+document.getElementById('company-detail-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!activeCompanyDetail) return;
+  const company = activeCompanyDetail.company;
+  const status = document.getElementById('detail-status').value;
+  if (['suspended', 'cancelled'].includes(status) && status !== company.status
+    && !window.confirm(`Change ${company.name} to ${status}?`)) return;
+  const parseLimit = value => value === '' ? null : Number(value);
+  const form = event.currentTarget;
+  const submit = form.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  try {
+    await request(`companies/${company.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        status,
+        planId: document.getElementById('detail-plan').value ? Number(document.getElementById('detail-plan').value) : null,
+        maxUsersOverride: parseLimit(document.getElementById('detail-users-override').value),
+        storageLimitMbOverride: parseLimit(document.getElementById('detail-storage-override').value),
+        notes: document.getElementById('detail-notes').value
+      })
+    });
+    managementMessage.textContent = 'Company settings saved.';
+    managementMessage.classList.remove('hidden');
+    await Promise.all([loadOverview(), loadCompanyDetail(company.id)]);
+  } catch (error) {
+    const target = document.getElementById('company-detail-error');
+    target.textContent = error.message;
+    target.classList.remove('hidden');
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+document.getElementById('company-reset-admin').addEventListener('click', async () => {
+  if (!activeCompanyDetail || !window.confirm('Reset the company admin password? The current admin sessions will be signed out.')) return;
+  const button = document.getElementById('company-reset-admin');
+  button.disabled = true;
+  try {
+    const result = await request(`companies/${activeCompanyDetail.company.id}/reset-admin-password`, { method: 'POST' });
+    const target = document.getElementById('company-one-time-password');
+    target.innerHTML = `<strong>One-time admin login</strong><p>Username: <code>${escapeHtml(result.username)}</code></p><p>Password: <code>${escapeHtml(result.oneTimePassword)}</code></p><p>The administrator must change this password after signing in.</p><button class="button button-quiet" type="button" id="dismiss-reset-password">I have saved these details</button>`;
+    target.classList.remove('hidden');
+    document.getElementById('dismiss-reset-password').addEventListener('click', () => {
+      target.replaceChildren();
+      target.classList.add('hidden');
+    }, { once: true });
+  } catch (error) {
+    const target = document.getElementById('company-detail-error');
+    target.textContent = error.message;
+    target.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('company-support-mode').addEventListener('click', async event => {
+  if (!activeCompanyDetail || !window.confirm(`Start a 30-minute support session for ${activeCompanyDetail.company.name}?`)) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await request(`companies/${activeCompanyDetail.company.id}/support-mode`, { method: 'POST' });
+    window.location.assign('/');
+  } catch (error) {
+    const target = document.getElementById('company-detail-error');
+    target.textContent = error.message;
+    target.classList.remove('hidden');
+    button.disabled = false;
+  }
+});
+
+document.getElementById('company-backup-now').addEventListener('click', async event => {
+  if (!activeCompanyDetail || !window.confirm(`Create a backup for ${activeCompanyDetail.company.name}?`)) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await request(`companies/${activeCompanyDetail.company.id}/backups`, { method: 'POST' });
+    await loadCompanyDetail(activeCompanyDetail.company.id);
+  } catch (error) {
+    const target = document.getElementById('company-detail-error');
+    target.textContent = error.message;
+    target.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('billing-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!activeCompanyDetail) return;
+  try {
+    await request(`companies/${activeCompanyDetail.company.id}/billing`, {
+      method: 'POST',
+      body: JSON.stringify({
+        amountText: document.getElementById('billing-amount').value,
+        note: document.getElementById('billing-note').value
+      })
+    });
+    event.currentTarget.reset();
+    await loadCompanyDetail(activeCompanyDetail.company.id);
+  } catch (error) {
+    const target = document.getElementById('company-detail-error');
+    target.textContent = error.message;
+    target.classList.remove('hidden');
+  }
+});
+
+document.getElementById('billing-list').addEventListener('click', async event => {
+  const button = event.target.closest('[data-billing-paid]');
+  if (!button || !activeCompanyDetail) return;
+  button.disabled = true;
+  try {
+    await request(`companies/${activeCompanyDetail.company.id}/billing/${button.dataset.billingPaid}/paid`, { method: 'POST' });
+    await loadCompanyDetail(activeCompanyDetail.company.id);
+  } catch (error) {
+    const target = document.getElementById('company-detail-error');
+    target.textContent = error.message;
+    target.classList.remove('hidden');
+  }
+});
 
 document.getElementById('company-rows').addEventListener('click', async event => {
   const button = event.target.closest('[data-company-save]');
