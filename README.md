@@ -46,6 +46,8 @@ The existing-company registry link runs automatically after app startup. To invo
 
 The company sign-in accepts an optional company code. Leave it blank to continue using the existing workspace and credentials as before, or enter `existing-company` to sign into that workspace through the registered company route. The signed company selection stays with the session, and requests are routed to that company's tenant database. New companies use their own registered database and code. In local multi-tenant tests, registered tenants use separate `tenants/<company-code>.db` files. Run `npm run migrate:all` to lazily initialize the legacy database and every registered trial, active, or suspended tenant database.
 
+The super-admin overview records a usage snapshot for each trial, active, or suspended company at startup and once per day. Snapshots count active users, estimate database size from its SQLite page count, and total locally stored attachment files referenced by that company's records. Telegram-hosted attachments are stored and measured outside TaskFlow, so their file sizes are not included. Snapshots older than one year are removed.
+
 The local server listens on `127.0.0.1:3000`. Open `http://127.0.0.1:3000` on the PC itself. Local installs do not accept connections from other LAN devices.
 
 On an empty database, the app creates the first admin account with username `admin` and a random one-time password printed to the server console. Set `INITIAL_ADMIN_PASSWORD` before first startup to provide your own initial password instead. The admin must change that password at first login. Existing databases are not reseeded.

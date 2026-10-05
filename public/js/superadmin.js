@@ -70,7 +70,7 @@ function renderSummary(summary) {
     { label: 'Registered companies', value: summary.companyCount, caption: 'In the control database' },
     { label: 'Active companies', value: summary.activeCount, caption: `${summary.trialCount} currently in trial` },
     { label: 'Recorded users', value: summary.totalUsers.toLocaleString(), caption: 'Latest available snapshots' },
-    { label: 'Recorded storage', value: formatBytes(summary.totalStorageBytes), caption: 'Database and uploaded files' }
+    { label: 'Recorded storage', value: formatBytes(summary.totalStorageBytes), caption: 'Database and local files; excludes Telegram' }
   ];
   document.getElementById('summary-cards').innerHTML = cards.map(card => `
     <article class="summary-card">
