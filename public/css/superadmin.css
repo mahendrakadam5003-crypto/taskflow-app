@@ -135,6 +135,15 @@ td { padding: 16px 18px; border-top: 1px solid var(--line); color: #d7e0eb; font
 .seat-progress span { display: block; height: 100%; border-radius: inherit; background: #45d6c4; }
 .seat-progress.warning span { background: #f4b942; }
 .seat-progress.danger span { background: #ff7777; }
+.status-overdue { background: rgba(255, 131, 131, .12); color: #ffadad; }
+.status-paid { background: rgba(69, 214, 196, .1); color: #6de0d0; }
+.billing-filters { display: flex; justify-content: flex-end; padding: 10px 18px 14px; }
+.billing-filters label { display: grid; gap: 6px; color: #aebccc; font-size: 11px; }
+.billing-filters .company-setting { min-width: 180px; max-width: none; }
+.table-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; padding: 14px 18px; color: #9eacbd; font-size: 11px; }
+.table-pagination .button { min-height: 32px; }
+.billing-invoices, .billing-requests { margin-bottom: 18px; }
+.billing-request-list { padding: 0 22px; }
 .detail-panel textarea { min-height: 100px; resize: vertical; }
 .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 18px 0; }
 .detail-panel, .plan-form { min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: rgba(23, 36, 56, .76); }

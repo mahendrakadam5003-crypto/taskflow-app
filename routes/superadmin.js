@@ -462,6 +462,100 @@ function createSuperAdminRouter({
     return res.json({ invoices: result.rows || [] });
   }));
 
+  router.get('/invoices', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    if (req.query.status !== undefined && typeof req.query.status !== 'string') {
+      return res.status(400).json({ error: 'Choose a valid invoice status filter.' });
+    }
+    const status = req.query.status === undefined ? 'all' : req.query.status;
+    const filters = {
+      all: "i.status IN ('open', 'paid')",
+      open: "i.status = 'open' AND (i.due_at IS NULL OR julianday(i.due_at) >= julianday('now'))",
+      overdue: "i.status = 'open' AND julianday(i.due_at) < julianday('now')",
+      paid: "i.status = 'paid'"
+    };
+    if (!Object.hasOwn(filters, status)) return res.status(400).json({ error: 'Choose a valid invoice status filter.' });
+    const requestedPage = req.query.page === undefined ? 1
+      : typeof req.query.page === 'string' ? Number(req.query.page) : Number.NaN;
+    const pageSize = req.query.pageSize === undefined ? 25
+      : typeof req.query.pageSize === 'string' ? Number(req.query.pageSize) : Number.NaN;
+    if (!Number.isSafeInteger(requestedPage) || requestedPage < 1
+      || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+      return res.status(400).json({ error: 'Choose a valid invoice page and page size (1–100).' });
+    }
+    const controlDb = await getDatabase();
+    const countResult = await controlDb.execute(`SELECT COUNT(*) AS total_count FROM invoices i WHERE ${filters[status]}`);
+    const totalCount = Number(countResult.rows?.[0]?.total_count || 0);
+    if (!Number.isSafeInteger(totalCount) || totalCount < 0) throw new Error('The invoice count is invalid.');
+    const pageCount = Math.max(1, Math.ceil(totalCount / pageSize));
+    const page = Math.min(requestedPage, pageCount);
+    const result = await controlDb.execute({
+      sql: `SELECT i.id, i.company_id, c.name AS company_name, c.code AS company_code,
+          i.number, i.period_start, i.period_end, i.seats, i.unit_price_paise, i.subtotal_paise,
+          i.discount_paise, i.tax_paise, i.total_paise, i.currency, i.tax_pct, i.due_at,
+          i.paid_at, i.created_at,
+          CASE WHEN i.status = 'open' AND julianday(i.due_at) < julianday('now')
+            THEN 'overdue' ELSE i.status END AS status
+        FROM invoices i JOIN companies c ON c.id = i.company_id
+        WHERE ${filters[status]}
+        ORDER BY i.created_at DESC, i.id DESC LIMIT ? OFFSET ?`,
+      args: [pageSize, (page - 1) * pageSize]
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      invoices: (result.rows || []).map(row => ({
+        id: Number(row.id),
+        companyId: Number(row.company_id),
+        companyName: row.company_name,
+        companyCode: row.company_code,
+        number: row.number,
+        periodStart: row.period_start,
+        periodEnd: row.period_end,
+        seats: Number(row.seats),
+        unitPricePaise: Number(row.unit_price_paise),
+        subtotalPaise: Number(row.subtotal_paise),
+        discountPaise: Number(row.discount_paise),
+        taxPaise: Number(row.tax_paise),
+        totalPaise: Number(row.total_paise),
+        currency: row.currency,
+        taxPct: Number(row.tax_pct),
+        dueAt: row.due_at,
+        paidAt: row.paid_at,
+        createdAt: row.created_at,
+        status: row.status
+      })),
+      page,
+      pageSize,
+      pageCount,
+      totalCount
+    });
+  }));
+
+  router.get('/billing-requests', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const controlDb = await getDatabase();
+    const result = await controlDb.execute(`SELECT r.id, r.company_id, c.name AS company_name,
+        c.code AS company_code, r.requested_seats, r.requested_billing_cycle, r.created_at
+      FROM subscription_change_requests r
+      JOIN companies c ON c.id = r.company_id
+      WHERE r.status = 'pending'
+      ORDER BY r.created_at ASC, r.id ASC`);
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      requests: (result.rows || []).map(row => ({
+        id: Number(row.id),
+        companyId: Number(row.company_id),
+        companyName: row.company_name,
+        companyCode: row.company_code,
+        seats: Number(row.requested_seats),
+        billingCycle: row.requested_billing_cycle,
+        createdAt: row.created_at
+      }))
+    });
+  }));
+
   router.post('/companies/:companyId/invoices/:invoiceId/paid', handle(async (req, res) => {
     const admin = await getAuthenticatedAdmin(req);
     if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });

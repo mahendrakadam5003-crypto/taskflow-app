@@ -17,6 +17,9 @@ let demoRequests = [];
 let livePricing = null;
 let companyQuickFilter = 'all';
 let companySort = { key: 'name', direction: 1 };
+let invoicePage = 1;
+let invoicePageCount = 1;
+let invoiceStatusFilter = 'all';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -178,6 +181,96 @@ function showControlPage(page) {
   });
 }
 
+function renderCrossCompanyInvoices(result) {
+  const rows = document.getElementById('invoice-rows');
+  const invoices = result.invoices;
+  document.getElementById('invoice-table-wrap').classList.toggle('hidden', invoices.length === 0);
+  const empty = document.getElementById('invoice-empty');
+  empty.classList.toggle('hidden', invoices.length !== 0);
+  if (invoices.length === 0) {
+    const label = invoiceStatusFilter === 'all' ? '' : ` matching “${invoiceStatusFilter}”`;
+    empty.querySelector('h3').textContent = 'No invoices found';
+    empty.querySelector('p').textContent = `There are no invoices${label} yet. New invoices appear when billing is issued.`;
+  }
+  rows.innerHTML = invoices.map(invoice => {
+    const canMarkPaid = invoice.status === 'open' || invoice.status === 'overdue';
+    const statusLabel = invoice.status === 'overdue'
+      ? 'Overdue'
+      : `${invoice.status[0].toUpperCase()}${invoice.status.slice(1)}`;
+    return `<tr>
+      <td><strong>${escapeHtml(invoice.companyName)}</strong><div class="company-code">${escapeHtml(invoice.companyCode)}</div></td>
+      <td>${escapeHtml(invoice.number || `Invoice #${invoice.id}`)}</td>
+      <td><span class="status status-${escapeHtml(invoice.status)}">${escapeHtml(statusLabel)}</span></td>
+      <td>${escapeHtml(formatPaise(invoice.totalPaise, invoice.currency))}</td>
+      <td>${escapeHtml(formatDate(invoice.dueAt))}</td>
+      <td>${escapeHtml(formatDate(invoice.createdAt))}</td>
+      <td>${canMarkPaid
+        ? `<button class="button button-quiet" type="button" data-cross-invoice-paid="${invoice.id}" data-company-id="${invoice.companyId}" data-company-name="${escapeHtml(invoice.companyName)}" data-invoice-number="${escapeHtml(invoice.number || `Invoice #${invoice.id}`)}">Mark paid</button>`
+        : '—'}</td>
+    </tr>`;
+  }).join('');
+  invoicePage = result.page;
+  invoicePageCount = result.pageCount;
+  document.getElementById('invoice-page-status').textContent =
+    `Page ${invoicePage} of ${invoicePageCount} · ${Number(result.totalCount).toLocaleString()} invoices`;
+  document.getElementById('invoice-prev').disabled = invoicePage <= 1;
+  document.getElementById('invoice-next').disabled = invoicePage >= invoicePageCount;
+}
+
+function renderCrossCompanyBillingRequests(requests) {
+  const list = document.getElementById('cross-company-billing-requests');
+  list.innerHTML = requests.length
+    ? requests.map(item => `<article class="record-row">
+      <div><strong>${escapeHtml(item.companyName)} · ${Number(item.seats).toLocaleString()} seats</strong>
+        <small>${escapeHtml(item.companyCode)} · ${escapeHtml(item.billingCycle)} billing · submitted ${escapeHtml(formatDate(item.createdAt))}</small>
+        <small>Request #${item.id}</small>
+      </div>
+      <div class="record-actions">
+        <button class="button button-primary" type="button" data-cross-billing-invoice="${item.id}" data-company-id="${item.companyId}" data-company-name="${escapeHtml(item.companyName)}">Issue invoice</button>
+        <button class="button button-quiet" type="button" data-cross-billing-reject="${item.id}" data-company-id="${item.companyId}" data-company-name="${escapeHtml(item.companyName)}">Reject</button>
+      </div>
+    </article>`).join('')
+    : '<p class="muted">No billing requests are awaiting review. New seat or billing-cycle requests will appear here.</p>';
+}
+
+async function loadCrossCompanyInvoices() {
+  const errorTarget = document.getElementById('billing-error');
+  errorTarget.classList.add('hidden');
+  try {
+    const query = new URLSearchParams({
+      page: String(invoicePage),
+      pageSize: '25',
+      status: invoiceStatusFilter
+    });
+    const result = await request(`invoices?${query}`);
+    if (!Array.isArray(result.invoices) || !Number.isSafeInteger(result.page)
+      || !Number.isSafeInteger(result.pageCount) || !Number.isSafeInteger(result.totalCount)) {
+      throw new Error('The invoice list response was invalid.');
+    }
+    renderCrossCompanyInvoices(result);
+  } catch (error) {
+    errorTarget.textContent = `Could not load cross-company invoices. Refresh and try again. ${error.message}`;
+    errorTarget.classList.remove('hidden');
+  }
+}
+
+async function loadCrossCompanyBillingRequests() {
+  const errorTarget = document.getElementById('billing-requests-error');
+  errorTarget.classList.add('hidden');
+  try {
+    const result = await request('billing-requests');
+    if (!Array.isArray(result.requests)) throw new Error('The pending billing request response was invalid.');
+    renderCrossCompanyBillingRequests(result.requests);
+  } catch (error) {
+    errorTarget.textContent = `Could not load pending billing requests. Refresh and try again. ${error.message}`;
+    errorTarget.classList.remove('hidden');
+  }
+}
+
+async function loadBillingTab() {
+  await Promise.all([loadCrossCompanyInvoices(), loadCrossCompanyBillingRequests()]);
+}
+
 function currentPageFromHash() {
   const page = window.location.hash.slice(1);
   return ['overview', 'companies', 'requests', 'plans', 'billing', 'activity'].includes(page)
@@ -193,6 +286,7 @@ async function activateControlPage(page, { updateHash = true } = {}) {
   try {
     if (page === 'plans') await Promise.all([loadPlans(), loadPricing()]);
     if (page === 'requests') await loadDemoRequests();
+    if (page === 'billing') await loadBillingTab();
     if (page === 'activity') await loadUserErrors();
   } catch (error) {
     overviewError.textContent = error.message;
@@ -886,6 +980,7 @@ async function loadOverview() {
     const initialPage = currentPageFromHash();
     showControlPage(initialPage);
     if (initialPage === 'plans') activateControlPage('plans', { updateHash: false });
+    if (initialPage === 'billing') activateControlPage('billing', { updateHash: false });
     loadUserErrors();
     loadDemoRequests();
   } catch (error) {
@@ -1320,6 +1415,72 @@ document.getElementById('billing-request-list').addEventListener('click', async 
   } catch (error) {
     const target = document.getElementById('company-detail-error');
     target.textContent = error.message;
+    target.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('invoice-status-filter').addEventListener('change', event => {
+  invoiceStatusFilter = event.currentTarget.value;
+  invoicePage = 1;
+  loadCrossCompanyInvoices();
+});
+
+document.getElementById('invoice-prev').addEventListener('click', () => {
+  if (invoicePage <= 1) return;
+  invoicePage -= 1;
+  loadCrossCompanyInvoices();
+});
+
+document.getElementById('invoice-next').addEventListener('click', () => {
+  if (invoicePage >= invoicePageCount) return;
+  invoicePage += 1;
+  loadCrossCompanyInvoices();
+});
+
+document.getElementById('invoice-refresh').addEventListener('click', loadCrossCompanyInvoices);
+document.getElementById('billing-requests-refresh').addEventListener('click', loadCrossCompanyBillingRequests);
+
+document.getElementById('invoice-rows').addEventListener('click', async event => {
+  const button = event.target.closest('[data-cross-invoice-paid]');
+  if (!button) return;
+  const companyName = button.dataset.companyName;
+  const invoiceNumber = button.dataset.invoiceNumber;
+  if (!window.confirm(`Mark invoice ${invoiceNumber} for ${companyName} as paid? This records payment; it does not collect money.`)) return;
+  button.disabled = true;
+  try {
+    await request(`companies/${encodeURIComponent(button.dataset.companyId)}/invoices/${encodeURIComponent(button.dataset.crossInvoicePaid)}/paid`, { method: 'POST' });
+    await loadOverview();
+  } catch (error) {
+    const target = document.getElementById('billing-error');
+    target.textContent = `Could not mark ${invoiceNumber} paid. ${error.message}`;
+    target.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('cross-company-billing-requests').addEventListener('click', async event => {
+  const invoiceButton = event.target.closest('[data-cross-billing-invoice]');
+  const rejectButton = event.target.closest('[data-cross-billing-reject]');
+  const button = invoiceButton || rejectButton;
+  if (!button) return;
+  const companyId = button.dataset.companyId;
+  const companyName = button.dataset.companyName;
+  const requestId = invoiceButton ? button.dataset.crossBillingInvoice : button.dataset.crossBillingReject;
+  const action = invoiceButton ? 'invoice' : 'reject';
+  const confirmation = invoiceButton
+    ? `Issue an open invoice for ${companyName} using the locked subscription price? No payment will be taken automatically.`
+    : `Reject the pending billing request for ${companyName}?`;
+  if (!window.confirm(confirmation)) return;
+  button.disabled = true;
+  try {
+    await request(`companies/${encodeURIComponent(companyId)}/billing-requests/${encodeURIComponent(requestId)}/${action}`, { method: 'POST' });
+    await loadOverview();
+  } catch (error) {
+    const target = document.getElementById('billing-requests-error');
+    target.textContent = `Could not ${action === 'invoice' ? 'issue an invoice for' : 'reject the request for'} ${companyName}. ${error.message}`;
     target.classList.remove('hidden');
   } finally {
     button.disabled = false;

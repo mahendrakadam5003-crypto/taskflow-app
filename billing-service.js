@@ -293,6 +293,7 @@ async function markManualInvoicePaid(controlDb, admin, { companyId, invoiceId, p
     });
     const invoice = invoiceResult.rows?.[0];
     if (!invoice) throw new Error('Open invoice not found.');
+    const subscriptionId = invoice.subscription_id == null ? null : Number(invoice.subscription_id);
     const paidAt = now.toISOString();
     const invoiceUpdate = await transaction.execute({
       sql: "UPDATE invoices SET status = 'paid', paid_at = ? WHERE id = ? AND status = 'open'",
@@ -302,7 +303,7 @@ async function markManualInvoicePaid(controlDb, admin, { companyId, invoiceId, p
     await transaction.execute({
       sql: `UPDATE subscriptions SET status = 'active', current_period_start = ?, current_period_end = ?,
         cancel_at_period_end = 0 WHERE id = ? AND company_id = ?`,
-      args: [invoice.period_start, invoice.period_end, Number(invoice.subscription_id), normalizedCompanyId]
+      args: [invoice.period_start, invoice.period_end, subscriptionId, normalizedCompanyId]
     });
     const changeResult = await transaction.execute({
       sql: 'SELECT id, previous_subscription_id FROM subscription_change_requests WHERE invoice_id = ? AND company_id = ? AND status = \'invoiced\' LIMIT 1',
@@ -330,7 +331,7 @@ async function markManualInvoicePaid(controlDb, admin, { companyId, invoiceId, p
     });
     await transaction.execute({
       sql: 'INSERT INTO subscription_events (company_id, subscription_id, actor_super_admin_id, event, details) VALUES (?, ?, ?, ?, ?)',
-      args: [normalizedCompanyId, Number(invoice.subscription_id), admin.id, 'manual_invoice_paid', `Invoice ${invoice.number} was marked paid.`]
+      args: [normalizedCompanyId, subscriptionId, admin.id, 'manual_invoice_paid', `Invoice ${invoice.number} was marked paid.`]
     });
     await transaction.execute({
       sql: 'INSERT INTO super_admin_audit (super_admin_id, company_id, action, details) VALUES (?, ?, ?, ?)',

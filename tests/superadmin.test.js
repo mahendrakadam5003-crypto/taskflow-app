@@ -92,6 +92,21 @@ test('super-admin sections use accessible hash-addressable tabs and keep request
   assert.match(script, /window\.addEventListener\('hashchange'/);
 });
 
+test('super-admin billing tab exposes cross-company invoices and pending billing actions', async () => {
+  const page = await fs.readFile(path.join(__dirname, '..', 'public', 'superadmin.html'), 'utf8');
+  assert.match(page, /id="invoice-status-filter"/);
+  assert.match(page, /<option value="overdue">Overdue<\/option>/);
+  assert.match(page, /id="invoice-rows"/);
+  assert.match(page, /id="invoice-prev"/);
+  assert.match(page, /id="invoice-next"/);
+  assert.match(page, /id="cross-company-billing-requests"/);
+  const script = await fs.readFile(path.join(__dirname, '..', 'public', 'js', 'superadmin.js'), 'utf8');
+  assert.match(script, /request\(`invoices\?\$\{query\}`\)/);
+  assert.match(script, /request\('billing-requests'\)/);
+  assert.match(script, /companies\/\$\{encodeURIComponent\(button\.dataset\.companyId\)\}\/invoices\/\$\{encodeURIComponent\(button\.dataset\.crossInvoicePaid\)\}\/paid/);
+  assert.match(script, /companies\/\$\{encodeURIComponent\(companyId\)\}\/billing-requests\/\$\{encodeURIComponent\(requestId\)\}\/\$\{action\}/);
+});
+
 test('super-admin overview displays the requested company, revenue, invoice, and demo KPIs', async () => {
   const script = await fs.readFile(path.join(__dirname, '..', 'public', 'js', 'superadmin.js'), 'utf8');
   assert.match(script, /label: 'Active companies'/);
@@ -412,6 +427,111 @@ test('super-admin login uses an isolated hashed session and protects the read-on
     });
     const afterLogout = await fetch(`${baseUrl}/overview`, { headers: { Cookie: cookieHeader.split(';')[0] } });
     assert.equal(afterLogout.status, 401);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await controlDb.close();
+  }
+});
+
+test('super-admin cross-company billing APIs authenticate, paginate, filter overdue invoices, and list pending requests', async () => {
+  const { controlDb, server, baseUrl } = await createApp();
+  try {
+    assert.equal((await fetch(`${baseUrl}/invoices`)).status, 401);
+    assert.equal((await fetch(`${baseUrl}/billing-requests`)).status, 401);
+    const login = await fetch(`${baseUrl}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'test owner', password: 'Superadmin-Test-Password-2026!' })
+    });
+    const headers = { Cookie: login.headers.get('set-cookie').split(';', 1)[0] };
+    const insertInvoice = async ({ number, status, dueAt, paidAt = null }) => controlDb.execute({
+      sql: `INSERT INTO invoices (
+        company_id, number, period_start, period_end, seats, unit_price_paise, subtotal_paise,
+        discount_paise, tax_paise, total_paise, currency, tax_pct, status, due_at, paid_at
+      ) VALUES (1, ?, '2026-10-01', '2026-11-01', 1, 10000, 10000, 0, 1800, 11800, 'INR', 18, ?, ?, ?)`,
+      args: [number, status, dueAt, paidAt]
+    });
+    await insertInvoice({
+      number: 'INV-OVERDUE',
+      status: 'open',
+      dueAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    });
+    await insertInvoice({
+      number: 'INV-OPEN',
+      status: 'open',
+      dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    });
+    await insertInvoice({
+      number: 'INV-PAID',
+      status: 'paid',
+      dueAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      paidAt: new Date().toISOString()
+    });
+
+    const firstPageResponse = await fetch(`${baseUrl}/invoices?status=all&page=1&pageSize=2`, { headers });
+    assert.equal(firstPageResponse.status, 200, await firstPageResponse.clone().text());
+    assert.equal(firstPageResponse.headers.get('cache-control'), 'no-store');
+    const firstPage = await firstPageResponse.json();
+    assert.equal(firstPage.totalCount, 3);
+    assert.equal(firstPage.pageCount, 2);
+    assert.equal(firstPage.invoices.length, 2);
+    assert.deepEqual(firstPage.invoices.map(invoice => invoice.number), ['INV-PAID', 'INV-OPEN']);
+    assert.deepEqual(Object.keys(firstPage.invoices[0]).sort(), [
+      'companyCode', 'companyId', 'companyName', 'createdAt', 'currency', 'discountPaise',
+      'dueAt', 'id', 'number', 'paidAt', 'periodEnd', 'periodStart', 'seats', 'status',
+      'subtotalPaise', 'taxPaise', 'taxPct', 'totalPaise', 'unitPricePaise'
+    ]);
+    const secondPage = await (await fetch(`${baseUrl}/invoices?status=all&page=2&pageSize=2`, { headers })).json();
+    assert.equal(secondPage.page, 2);
+    assert.deepEqual(secondPage.invoices.map(invoice => invoice.number), ['INV-OVERDUE']);
+
+    const overdueResponse = await fetch(`${baseUrl}/invoices?status=overdue`, { headers });
+    assert.equal(overdueResponse.status, 200);
+    const overdue = await overdueResponse.json();
+    assert.equal(overdue.totalCount, 1);
+    assert.equal(overdue.invoices[0].number, 'INV-OVERDUE');
+    assert.equal(overdue.invoices[0].status, 'overdue');
+    const open = await (await fetch(`${baseUrl}/invoices?status=open`, { headers })).json();
+    assert.deepEqual(open.invoices.map(invoice => invoice.number), ['INV-OPEN']);
+    const paid = await (await fetch(`${baseUrl}/invoices?status=paid`, { headers })).json();
+    assert.deepEqual(paid.invoices.map(invoice => invoice.number), ['INV-PAID']);
+    assert.equal((await fetch(`${baseUrl}/invoices?status=unknown`, { headers })).status, 400);
+    assert.equal((await fetch(`${baseUrl}/invoices?status=open&status=paid`, { headers })).status, 400);
+    assert.equal((await fetch(`${baseUrl}/invoices?page=1&pageSize=101`, { headers })).status, 400);
+
+    await controlDb.execute({
+      sql: `INSERT INTO subscription_change_requests
+        (company_id, requested_by_user_id, requested_seats, requested_billing_cycle)
+        VALUES (1, 7, 12, 'yearly')`
+    });
+    await controlDb.execute({
+      sql: `INSERT INTO subscription_change_requests
+        (company_id, requested_by_user_id, requested_seats, requested_billing_cycle, status)
+        VALUES (1, 7, 8, 'monthly', 'rejected')`
+    });
+    const pendingResponse = await fetch(`${baseUrl}/billing-requests`, { headers });
+    assert.equal(pendingResponse.status, 200, await pendingResponse.clone().text());
+    const pending = await pendingResponse.json();
+    assert.equal(pending.requests.length, 1);
+    assert.deepEqual(pending.requests[0], {
+      id: Number(pending.requests[0].id),
+      companyId: 1,
+      companyName: 'Test Company',
+      companyCode: 'test-company',
+      seats: 12,
+      billingCycle: 'yearly',
+      createdAt: pending.requests[0].createdAt
+    });
+    const unchangedRequest = await controlDb.execute({
+      sql: 'SELECT status FROM subscription_change_requests WHERE id = ?',
+      args: [pending.requests[0].id]
+    });
+    assert.equal(unchangedRequest.rows[0].status, 'pending');
+
+    const markPaid = await fetch(`${baseUrl}/companies/1/invoices/${overdue.invoices[0].id}/paid`, {
+      method: 'POST', headers
+    });
+    assert.equal(markPaid.status, 200, await markPaid.clone().text());
   } finally {
     await new Promise(resolve => server.close(resolve));
     await controlDb.close();

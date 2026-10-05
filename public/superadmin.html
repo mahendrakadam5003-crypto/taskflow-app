@@ -244,12 +244,43 @@
       </section>
 
       <section id="billing-page" class="control-page hidden" role="tabpanel" aria-labelledby="admin-tab-billing" tabindex="0">
-        <section class="companies-panel empty-state-panel">
-          <div class="empty-state">
-            <div class="empty-icon" aria-hidden="true">$</div>
-            <h3>Cross-company billing</h3>
-            <p>Company invoices and pending billing requests will appear here.</p>
+        <p id="billing-error" class="message error hidden" role="alert"></p>
+        <section class="companies-panel billing-invoices" aria-labelledby="billing-invoices-heading">
+          <div class="section-heading">
+            <div><p class="eyebrow">CROSS-COMPANY</p><h2 id="billing-invoices-heading">Invoices</h2></div>
+            <button id="invoice-refresh" type="button" class="button button-quiet">Refresh</button>
           </div>
+          <div class="billing-filters">
+            <label for="invoice-status-filter">Invoice status
+              <select id="invoice-status-filter" class="company-setting">
+                <option value="all">All invoices</option><option value="open">Open</option>
+                <option value="overdue">Overdue</option><option value="paid">Paid</option>
+              </select>
+            </label>
+          </div>
+          <div id="invoice-empty" class="empty-state hidden">
+            <h3>No invoices found</h3>
+            <p>There are no invoices matching this status filter.</p>
+          </div>
+          <div id="invoice-table-wrap" class="table-wrap hidden">
+            <table>
+              <thead><tr><th scope="col">Company</th><th scope="col">Invoice</th><th scope="col">Status</th><th scope="col">Amount</th><th scope="col">Due date</th><th scope="col">Issued</th><th scope="col"></th></tr></thead>
+              <tbody id="invoice-rows"></tbody>
+            </table>
+          </div>
+          <div class="table-pagination">
+            <button id="invoice-prev" type="button" class="button button-quiet">Previous</button>
+            <span id="invoice-page-status" aria-live="polite">Page 1 of 1</span>
+            <button id="invoice-next" type="button" class="button button-quiet">Next</button>
+          </div>
+        </section>
+        <section class="companies-panel billing-requests" aria-labelledby="pending-billing-heading">
+          <div class="section-heading">
+            <div><p class="eyebrow">REVIEW</p><h2 id="pending-billing-heading">Pending billing requests</h2></div>
+            <button id="billing-requests-refresh" type="button" class="button button-quiet">Refresh</button>
+          </div>
+          <p id="billing-requests-error" class="message error hidden" role="alert"></p>
+          <div id="cross-company-billing-requests" class="record-list billing-request-list" aria-live="polite"></div>
         </section>
       </section>
 
