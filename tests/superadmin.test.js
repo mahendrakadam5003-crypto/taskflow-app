@@ -203,7 +203,7 @@ async function createApp({ provisionCompany, tenantDatabase, backupDirectory, ba
     backupDirectory,
     backupManager
   }));
-  app.get(['/superadmin', '/superadmin.html'], createSuperAdminPageHandler(path.join(__dirname, 'missing-superadmin.html')));
+  app.get(['/superadmin', '/superadmin.html'], createSuperAdminPageHandler(path.join(__dirname, '..', 'public', 'superadmin.html')));
   app.get('/support-state', (req, res) => res.json({
     userId: req.session.userId,
     role: req.session.role,
@@ -642,10 +642,12 @@ test('super-admin detail, plans, billing, reset, backup, support mode, and compa
 
     const companySessionResponse = await fetch(`${origin}/create-company-session`);
     const companyCookie = companySessionResponse.headers.get('set-cookie').split(';', 1)[0];
-    const blockedPage = await fetch(`${origin}/superadmin`, { headers: { Cookie: companyCookie } });
-    assert.equal(blockedPage.status, 403);
-    const blockedHtml = await fetch(`${origin}/superadmin.html`, { headers: { Cookie: companyCookie } });
-    assert.equal(blockedHtml.status, 403);
+    const superAdminPage = await fetch(`${origin}/superadmin`, { headers: { Cookie: companyCookie } });
+    assert.equal(superAdminPage.status, 200);
+    assert.match(await superAdminPage.text(), /id="login-form"/);
+    const superAdminHtml = await fetch(`${origin}/superadmin.html`, { headers: { Cookie: companyCookie } });
+    assert.equal(superAdminHtml.status, 200);
+    assert.match(await superAdminHtml.text(), /id="login-form"/);
     const blockedApi = await fetch(`${baseUrl}/overview`, { headers: { Cookie: companyCookie } });
     assert.equal(blockedApi.status, 401);
 

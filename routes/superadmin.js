@@ -95,7 +95,6 @@ async function measureTenantUsage(database, companyId) {
 
 function createSuperAdminPageHandler(htmlPath) {
   return (req, res) => {
-    if (req.session?.userId) return res.status(403).send('Super-admin access is separate from company accounts.');
     res.set('Cache-Control', 'no-store');
     return res.sendFile(htmlPath);
   };
