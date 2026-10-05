@@ -38,7 +38,7 @@ async function createControlDatabase({ failAudit = false } = {}) {
         return { rows: companies.filter(company => company.code === args[0]).map(company => ({ id: company.id })) };
       }
       if (sql.includes('FROM plans WHERE id')) {
-        return { rows: [1, 2, 3, 4].includes(Number(args[0])) ? [{ id: Number(args[0]) }] : [] };
+        return { rows: [1, 2, 3, 4, 5].includes(Number(args[0])) ? [{ id: Number(args[0]) }] : [] };
       }
       throw new Error(`Unexpected control database query: ${sql}`);
     },
@@ -132,7 +132,7 @@ test('company provisioning creates isolated local tenant databases with one-time
     }, { id: 1 });
 
     assert.equal(first.company.status, 'trial');
-    assert.equal(first.company.trialEndsAt, '2027-01-03');
+    assert.equal(first.company.trialEndsAt, '2026-10-12');
     assert.equal(first.admin.username, 'admin');
     assert.ok(first.admin.oneTimePassword.length >= 30);
     assert.equal(second.admin.username, 'owner');
@@ -145,9 +145,9 @@ test('company provisioning creates isolated local tenant databases with one-time
       Number(company.planId),
       company.trialEndsAt
     ]), [
-      ['solo-test', 'trial', 1, '2027-01-03'],
-      ['small-test', 'trial', 2, '2027-01-03'],
-      ['business-test', 'trial', 3, '2027-01-03']
+      ['solo-test', 'trial', 1, '2026-10-12'],
+      ['small-test', 'trial', 2, '2026-10-12'],
+      ['business-test', 'trial', 3, '2026-10-12']
     ]);
     assert.deepEqual(controlDb.audit.map(entry => [entry.action, Number(entry.superAdminId)]), [
       ['Company provisioned', 1],

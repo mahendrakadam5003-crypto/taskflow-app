@@ -23,7 +23,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
     assert.equal(await migrateControlDatabase(client), CURRENT_SCHEMA_VERSION);
 
     const plansResult = await client.execute('SELECT id, name, max_users, storage_limit_mb, features_json, price_note FROM plans ORDER BY id');
-    assert.equal(plansResult.rows.length, 4);
+    assert.equal(plansResult.rows.length, 5);
     assert.deepEqual(plansResult.rows.map(plan => [
       plan.name,
       plan.max_users == null ? null : Number(plan.max_users),
@@ -32,7 +32,8 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       ['Solo', 1, 1024],
       ['Team', 10, 10240],
       ['Business', 50, null],
-      ['Internal / Unlimited', null, null]
+      ['Internal / Unlimited', null, null],
+      ['Trial', 3, 1024]
     ]);
     assert.deepEqual(JSON.parse(plansResult.rows[0].features_json), {
       attendance: true,
@@ -45,6 +46,7 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       export: true
     });
     assert.equal(plansResult.rows[3].price_note, 'Existing company unlimited plan');
+    assert.equal(plansResult.rows[4].price_note, 'Seven-day trial');
     assert.equal(plansResult.rows[0].price_note, 'custom test note', 'rerunning migration preserves edited plan data');
 
     const tokenCiphertext = encryptTenantDatabaseToken('tenant-token-for-schema-test', '42'.repeat(32));
@@ -78,6 +80,16 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       billing_notes: ['id', 'company_id', 'amount_text', 'note', 'marked_paid_at', 'marked_by'],
       super_admin_audit: ['id', 'super_admin_id', 'company_id', 'action', 'details', 'created_at'],
       user_error_reports: ['id', 'company_id', 'company_code', 'actor_user_id', 'request_id', 'event', 'method', 'route', 'status_code', 'created_at', 'resolved_at', 'resolved_by'],
+      pricing_settings: ['id', 'currency', 'currency_symbol', 'tax_pct', 'tax_inclusive', 'trial_days', 'trial_max_users', 'trial_storage_limit_mb', 'grace_period_days', 'read_only_period_days', 'min_seats', 'max_seats', 'default_storage_per_seat_mb', 'prorate_seats', 'seat_addition_billing', 'price_change_scope', 'trial_approval_mode', 'updated_at'],
+      pricing_versions: ['id', 'monthly_price_paise', 'yearly_discount_pct', 'yearly_price_paise', 'tax_pct', 'currency', 'effective_from', 'created_by', 'note', 'is_current', 'created_at'],
+      subscriptions: ['id', 'company_id', 'billing_cycle', 'seats', 'unit_price_paise', 'discount_pct', 'pricing_version_id', 'status', 'current_period_start', 'current_period_end', 'cancel_at_period_end', 'provider', 'provider_subscription_id', 'created_at'],
+      invoices: ['id', 'company_id', 'subscription_id', 'number', 'period_start', 'period_end', 'seats', 'unit_price_paise', 'subtotal_paise', 'discount_paise', 'tax_paise', 'total_paise', 'currency', 'tax_pct', 'status', 'paid_at', 'provider_payment_id', 'created_at'],
+      payments: ['id', 'invoice_id', 'amount_paise', 'method', 'provider_ref', 'provider_event_id', 'raw_payload_hash', 'created_at'],
+      subscription_events: ['id', 'company_id', 'subscription_id', 'actor_super_admin_id', 'event', 'details', 'created_at'],
+      provider_webhook_events: ['id', 'provider', 'provider_event_id', 'payload_hash', 'processed_at'],
+      demo_requests: ['id', 'name', 'email', 'phone', 'company_name', 'team_size', 'message', 'status', 'consented_at', 'approved_by', 'company_id', 'created_at', 'updated_at'],
+      coupons: ['id', 'code', 'discount_type', 'discount_value', 'expires_at', 'max_uses', 'uses', 'is_active', 'created_at'],
+      company_price_overrides: ['company_id', 'unit_price_paise', 'currency', 'created_by', 'note', 'updated_at'],
       control_schema_migrations: ['version', 'applied_at']
     };
     for (const [table, columns] of Object.entries(expectedColumns)) {
@@ -86,7 +98,11 @@ test('control database migration is versioned, repeatable, and seeds sample plan
       assert.deepEqual(columnResult.rows.map(column => column.name), columns, `expected columns on ${table}`);
     }
     const migrations = await client.execute('SELECT version FROM control_schema_migrations');
-    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, CURRENT_SCHEMA_VERSION]);
+    assert.deepEqual(migrations.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, CURRENT_SCHEMA_VERSION]);
+    const pricing = await client.execute('SELECT monthly_price_paise, yearly_discount_pct, yearly_price_paise, tax_pct, currency, is_current FROM pricing_versions');
+    assert.deepEqual(pricing.rows.map(row => [Number(row.monthly_price_paise), Number(row.yearly_discount_pct), Number(row.yearly_price_paise), Number(row.tax_pct), row.currency, Number(row.is_current)]), [[19900, 10, 214920, 18, 'INR', 1]]);
+    const pricingSettings = await client.execute('SELECT trial_days, trial_max_users, trial_storage_limit_mb, grace_period_days, read_only_period_days, trial_approval_mode, seat_addition_billing FROM pricing_settings WHERE id = 1');
+    assert.deepEqual(pricingSettings.rows.map(row => [Number(row.trial_days), Number(row.trial_max_users), Number(row.trial_storage_limit_mb), Number(row.grace_period_days), Number(row.read_only_period_days), row.trial_approval_mode, row.seat_addition_billing]), [[7, 3, 1024, 3, 7, 'manual', 'immediate']]);
   } finally {
     await client.close();
   }

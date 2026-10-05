@@ -51,6 +51,10 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       active INTEGER NOT NULL DEFAULT 1,
       must_change_password INTEGER NOT NULL DEFAULT 0,
       token_version INTEGER NOT NULL DEFAULT 0,
+      email TEXT,
+      email_verified INTEGER NOT NULL DEFAULT 0 CHECK (email_verified IN (0, 1)),
+      google_sub TEXT,
+      auth_provider TEXT NOT NULL DEFAULT 'password' CHECK (auth_provider IN ('password', 'google', 'email')),
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
     const duplicateUsername = await dbDriverInterface.prepare(`SELECT lower(trim(username)) AS normalized_username, COUNT(*) AS duplicate_count
@@ -725,6 +729,22 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       args: [key, value]
     })));
     if (needsSchemaUpgrade) await markSchemaVersion(3);
+    if (schemaVersion < 4) {
+      const userColumns = await dbDriverInterface.prepare('PRAGMA table_info(users)').all();
+      const existingUserColumns = new Set(userColumns.map(column => column.name));
+      const emailColumns = [
+        ['email', 'ALTER TABLE users ADD COLUMN email TEXT'],
+        ['email_verified', 'ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0 CHECK (email_verified IN (0, 1))'],
+        ['google_sub', 'ALTER TABLE users ADD COLUMN google_sub TEXT'],
+        ['auth_provider', "ALTER TABLE users ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'password' CHECK (auth_provider IN ('password', 'google', 'email'))"]
+      ];
+      for (const [column, statement] of emailColumns) {
+        if (!existingUserColumns.has(column)) await dbDriverInterface.exec(statement);
+      }
+      await dbDriverInterface.exec("CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_unique ON users(lower(trim(email))) WHERE email IS NOT NULL AND trim(email) <> ''");
+      await dbDriverInterface.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_unique ON users(google_sub) WHERE google_sub IS NOT NULL');
+      await markSchemaVersion(4);
+    }
     console.log('Database schema and default settings are ready.');
   } catch (err) {
     console.error(JSON.stringify({ event: 'tenant_database_initialization_failed', company_id: companyId ?? null }));

@@ -3,7 +3,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { createClient } = require('@libsql/client');
 const { test } = require('node:test');
+const { initTenantSchema } = require('../tenant-schema');
 
 function runInIsolatedDatabase(script) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'taskflow-db-test-'));
@@ -28,6 +30,55 @@ function runInIsolatedDatabase(script) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }
+
+test('tenant identity schema upgrade preserves existing users and is repeatable', async () => {
+  const client = createClient({ url: 'file::memory:' });
+  try {
+    await client.execute(`CREATE TABLE users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'employee',
+      department TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      must_change_password INTEGER NOT NULL DEFAULT 0,
+      token_version INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    await client.execute({
+      sql: 'INSERT INTO users (id, name, username, password_hash, role) VALUES (?, ?, ?, ?, ?)',
+      args: [77, 'Legacy Employee', 'legacy.employee', 'existing-password-hash', 'employee']
+    });
+    await client.execute('CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime(\'now\')))');
+    await client.execute('INSERT INTO schema_version (version) VALUES (3)');
+
+    await initTenantSchema(client, { seedInitialAdmin: false, companyId: 42 });
+    await initTenantSchema(client, { seedInitialAdmin: false, companyId: 42 });
+
+    const user = await client.execute('SELECT id, name, username, password_hash, email, email_verified, google_sub, auth_provider FROM users WHERE id = 77');
+    assert.deepEqual(user.rows.map(row => [row.id, row.name, row.username, row.password_hash, row.email, Number(row.email_verified), row.google_sub, row.auth_provider]), [
+      [77, 'Legacy Employee', 'legacy.employee', 'existing-password-hash', null, 0, null, 'password']
+    ]);
+    const version = await client.execute('SELECT MAX(version) AS version FROM schema_version');
+    assert.equal(Number(version.rows[0].version), 4);
+
+    await client.execute({
+      sql: 'INSERT INTO users (name, username, password_hash, email, google_sub) VALUES (?, ?, ?, ?, ?)',
+      args: ['New User', 'new.user', 'hash', 'Person@example.test', 'google-sub-1']
+    });
+    await assert.rejects(client.execute({
+      sql: 'INSERT INTO users (name, username, password_hash, email) VALUES (?, ?, ?, ?)',
+      args: ['Duplicate Email', 'duplicate.email', 'hash', 'person@EXAMPLE.test']
+    }), /UNIQUE constraint failed/);
+    await assert.rejects(client.execute({
+      sql: 'INSERT INTO users (name, username, password_hash, google_sub) VALUES (?, ?, ?, ?)',
+      args: ['Duplicate Google', 'duplicate.google', 'hash', 'google-sub-1']
+    }), /UNIQUE constraint failed/);
+  } finally {
+    await client.close();
+  }
+});
 
 test('foreign keys reject missing parents and cascade project tasks, comments, and check-ins', () => {
   const output = runInIsolatedDatabase(`

@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 8;
+const CURRENT_SCHEMA_VERSION = 9;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -221,6 +221,159 @@ const CONTROL_MIGRATIONS = [{
       'CREATE INDEX IF NOT EXISTS user_error_reports_company_created_idx ON user_error_reports(company_id, created_at)',
       { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [8] }
     ]
+}, {
+  version: 9,
+  statements: [
+    `CREATE TABLE IF NOT EXISTS pricing_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      currency TEXT NOT NULL DEFAULT 'INR',
+      currency_symbol TEXT NOT NULL DEFAULT 'Rs.',
+      tax_pct REAL NOT NULL DEFAULT 18 CHECK (tax_pct BETWEEN 0 AND 100),
+      tax_inclusive INTEGER NOT NULL DEFAULT 0 CHECK (tax_inclusive IN (0, 1)),
+      trial_days INTEGER NOT NULL DEFAULT 7 CHECK (trial_days BETWEEN 1 AND 60),
+      trial_max_users INTEGER NOT NULL DEFAULT 3 CHECK (trial_max_users >= 1),
+      trial_storage_limit_mb INTEGER NOT NULL DEFAULT 1024 CHECK (trial_storage_limit_mb >= 0),
+      grace_period_days INTEGER NOT NULL DEFAULT 3 CHECK (grace_period_days >= 0),
+      read_only_period_days INTEGER NOT NULL DEFAULT 7 CHECK (read_only_period_days >= 0),
+      min_seats INTEGER NOT NULL DEFAULT 1 CHECK (min_seats >= 1),
+      max_seats INTEGER CHECK (max_seats IS NULL OR max_seats >= min_seats),
+      default_storage_per_seat_mb INTEGER CHECK (default_storage_per_seat_mb IS NULL OR default_storage_per_seat_mb >= 0),
+      prorate_seats INTEGER NOT NULL DEFAULT 1 CHECK (prorate_seats IN (0, 1)),
+      seat_addition_billing TEXT NOT NULL DEFAULT 'immediate' CHECK (seat_addition_billing IN ('immediate', 'next_invoice')),
+      price_change_scope TEXT NOT NULL DEFAULT 'new_customers' CHECK (price_change_scope IN ('new_customers', 'existing_next_renewal')),
+      trial_approval_mode TEXT NOT NULL DEFAULT 'manual' CHECK (trial_approval_mode IN ('manual', 'auto')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS pricing_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      monthly_price_paise INTEGER NOT NULL CHECK (monthly_price_paise >= 0),
+      yearly_discount_pct REAL NOT NULL CHECK (yearly_discount_pct BETWEEN 0 AND 100),
+      yearly_price_paise INTEGER NOT NULL CHECK (yearly_price_paise >= 0),
+      tax_pct REAL NOT NULL CHECK (tax_pct BETWEEN 0 AND 100),
+      currency TEXT NOT NULL DEFAULT 'INR',
+      effective_from TEXT NOT NULL DEFAULT (datetime('now')),
+      created_by INTEGER REFERENCES super_admins(id) ON DELETE SET NULL,
+      note TEXT NOT NULL DEFAULT '',
+      is_current INTEGER NOT NULL DEFAULT 0 CHECK (is_current IN (0, 1)),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS pricing_versions_one_current_idx ON pricing_versions(is_current) WHERE is_current = 1',
+    `CREATE TABLE IF NOT EXISTS subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      billing_cycle TEXT NOT NULL CHECK (billing_cycle IN ('monthly', 'yearly')),
+      seats INTEGER NOT NULL CHECK (seats >= 1),
+      unit_price_paise INTEGER NOT NULL CHECK (unit_price_paise >= 0),
+      discount_pct REAL NOT NULL DEFAULT 0 CHECK (discount_pct BETWEEN 0 AND 100),
+      pricing_version_id INTEGER REFERENCES pricing_versions(id) ON DELETE SET NULL,
+      status TEXT NOT NULL CHECK (status IN ('trialing', 'active', 'past_due', 'cancelled', 'expired')),
+      current_period_start TEXT NOT NULL,
+      current_period_end TEXT NOT NULL,
+      cancel_at_period_end INTEGER NOT NULL DEFAULT 0 CHECK (cancel_at_period_end IN (0, 1)),
+      provider TEXT NOT NULL DEFAULT 'manual',
+      provider_subscription_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    'CREATE INDEX IF NOT EXISTS subscriptions_company_status_idx ON subscriptions(company_id, status)',
+    `CREATE TABLE IF NOT EXISTS invoices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      subscription_id INTEGER REFERENCES subscriptions(id) ON DELETE SET NULL,
+      number TEXT NOT NULL UNIQUE,
+      period_start TEXT NOT NULL,
+      period_end TEXT NOT NULL,
+      seats INTEGER NOT NULL CHECK (seats >= 1),
+      unit_price_paise INTEGER NOT NULL CHECK (unit_price_paise >= 0),
+      subtotal_paise INTEGER NOT NULL CHECK (subtotal_paise >= 0),
+      discount_paise INTEGER NOT NULL DEFAULT 0 CHECK (discount_paise >= 0),
+      tax_paise INTEGER NOT NULL DEFAULT 0 CHECK (tax_paise >= 0),
+      total_paise INTEGER NOT NULL CHECK (total_paise >= 0),
+      currency TEXT NOT NULL DEFAULT 'INR',
+      tax_pct REAL NOT NULL DEFAULT 18 CHECK (tax_pct BETWEEN 0 AND 100),
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'open', 'paid', 'void')),
+      paid_at TEXT,
+      provider_payment_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    'CREATE INDEX IF NOT EXISTS invoices_company_created_idx ON invoices(company_id, created_at)',
+    `CREATE TABLE IF NOT EXISTS payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      amount_paise INTEGER NOT NULL CHECK (amount_paise >= 0),
+      method TEXT NOT NULL,
+      provider_ref TEXT,
+      provider_event_id TEXT UNIQUE,
+      raw_payload_hash TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS subscription_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      subscription_id INTEGER REFERENCES subscriptions(id) ON DELETE SET NULL,
+      actor_super_admin_id INTEGER REFERENCES super_admins(id) ON DELETE SET NULL,
+      event TEXT NOT NULL,
+      details TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    'CREATE INDEX IF NOT EXISTS subscription_events_company_created_idx ON subscription_events(company_id, created_at)',
+    `CREATE TABLE IF NOT EXISTS provider_webhook_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      provider_event_id TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      processed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(provider, provider_event_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS demo_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      phone TEXT NOT NULL DEFAULT '',
+      company_name TEXT NOT NULL,
+      team_size INTEGER NOT NULL DEFAULT 1 CHECK (team_size >= 1),
+      message TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'approved', 'rejected', 'converted')),
+      consented_at TEXT NOT NULL,
+      approved_by INTEGER REFERENCES super_admins(id) ON DELETE SET NULL,
+      company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    'CREATE INDEX IF NOT EXISTS demo_requests_status_created_idx ON demo_requests(status, created_at)',
+    `CREATE TABLE IF NOT EXISTS coupons (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL UNIQUE,
+      discount_type TEXT NOT NULL CHECK (discount_type IN ('percent', 'fixed_paise')),
+      discount_value INTEGER NOT NULL CHECK (discount_value >= 0),
+      expires_at TEXT,
+      max_uses INTEGER CHECK (max_uses IS NULL OR max_uses >= 0),
+      uses INTEGER NOT NULL DEFAULT 0 CHECK (uses >= 0),
+      is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS company_price_overrides (
+      company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+      unit_price_paise INTEGER NOT NULL CHECK (unit_price_paise >= 0),
+      currency TEXT NOT NULL DEFAULT 'INR',
+      created_by INTEGER REFERENCES super_admins(id) ON DELETE SET NULL,
+      note TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    { sql: `INSERT OR IGNORE INTO pricing_settings (id) VALUES (1)`, args: [] },
+    {
+      sql: `INSERT OR IGNORE INTO pricing_versions (
+        monthly_price_paise, yearly_discount_pct, yearly_price_paise, tax_pct, currency, note, is_current
+      ) VALUES (?, ?, ?, ?, ?, ?, 1)`,
+      args: [19900, 10, 214920, 18, 'INR', 'Initial default pricing']
+    },
+    {
+      sql: `INSERT OR IGNORE INTO plans (name, max_users, storage_limit_mb, features_json, price_note, is_active)
+        VALUES (?, ?, ?, ?, ?, 1)`,
+      args: ['Trial', 3, 1024, JSON.stringify({ attendance: true, reimbursements: true, export: true }), 'Seven-day trial']
+    },
+    { sql: `UPDATE plans SET price_note = 'Existing plan; subscription billing not configured' WHERE price_note = 'Free three-month test'`, args: [] },
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [9] }
+  ]
 }];
 
 function getControlDatabaseConfig(environment = process.env) {

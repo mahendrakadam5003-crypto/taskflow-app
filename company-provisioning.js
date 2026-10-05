@@ -14,7 +14,7 @@ const { createTursoProvisioner } = require('./turso-provisioner');
 
 const COMPANY_CODE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const RESERVED_COMPANY_CODES = new Set(['www', 'admin', 'api', 'superadmin', 'app']);
-const TRIAL_LENGTH_DAYS = 90;
+const TRIAL_LENGTH_DAYS = 7;
 
 class ProvisioningError extends Error {
   constructor(message, statusCode = 400) {
