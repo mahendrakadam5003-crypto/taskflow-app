@@ -155,12 +155,12 @@ function createBackupManager({
     });
   }
 
-  async function alertFailure(context, error) {
-    console.error(`Backup operation failed (${context}):`, error.message);
+  async function alertFailure(companyId, context) {
+    console.error(JSON.stringify({ event: 'backup_operation_failed', company_id: Number(companyId) }));
     try {
-      await getTelegram().sendFailureAlert(`TaskFlow backup failure\n${context}\n${String(error.message || error).slice(0, 2500)}`);
+      await getTelegram().sendFailureAlert(`TaskFlow backup failure\nCompany ID: ${Number(companyId)}\nOperation: ${context}`);
     } catch (alertError) {
-      console.error('Could not send Telegram backup failure alert:', alertError.message);
+      console.error(JSON.stringify({ event: 'backup_failure_alert_failed', company_id: Number(companyId) }));
     }
   }
 
@@ -211,12 +211,12 @@ function createBackupManager({
       await audit(companyId, status === 'complete' ? 'Company backup created' : 'Company backup failed',
         `Backup ${backupId} (${kind}) ${status}${failure ? `: ${failure.message}` : ''}.`, adminId);
     } catch (error) {
-      await alertFailure(`${company.code} (${kind}) control record`, error);
+      await alertFailure(companyId, `${kind} control record`);
       error.backupAlerted = true;
       throw error;
     }
     if (failure) {
-      await alertFailure(`${company.code} (${kind})`, failure);
+      await alertFailure(companyId, kind);
       failure.backupAlerted = true;
       throw failure;
     }
@@ -301,7 +301,7 @@ function createBackupManager({
         await pruneDailyBackups(company.id, 7);
         results.push({ companyId: Number(company.id), backupId: backup.id });
       } catch (error) {
-        if (!error.backupAlerted) await alertFailure(`${company.code} (${key})`, error);
+        if (!error.backupAlerted) await alertFailure(company.id, `daily backup ${key}`);
         results.push({ companyId: Number(company.id), error: error.message });
       }
     }
@@ -339,14 +339,14 @@ function createBackupManager({
         args: [company.id, backup.id, testMonth, backup.row_counts_json || '{}', String(error.message || error).slice(0, 1000)]
       });
       await audit(company.id, 'Monthly backup restore test failed', `Backup ${backup.id} verification failed for ${testMonth}: ${error.message}`);
-      await alertFailure(`${company.code} monthly restore test`, error);
+      await alertFailure(company.id, 'monthly restore test');
       return { companyId: company.id, backupId: Number(backup.id), status: 'failed', error: error.message };
     } finally {
       if (client) {
-        try { await client.close?.(); } catch (error) { console.error('Could not close temporary restore-test database:', error.message); }
+        try { await client.close?.(); } catch (error) { console.error(JSON.stringify({ event: 'restore_test_database_close_failed', company_id: Number(company.id) })); }
       }
       if (tempDirectory) await removeTemporaryDirectory(tempDirectory).catch(error => {
-        console.error('Could not remove temporary restore-test database:', error.message);
+        console.error(JSON.stringify({ event: 'restore_test_database_cleanup_failed', company_id: Number(company.id) }));
       });
     }
   }
@@ -373,7 +373,7 @@ function createBackupManager({
           const createdRow = await controlDb.execute({ sql: 'SELECT * FROM backups WHERE id = ?', args: [created.id] });
           backup = createdRow.rows?.[0];
         } catch (error) {
-          if (!error.backupAlerted) await alertFailure(`${idRow.code} monthly restore test backup`, error);
+          if (!error.backupAlerted) await alertFailure(idRow.id, 'monthly restore test backup');
           results.push({ companyId: Number(idRow.id), status: 'failed', error: error.message });
           continue;
         }
@@ -432,7 +432,7 @@ function createBackupManager({
         else if (turso) await turso.deleteDatabase(databaseName).catch(() => {});
       }
       await audit(company.id, 'Company restore staging failed', `Backup ${backupId}: ${error.message}`, adminId);
-      await alertFailure(`${company.code} restore staging`, error);
+      await alertFailure(company.id, 'restore staging');
       throw error;
     }
   }
@@ -634,7 +634,7 @@ function createBackupManager({
         results.push({ companyId: Number(company.id), status: 'deleted', backupId: finalBackup.id });
       } catch (error) {
         await audit(company.id, 'Company permanent deletion failed', error.message);
-        if (!error.backupAlerted) await alertFailure(`${company.code} permanent deletion`, error);
+        if (!error.backupAlerted) await alertFailure(company.id, 'permanent deletion');
         results.push({ companyId: Number(company.id), status: 'failed', error: error.message });
       }
     }

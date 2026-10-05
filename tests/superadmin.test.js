@@ -53,11 +53,11 @@ test('super-admin bootstrap creates one bcrypt-protected initial account and ref
 test('super-admin bootstrap rejects weak or missing password before database access', async () => {
   let opened = false;
   await assert.rejects(
-    createInitialSuperAdmin({ ...bootstrapEnvironment, SUPERADMIN_PASSWORD: 'short' }, async () => {
+    createInitialSuperAdmin({ ...bootstrapEnvironment, SUPERADMIN_PASSWORD: '123456789012345' }, async () => {
       opened = true;
       throw new Error('Database should not be opened');
     }),
-    /between 10 and 72 UTF-8 bytes/
+    /at least 16 characters and no more than 72 UTF-8 bytes/
   );
   assert.equal(opened, false);
 });

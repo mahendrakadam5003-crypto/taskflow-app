@@ -172,14 +172,14 @@ function createCompanyProvisioner({
         try {
           await transaction.rollback();
         } catch (rollbackError) {
-          console.error('Company provisioning control-database rollback failed:', rollbackError.message);
+          console.error(JSON.stringify({ event: 'company_provisioning_control_rollback_failed', company_id: null }));
         }
       }
       if (tenantClient) {
         try {
           await tenantClient.close?.();
         } catch (closeError) {
-          console.error('Company provisioning tenant connection close failed:', closeError.message);
+          console.error(JSON.stringify({ event: 'company_provisioning_tenant_close_failed', company_id: null }));
         }
       }
       if (databaseCreated) {
@@ -189,19 +189,19 @@ function createCompanyProvisioner({
             await fs.rm(`${localDatabasePath}-wal`, { force: true });
             await fs.rm(`${localDatabasePath}-shm`, { force: true });
           } catch (rollbackError) {
-            console.error(`Could not remove newly created local tenant database ${input.code}:`, rollbackError.message);
+            console.error(JSON.stringify({ event: 'company_provisioning_local_database_cleanup_failed', company_id: null }));
           }
         } else {
           try {
             if (!turso) turso = createTursoClient({ environment });
             await turso.deleteDatabase(databaseName);
           } catch (rollbackError) {
-            console.error(`Could not remove newly created Turso database ${databaseName}:`, rollbackError.message);
+            console.error(JSON.stringify({ event: 'company_provisioning_remote_database_cleanup_failed', company_id: null }));
           }
         }
       }
       if (error instanceof ProvisioningError) throw error;
-      console.error('Company provisioning failed:', error.message);
+      console.error(JSON.stringify({ event: 'company_provisioning_failed', company_id: null }));
       throw new ProvisioningError('Company provisioning failed. Verify Turso settings and retry; no company was registered.', 502);
     }
   };

@@ -8,7 +8,7 @@ const axios = require('axios'); // Added axios to make the free API call
 const { requireAuth, requireAdmin } = require('./auth');
 const { logActivity } = require('../audit');
 const { sendLocationToTelegram } = require('../telegram-storage');
-const { wrapAsyncRoutes } = require('../http-errors');
+const { logRequestEvent, wrapAsyncRoutes } = require('../http-errors');
 const { requireFeature } = require('../limits');
 
 const router = express.Router();
@@ -195,7 +195,7 @@ async function recordLocationPoint(attendanceId, userId, lat, lng, recordedAt, m
   return { id: info.lastInsertRowid, distanceMeters, placeChanged };
 }
 
-async function getLocationName(lat, lng) {
+async function getLocationName(lat, lng, req) {
   try {
     const cacheKey = `${Number(lat).toFixed(5)},${Number(lng).toFixed(5)}`;
     if (locationNameCache.has(cacheKey)) return locationNameCache.get(cacheKey);
@@ -220,7 +220,7 @@ async function getLocationName(lat, lng) {
     locationNameCache.set(cacheKey, locationName);
     return locationName;
   } catch (error) {
-    console.error("Geocoding failed:", error.message);
+    logRequestEvent(req, 'attendance_geocoding_failed', 'warn');
     return 'Location Saved'; // Fallback text if network drops out
   }
 }
@@ -347,12 +347,12 @@ router.put('/verification-access/:userId', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-async function savePunchIn(userId, date, lat, lng, device, { adminEnteredBy = false } = {}) {
+async function savePunchIn(userId, date, lat, lng, device, { adminEnteredBy = false, req } = {}) {
   await db.ready;
   const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(userId, date);
   if (existing?.punch_in) return null;
 
-  const locationName = adminEnteredBy ? 'Entered by admin' : await getLocationName(lat, lng);
+  const locationName = adminEnteredBy ? 'Entered by admin' : await getLocationName(lat, lng, req);
   const storedLat = adminEnteredBy ? null : lat;
   const storedLng = adminEnteredBy ? null : lng;
   const storedDeviceType = adminEnteredBy ? null : device.type;
@@ -390,7 +390,7 @@ router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
   if (!(await requireAttendanceVerification(req, res))) return;
   
   const date = todayStr();
-  const punchIn = await savePunchIn(req.session.userId, date, lat, lng, device);
+  const punchIn = await savePunchIn(req.session.userId, date, lat, lng, device, { req });
   if (!punchIn) return res.status(400).json({ error: 'Already punched in today' });
   const { attendanceId, locationName, now, mapStr } = punchIn;
   const recordedAt = new Date().toISOString();
@@ -399,7 +399,7 @@ router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
     const telegramMessageId = await sendLocationToTelegram(lat, lng, `Live tracking started: ${req.session.userId}`);
     await db.prepare('UPDATE attendance_locations SET telegram_message_id = ? WHERE id = ?').run(telegramMessageId, locationInfo.id);
   } catch (error) {
-    console.error(error.message);
+    logRequestEvent(req, 'attendance_punch_location_notification_failed', 'warn');
   }
   await logActivity(req, 'Punched in', 'attendance', attendanceId, `${date} - ${locationName}`, req.session.userId);
   res.json({ ok: true, time: now, status: mapStr });
@@ -422,7 +422,7 @@ router.post('/location-update', async (req, res) => {
     await db.prepare('UPDATE attendance_locations SET telegram_message_id = ? WHERE id = ?').run(telegramMessageId, locationInfo.id);
     res.json({ ok: true, recorded_at: recordedAt });
   } catch (error) {
-    console.error('Could not send live tracking update to Telegram:', error);
+    logRequestEvent(req, 'attendance_live_location_notification_failed', 'warn');
     res.json({ ok: true, recorded_at: recordedAt, telegram_warning: 'Location tracking notification is temporarily unavailable.' });
   }
 });
@@ -491,7 +491,7 @@ router.post('/admin-punch-in', requireAdmin, async (req, res) => {
   const device = getPunchDevice(req, req.body.device_model);
   if (!(await canPunchFromDevice(req.session.userId, device.type))) return res.status(403).json({ error: 'Punching from this device is not allowed for your admin account.' });
   const date = todayStr();
-  const punchIn = await savePunchIn(userId, date, null, null, device, { adminEnteredBy: true });
+  const punchIn = await savePunchIn(userId, date, null, null, device, { adminEnteredBy: true, req });
   if (!punchIn) return res.status(400).json({ error: 'This employee is already punched in today.' });
   await logActivity(req, 'Admin entered punch-in', 'attendance', punchIn.attendanceId, `${date} - ${employee.id}`, userId);
   res.json({ ok: true });

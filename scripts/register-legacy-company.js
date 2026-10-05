@@ -128,8 +128,8 @@ if (require.main === module) {
         console.log('Existing company linking skipped for the explicitly enabled local SQLite database.');
       }
     })
-    .catch(error => {
-      console.error(`Existing company linking failed: ${error.message}`);
+    .catch(() => {
+      console.error('Existing company linking failed.');
       process.exitCode = 1;
     })
     .finally(closeControlDatabase);

@@ -6,11 +6,12 @@ const db = require('../db');
 const { logActivity } = require('../audit');
 const { csvValue } = require('../csv');
 const { requireAuth, requireAdmin } = require('./auth');
-const { sendInternalError, wrapAsyncRoutes } = require('../http-errors');
+const { logRequestEvent, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { uploadToTelegram, streamFromTelegram, deleteTelegramMessage } = require('../telegram-storage');
 const { parseMoneyAmount } = require('../lib/money');
 const { businessDate } = require('../lib/business-date');
 const { requireFeature, reserveUpload, releaseUpload, StorageLimitError } = require('../limits');
+const uploadRateLimit = require('../upload-rate-limit');
 
 const router = express.Router();
 
@@ -79,7 +80,7 @@ async function verifyReceiptFiles(req, res, next) {
   }
 }
 
-async function uploadReceiptFiles(files) {
+async function uploadReceiptFiles(files, req) {
   const uploaded = [];
   try {
     for (const [index, file] of files.entries()) {
@@ -89,12 +90,12 @@ async function uploadReceiptFiles(files) {
     }
     return uploaded;
   } catch (error) {
-    await cleanupUploadedReceipts(uploaded);
+    await cleanupUploadedReceipts(uploaded, null, req);
     throw error;
   }
 }
 
-async function cleanupUploadedReceipts(uploaded, reimbursementId = null) {
+async function cleanupUploadedReceipts(uploaded, reimbursementId = null, req = null) {
   const fileIds = uploaded.map(item => item.attachment.fileId).filter(Boolean);
   if (reimbursementId && fileIds.length) {
     try {
@@ -102,14 +103,14 @@ async function cleanupUploadedReceipts(uploaded, reimbursementId = null) {
       await db.prepare(`DELETE FROM telegram_attachments WHERE reimbursement_id=? AND file_id IN (${placeholders})`)
         .run(reimbursementId, ...fileIds);
     } catch (error) {
-      console.error('Failed to remove receipt metadata after reimbursement failure:', error);
+      logRequestEvent(req, 'receipt_metadata_cleanup_failed');
     }
   }
   for (const { attachment } of uploaded) {
     try {
       await deleteTelegramMessage(attachment.messageId);
     } catch (error) {
-      console.error(`Failed to remove Telegram receipt ${attachment.fileId} after reimbursement failure:`, error);
+      logRequestEvent(req, 'receipt_file_cleanup_failed');
     }
   }
 }
@@ -324,7 +325,7 @@ router.get('/export.csv', requireFeature('export'), async (req, res) => {
   }
 });
 
-router.post('/', handleReceiptUpload, async (req, res) => {
+router.post('/', uploadRateLimit, handleReceiptUpload, async (req, res) => {
   try {
     const amount = parseMoneyAmount(req.body.amount, { allowZero: false });
     const category = String(req.body.category || '').trim();
@@ -363,11 +364,11 @@ router.post('/', handleReceiptUpload, async (req, res) => {
     if (receiptBytes > 0) reservation = await reserveUpload(req, receiptBytes);
     let uploadedAttachments;
     try {
-      uploadedAttachments = await uploadReceiptFiles(req.files || []);
+      uploadedAttachments = await uploadReceiptFiles(req.files || [], req);
     } catch (error) {
       if (reservation) {
         try { await releaseUpload(reservation); }
-        catch (cleanupError) { console.error('Failed to release a receipt upload reservation:', cleanupError); }
+        catch (cleanupError) { logRequestEvent(req, 'receipt_upload_reservation_release_failed'); }
       }
       throw error;
     }
@@ -390,10 +391,10 @@ router.post('/', handleReceiptUpload, async (req, res) => {
         await db.batch(statements);
       }
     } catch (error) {
-      await cleanupUploadedReceipts(uploadedAttachments, info?.lastInsertRowid || null);
+      await cleanupUploadedReceipts(uploadedAttachments, info?.lastInsertRowid || null, req);
       if (reservation) {
         try { await releaseUpload(reservation); }
-        catch (cleanupError) { console.error('Failed to release a receipt upload reservation after persistence failure:', cleanupError); }
+        catch (cleanupError) { logRequestEvent(req, 'receipt_upload_reservation_release_failed'); }
       }
       if (/reimbursements\.submission_key/i.test(String(error.message))) {
         const duplicate = await db.prepare(`SELECT id, user_id, amount, currency, category, description, expense_date
@@ -408,7 +409,7 @@ router.post('/', handleReceiptUpload, async (req, res) => {
       }
       if (info?.lastInsertRowid) {
         try { await db.prepare('DELETE FROM reimbursements WHERE id=?').run(info.lastInsertRowid); }
-        catch (cleanupError) { console.error('Failed to remove reimbursement after receipt persistence failure:', cleanupError); }
+        catch (cleanupError) { logRequestEvent(req, 'reimbursement_cleanup_failed'); }
       }
       throw error;
     }
@@ -462,7 +463,7 @@ router.put('/:id(\\d+)', handleReceiptUpload, async (req, res) => {
     } catch (error) {
       if (reservation) {
         try { await releaseUpload(reservation); }
-        catch (cleanupError) { console.error('Failed to release a receipt edit reservation:', cleanupError); }
+        catch (cleanupError) { logRequestEvent(req, 'receipt_edit_reservation_release_failed'); }
       }
       throw error;
     }
@@ -493,7 +494,7 @@ router.put('/:id(\\d+)', handleReceiptUpload, async (req, res) => {
       await cleanupUploadedReceipts(uploadedAttachments, claim.id);
       if (reservation) {
         try { await releaseUpload(reservation); }
-        catch (cleanupError) { console.error('Failed to release a receipt edit reservation after persistence failure:', cleanupError); }
+        catch (cleanupError) { logRequestEvent(req, 'receipt_edit_reservation_release_failed'); }
       }
       throw error;
     }
@@ -502,7 +503,7 @@ router.put('/:id(\\d+)', handleReceiptUpload, async (req, res) => {
       await cleanupUploadedReceipts(uploadedAttachments, claim.id);
       if (reservation) {
         try { await releaseUpload(reservation); }
-        catch (cleanupError) { console.error('Failed to release a receipt edit reservation after claim conflict:', cleanupError); }
+        catch (cleanupError) { logRequestEvent(req, 'receipt_edit_reservation_release_failed'); }
       }
       return res.status(409).json({ error: 'This expense is no longer editable.' });
     }
@@ -544,7 +545,7 @@ router.delete('/:id', requireAdmin, async (req, res) => {
       const messageId = messagesByFileId.get(fileId);
       if (!messageId) continue;
       try { await deleteTelegramMessage(messageId); }
-      catch (error) { console.error(`Failed to remove Telegram receipt ${fileId} for deleted reimbursement ${claim.id}:`, error); }
+      catch (error) { logRequestEvent(req, 'receipt_delete_failed'); }
     }
     res.json({ ok: true });
   } catch (error) {

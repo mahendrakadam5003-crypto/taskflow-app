@@ -32,7 +32,7 @@ Without `USE_LOCAL_DB=1`, TaskFlow requires both `TURSO_DATABASE_URL` and `TURSO
 ### Multi-company control panel and database
 The control tables (company registry, plans, super-admin accounts and sessions, usage snapshots, backup records, billing notes, and audit entries) use the same database as `TURSO_DATABASE_URL` by default, authenticated by `TURSO_AUTH_TOKEN`. On startup, TaskFlow registers the current workspace as **Existing Company** (code `existing-company` by default) in the super-admin overview. This only adds registry metadata and an encrypted copy of the existing Turso token to that same database; it does not copy, move, rename, or change any company users or other existing records. To keep using the same database, leave `CONTROL_DATABASE_URL` and `CONTROL_AUTH_TOKEN` unset. You can customize the display label with `LEGACY_COMPANY_NAME` and code with `LEGACY_COMPANY_CODE` before the first link.
 
-For super-admin sign-in, set `SUPERADMIN_USERNAME` and `SUPERADMIN_PASSWORD` as private environment variables on the deployed service. The Render blueprint defaults the username to `super admin`; set a password you control in Render's secret environment settings. On startup, TaskFlow creates the account if none exists, or updates the password only for an existing account with the matching username. It refuses to replace an account with a different username. `SUPERADMIN_NAME` is optional and defaults to the username. Usernames are case-insensitive. Use a unique password of at least 10 characters (72 UTF-8 bytes maximum); a longer, randomly generated password is recommended, and change any password already shared in messages as soon as practical. After startup reports that the account was created, updated, or is ready, remove `SUPERADMIN_PASSWORD` from the service environment and redeploy. If the password is left configured, each startup will continue to synchronize that account's password from the secret.
+For super-admin sign-in, set `SUPERADMIN_USERNAME` and `SUPERADMIN_PASSWORD` as private environment variables on the deployed service. The Render blueprint defaults the username to `super admin`; set a unique, randomly generated password of at least 16 characters (72 UTF-8 bytes maximum) in Render's secret environment settings. On startup, TaskFlow creates the account if none exists, or updates the password only for an existing account with the matching username. It refuses to replace an account with a different username. `SUPERADMIN_NAME` is optional and defaults to the username. Usernames are case-insensitive. After startup reports that the account was created, updated, or is ready, remove `SUPERADMIN_PASSWORD` from the service environment and redeploy. If the password is left configured, each startup will continue to synchronize that account's password from the secret.
 
 Alternatively, run `npm run migrate:control` and then `npm run superadmin:create` from a trusted terminal with `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, and the bootstrap variables set.
 
@@ -56,11 +56,13 @@ Cancelling a company blocks sign-in immediately and schedules retirement 30 days
 
 The local server listens on `127.0.0.1:3000`. Open `http://127.0.0.1:3000` on the PC itself. Local installs do not accept connections from other LAN devices.
 
-On an empty database, the app creates the first admin account with username `admin` and a random one-time password printed to the server console. Set `INITIAL_ADMIN_PASSWORD` before first startup to provide your own initial password instead. The admin must change that password at first login. Existing databases are not reseeded.
+On an empty database, set `INITIAL_ADMIN_PASSWORD` as a private environment variable before first startup. It must contain 10 to 72 UTF-8 bytes; the password is never printed to logs, and the admin must change it at first login. Existing databases are not reseeded.
 
 Existing admin accounts still using the old `admin123` password are required to change it at next login. Admin password resets also require the recipient to change the password before continuing.
 
-If you deployed using credentials previously present in this repository's `.env.example`, rotate those credentials at their providers before relying on the deployment.
+Older public Git history contains values for `SESSION_SECRET`, `TELEGRAM_BOT_TOKEN`, `TURSO_AUTH_TOKEN`, and `TURSO_PLATFORM_TOKEN`. Rotate each at its provider and update the deployment environment; changing the current `.env.example` does not remove values from Git history.
+
+Run `npm test` before every deployment. The Render build runs this suite automatically; it includes two-company guessed-ID read/update/delete checks and guards API routes against bypassing the tenant-bound database client.
 
 ## 3. Access from phones or remotely
 Do not open TaskFlow over LAN HTTP or forward port 3000 on your router. Passwords and other private data would cross the network without transport encryption.

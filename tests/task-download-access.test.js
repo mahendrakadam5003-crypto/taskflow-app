@@ -28,7 +28,7 @@ const mockDb = {
       all: async (...args) => {
         if (sql.includes('FROM telegram_attachments WHERE file_id = ?')) {
           attachmentQueries += 1;
-          assert.equal(args[0], fileIdFromDb);
+          if (args[0] !== fileIdFromDb) return [];
           return [{ original_name: 'private.pdf', mime_type: 'application/pdf', task_id: 900 }];
         }
         return [];
@@ -124,6 +124,21 @@ test('download rejects malformed file IDs before querying or contacting Telegram
   assert.equal(response.status, 400);
   assert.equal(attachmentQueries, 0);
   assert.equal(telegramRequests, 0);
+});
+
+test('company B cannot resolve a guessed Telegram file ID belonging to company A', async () => {
+  isProjectMember = true;
+  fileIdFromDb = 'company-b-private-file';
+  attachmentQueries = 0;
+  telegramRequests = 0;
+  const response = await fetch(`${baseUrl}/api/download/company-a-private-file`, {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(response.status, 404);
+  assert.equal(attachmentQueries, 1);
+  assert.equal(telegramRequests, 0);
+  fileIdFromDb = 'telegram-secret-file-id';
+  isProjectMember = false;
 });
 
 test('authorized Telegram download URL encodes the validated file ID', async () => {

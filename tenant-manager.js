@@ -55,7 +55,7 @@ function createTenantManager({
   legacyClient = createLegacyClient(environment),
   clientFactory = createClient,
   resolveTenantClient,
-  initializeSchema = initTenantSchema
+  initializeSchema = (client, companyId) => initTenantSchema(client, { companyId })
 } = {}) {
   const context = new AsyncLocalStorage();
   const tenantClients = new Map();
@@ -92,7 +92,7 @@ function createTenantManager({
       const opening = (async () => {
         const client = tenantId === LEGACY_TENANT_ID ? legacyClient : await createRegisteredTenantClient(tenantId);
         try {
-          await initializeSchema(client);
+          await initializeSchema(client, tenantId);
           return client;
         } catch (error) {
           if (client !== legacyClient) await client.close?.();
@@ -152,7 +152,7 @@ function createTenantManager({
             changes: result.rowsAffected || 0
           };
         } catch (error) {
-          console.error('Driver RUN error:', error.message);
+          console.error(JSON.stringify({ event: 'tenant_database_run_failed', company_id: tenantId }));
           throw error;
         }
       }
@@ -163,9 +163,7 @@ function createTenantManager({
     exec(sql) {
       const tenantId = getCurrentTenantId();
       return getTenantClient(tenantId).then(client => client.execute(sql)).catch(error => {
-        const operation = String(sql).replace(/\s+/g, ' ').trim().slice(0, 120);
-        console.error('Driver EXEC error:', error.message, 'Operation:', operation);
-        console.error('Driver EXEC details:', JSON.stringify({ code: error.code, status: error.status, cause: error.cause?.message }));
+        console.error(JSON.stringify({ event: 'tenant_database_exec_failed', company_id: tenantId }));
         throw error;
       });
     },

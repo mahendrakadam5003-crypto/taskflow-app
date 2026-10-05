@@ -1,15 +1,12 @@
 'use strict';
 
-const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 
-function createDbDriverInterface(db) {
+function createDbDriverInterface(db, companyId) {
   return {
   exec: async (sql) => {
     try { return await db.execute(sql); } catch(e) {
-      const operation = String(sql).replace(/\s+/g, ' ').trim().slice(0, 120);
-      console.error("Driver EXEC error:", e.message, "Operation:", operation);
-      console.error("Driver EXEC details:", JSON.stringify({ code: e.code, status: e.status, cause: e.cause?.message }));
+      console.error(JSON.stringify({ event: 'tenant_schema_exec_failed', company_id: companyId ?? null }));
       throw e;
     }
   },
@@ -28,15 +25,18 @@ function createDbDriverInterface(db) {
         try {
           const res = await db.execute({ sql, args: params });
           return { lastInsertRowid: res.lastInsertRowid ? Number(res.lastInsertRowid) : null, changes: res.rowsAffected || 0 };
-        } catch(err) { console.error("Driver RUN error:", err.message); throw err; }
+        } catch(err) {
+          console.error(JSON.stringify({ event: 'tenant_schema_run_failed', company_id: companyId ?? null }));
+          throw err;
+        }
       }
     };
   }
   };
 }
 
-async function initTenantSchema(db, { seedInitialAdmin = true } = {}) {
-  const dbDriverInterface = createDbDriverInterface(db);
+async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null } = {}) {
+  const dbDriverInterface = createDbDriverInterface(db, companyId);
   try {
     await db.execute('SELECT 1');
     await db.execute('PRAGMA foreign_keys = ON');
@@ -699,17 +699,16 @@ async function initTenantSchema(db, { seedInitialAdmin = true } = {}) {
     const totalUsers = Number(usersCountObj?.c ?? 0);
     
     if (seedInitialAdmin && (!totalUsers || totalUsers === 0)) {
-      const initialPassword = process.env.INITIAL_ADMIN_PASSWORD || crypto.randomBytes(24).toString('base64url');
+      const initialPassword = String(process.env.INITIAL_ADMIN_PASSWORD || '');
+      if (Buffer.byteLength(initialPassword, 'utf8') < 10 || Buffer.byteLength(initialPassword, 'utf8') > 72) {
+        throw new Error('INITIAL_ADMIN_PASSWORD must contain between 10 and 72 UTF-8 bytes before creating the initial admin account.');
+      }
       const hash = bcrypt.hashSync(initialPassword, 10);
       const result = await dbDriverInterface.prepare(`INSERT INTO users (name, username, password_hash, role, active, must_change_password)
         SELECT ?, ?, ?, 'admin', 1, 1 WHERE NOT EXISTS (SELECT 1 FROM users)`)
         .run('Admin', 'admin', hash);
       if (result.changes) {
-        if (process.env.INITIAL_ADMIN_PASSWORD) {
-          console.log('Initial admin created with username "admin" using INITIAL_ADMIN_PASSWORD. Change it at first login.');
-        } else {
-          console.log(`Initial admin created. Username: admin | One-time password: ${initialPassword} | Change it at first login.`);
-        }
+        console.log('Initial admin created from INITIAL_ADMIN_PASSWORD. Change it at first login.');
       }
     }
 
@@ -728,7 +727,7 @@ async function initTenantSchema(db, { seedInitialAdmin = true } = {}) {
     if (needsSchemaUpgrade) await markSchemaVersion(3);
     console.log('Database schema and default settings are ready.');
   } catch (err) {
-    console.error('Database initialization failed:', err);
+    console.error(JSON.stringify({ event: 'tenant_database_initialization_failed', company_id: companyId ?? null }));
     throw err;
   }
     return dbDriverInterface;

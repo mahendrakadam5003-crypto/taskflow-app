@@ -7,7 +7,7 @@ const { getControlDatabase } = require('../control-db');
 const { hasControlDatabaseConfiguration, LEGACY_TENANT_ID } = require('../tenant-manager');
 const { clearCompanyContextCookie } = require('../company-context');
 const { logActivity } = require('../audit');
-const { asyncHandler, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
+const { asyncHandler, logRequestEvent, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { getPlan, getPlanUsage } = require('../limits');
 
 const router = express.Router();
@@ -43,9 +43,8 @@ const loginCompanyLimiter = rateLimit({
     .trim().toLowerCase().slice(0, 63) || 'existing-company'}`
 });
 
-function logFailedLogin(req, username) {
-  const attemptedUsername = String(username || '').trim().toLowerCase().slice(0, 128);
-  console.warn('Failed login attempt', JSON.stringify({ username: attemptedUsername || null, ip: req.ip }));
+function logFailedLogin(req) {
+  logRequestEvent(req, 'company_login_failed', 'warn');
 }
 
 function mustChangePassword(user) {
@@ -120,7 +119,7 @@ async function requireAuth(req, res, next) {
         args: [Number(req.session.supportModeSuperAdminId), Number(req.session.companyId), 'Support mode expired', 'The 30-minute support session expired.']
       });
     } catch (error) {
-      console.error('Support-mode expiry audit failed:', error.message);
+      logRequestEvent(req, 'support_mode_expiry_audit_failed');
     }
     return rejectInvalidSession(req, res);
   }
@@ -203,7 +202,7 @@ router.post('/login', loginIpLimiter, loginUsernameLimiter, loginCompanyLimiter,
           args: [Number(req.companyTenantId)]
         });
       } catch (error) {
-        console.error('Company last-login timestamp could not be updated:', error.message);
+        logRequestEvent(req, 'company_last_login_update_failed', 'warn');
       }
     }
     res.json({

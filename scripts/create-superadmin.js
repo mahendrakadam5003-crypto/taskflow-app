@@ -2,6 +2,7 @@
 
 const bcrypt = require('bcryptjs');
 const { closeControlDatabase, getControlDatabase } = require('../control-db');
+const SUPERADMIN_PASSWORD_MIN_CHARACTERS = 16;
 
 async function createInitialSuperAdmin(environment = process.env, getDatabase = getControlDatabase) {
   const username = String(environment.SUPERADMIN_USERNAME || '').trim().toLowerCase();
@@ -12,8 +13,8 @@ async function createInitialSuperAdmin(environment = process.env, getDatabase = 
   }
   if (!name || name.length > 120) throw new Error('SUPERADMIN_NAME must contain 1 to 120 characters.');
   const passwordBytes = Buffer.byteLength(password, 'utf8');
-  if (passwordBytes < 10 || passwordBytes > 72) {
-    throw new Error('SUPERADMIN_PASSWORD must contain between 10 and 72 UTF-8 bytes.');
+  if (Array.from(password).length < SUPERADMIN_PASSWORD_MIN_CHARACTERS || passwordBytes > 72) {
+    throw new Error('SUPERADMIN_PASSWORD must contain at least 16 characters and no more than 72 UTF-8 bytes.');
   }
 
   const controlDb = await getDatabase();
@@ -50,8 +51,8 @@ function getBootstrapCredentials(environment) {
   }
   if (!name || name.length > 120) throw new Error('SUPERADMIN_NAME must contain 1 to 120 characters.');
   const passwordBytes = Buffer.byteLength(password, 'utf8');
-  if (passwordBytes < 10 || passwordBytes > 72) {
-    throw new Error('SUPERADMIN_PASSWORD must contain between 10 and 72 UTF-8 bytes.');
+  if (Array.from(password).length < SUPERADMIN_PASSWORD_MIN_CHARACTERS || passwordBytes > 72) {
+    throw new Error('SUPERADMIN_PASSWORD must contain at least 16 characters and no more than 72 UTF-8 bytes.');
   }
   return { name, password, username };
 }
@@ -118,7 +119,7 @@ if (require.main === module) {
       else console.log('Super-admin bootstrap credentials are not configured.');
     })
     .catch(error => {
-      console.error(`Super-admin bootstrap failed: ${error.message}`);
+      console.error('Super-admin bootstrap failed.');
       process.exitCode = 1;
     })
     .finally(closeControlDatabase);

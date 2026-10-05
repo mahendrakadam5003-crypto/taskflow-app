@@ -22,10 +22,22 @@ function wrapAsyncRoutes(router) {
   }
 }
 
+function logRequestEvent(req, event, level = 'error') {
+  logCompanyEvent(req?.companyTenantId ?? null, event, level);
+}
+
+function logCompanyEvent(companyId, event, level = 'error') {
+  const entry = JSON.stringify({ event, company_id: companyId ?? null });
+  (level === 'warn' ? console.warn : console.error)(entry);
+}
+
 function sendInternalError(res, error, context) {
-  console.error(`${context}:`, error);
+  console.error(JSON.stringify({
+    event: String(context || 'request_failed').slice(0, 100),
+    company_id: res.locals?.company_id ?? null
+  }));
   if (res.headersSent) return;
   return res.status(500).json({ error: 'Internal server error.' });
 }
 
-module.exports = { asyncHandler, sendInternalError, wrapAsyncRoutes };
+module.exports = { asyncHandler, logCompanyEvent, logRequestEvent, sendInternalError, wrapAsyncRoutes };

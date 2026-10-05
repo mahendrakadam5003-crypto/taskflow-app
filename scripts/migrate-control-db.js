@@ -6,8 +6,8 @@ getControlDatabase()
   .then(() => {
     console.log('Control database schema is up to date.');
   })
-  .catch(error => {
-    console.error(`Control database migration failed: ${error.message}`);
+  .catch(() => {
+    console.error('Control database migration failed.');
     process.exitCode = 1;
   })
   .finally(closeControlDatabase);

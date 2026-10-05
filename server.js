@@ -17,6 +17,7 @@ const { getControlDatabase } = require('./control-db');
 const { hasControlDatabaseConfiguration } = require('./tenant-manager');
 const { collectUsageSnapshots } = require('./usage-snapshots');
 const { createBackupManager } = require('./backup-manager');
+const { logCompanyEvent } = require('./http-errors');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -57,14 +58,14 @@ async function runBackupMaintenance() {
         const dailyResults = await backupManager.runDailyBackups();
         console.log(`Daily Telegram backup pass finished for ${dailyResults.length} company workspace(s).`);
         } catch (error) {
-          console.error('Daily Telegram backup pass failed:', error.message);
+          logCompanyEvent(null, 'daily_backup_pass_failed');
         }
       }
       try {
         const restoreTestResults = await backupManager.runMonthlyRestoreTests();
         if (restoreTestResults.length) console.log(`Monthly backup restore tests finished for ${restoreTestResults.length} company workspace(s).`);
       } catch (error) {
-        console.error('Monthly backup restore test pass failed:', error.message);
+        logCompanyEvent(null, 'monthly_restore_test_pass_failed');
       }
     }
     if (hasControlDatabaseConfiguration()) {
@@ -72,11 +73,11 @@ async function runBackupMaintenance() {
         const deletionResults = await backupManager.processDueCompanyDeletions();
         if (deletionResults.length) console.log(`Company retirement pass finished for ${deletionResults.length} company workspace(s).`);
       } catch (error) {
-        console.error('Company retirement pass failed:', error.message);
+        logCompanyEvent(null, 'company_retirement_pass_failed');
       }
     }
   } catch (error) {
-    console.error('Scheduled backup maintenance failed:', error.message);
+    logCompanyEvent(null, 'scheduled_backup_maintenance_failed');
   } finally {
     backupMaintenanceRunning = false;
   }
@@ -152,12 +153,12 @@ async function deleteTelegramMessage(messageId, label) {
     const description = response.data?.description || 'unknown Telegram API response';
     if (/message to delete not found|message not found/i.test(description)) return { success: true, permanent: false, error: null };
     const permanent = response.status >= 400 && response.status < 500 && response.status !== 429;
-    console.error(`Telegram did not confirm deletion of ${label}:`, description);
+    logCompanyEvent(currentTenantCompanyId(), 'telegram_message_delete_failed');
     return { success: false, permanent, error: description };
   } catch (error) {
     const description = error.response?.data?.description || error.message;
     if (/message to delete not found|message not found/i.test(description)) return { success: true, permanent: false, error: null };
-    console.error(`Could not delete ${label} from Telegram:`, description);
+    logCompanyEvent(currentTenantCompanyId(), 'telegram_message_delete_failed');
     const status = Number(error.response?.status);
     return {
       success: false,
@@ -165,6 +166,10 @@ async function deleteTelegramMessage(messageId, label) {
       error: description
     };
   }
+}
+
+function currentTenantCompanyId() {
+  try { return db.getCurrentTenantId(); } catch (error) { return null; }
 }
 
 async function removeReceiptReference(claimId, receiptPath) {
@@ -249,7 +254,7 @@ async function cleanupExpiredUploadsForCurrentTenant() {
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
         await db.prepare('UPDATE comments SET image_path = NULL, attachment_name = NULL, attachment_type = NULL WHERE id = ?').run(comment.id);
       } catch (error) {
-        console.error(`Could not expire local comment attachment ${comment.id}:`, error.message);
+        logCompanyEvent(currentTenantCompanyId(), 'comment_attachment_retention_failed');
         continue;
       }
       removed++;
@@ -271,7 +276,7 @@ async function cleanupExpiredUploadsForCurrentTenant() {
           await removeReceiptReference(claim.id, receiptPath);
           removed++;
         } catch (error) {
-          console.error(`Could not expire local reimbursement receipt ${claim.id}:`, error.message);
+          logCompanyEvent(currentTenantCompanyId(), 'receipt_retention_failed');
         }
       }
     }
@@ -378,6 +383,10 @@ if (hasControlDatabaseConfiguration()) {
 app.use(session(sessionOptions));
 app.use(createCompanyContextMiddleware({ runWithTenant: db.runWithTenant }));
 app.use((req, res, next) => {
+  res.locals.company_id = req.companyTenantId ?? null;
+  next();
+});
+app.use((req, res, next) => {
   if (!req.path.startsWith('/api/')
     || req.path === '/api/superadmin'
     || req.path.startsWith('/api/superadmin/')) return next();
@@ -403,7 +412,7 @@ app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
   const status = Number(error.statusCode || error.status);
   const clientError = status >= 400 && status < 500;
-  console.error(`Unhandled request error: ${req.method} ${req.originalUrl}`, error);
+  console.error(JSON.stringify({ event: 'http_request_failed', company_id: req.companyTenantId ?? null }));
   res.status(clientError ? status : 500).json({
     error: clientError ? 'Invalid request.' : 'Internal server error.'
   });
@@ -420,7 +429,7 @@ const startupPromise = (async () => {
       console.log(`Existing company "${companyLink.name}" is already registered in the super-admin overview.`);
     }
   } catch (error) {
-    console.error(`Existing company registration failed; the company workspace will continue unchanged: ${error.message}`);
+    logCompanyEvent(null, 'existing_company_registration_failed');
   }
   try {
     const superAdminBootstrap = await bootstrapConfiguredSuperAdmin();
@@ -429,33 +438,33 @@ const startupPromise = (async () => {
     else if (superAdminBootstrap === 'unchanged') console.log('Configured super-admin account is ready. Remove SUPERADMIN_PASSWORD from the environment.');
     else console.log('Super-admin bootstrap skipped; SUPERADMIN_USERNAME and SUPERADMIN_PASSWORD are not configured.');
   } catch (error) {
-    console.error(`Super-admin bootstrap failed; the company workspace will continue without it: ${error.message}`);
+    logCompanyEvent(null, 'superadmin_bootstrap_failed');
   }
   await cleanupExpiredSessions();
   try {
     const count = await collectUsageSnapshots();
     console.log(`Collected usage snapshots for ${count} registered company workspace(s).`);
   } catch (error) {
-    console.error('Initial usage snapshot collection failed:', error.message);
+    logCompanyEvent(null, 'initial_usage_snapshot_collection_failed');
   }
   server = app.listen(PORT, bindAddress, () => {
     console.log(`TaskFlow operational server running on ${bindAddress}:${PORT}`);
-    cleanupExpiredUploads().catch(err => console.error('Startup cleanup failed:', err));
-    setInterval(() => cleanupExpiredUploads().catch(err => console.error('Upload cleanup failed:', err.message)), 24 * 60 * 60 * 1000);
-    setInterval(() => cleanupExpiredSessions().catch(err => console.error('Session cleanup failed:', err.message)), 24 * 60 * 60 * 1000);
+    cleanupExpiredUploads().catch(() => logCompanyEvent(null, 'startup_upload_cleanup_failed'));
+    setInterval(() => cleanupExpiredUploads().catch(() => logCompanyEvent(null, 'upload_cleanup_failed')), 24 * 60 * 60 * 1000);
+    setInterval(() => cleanupExpiredSessions().catch(() => logCompanyEvent(null, 'session_cleanup_failed')), 24 * 60 * 60 * 1000);
     setInterval(() => collectUsageSnapshots()
       .then(count => console.log(`Collected usage snapshots for ${count} registered company workspace(s).`))
-      .catch(err => console.error('Usage snapshot collection failed:', err.message)), 24 * 60 * 60 * 1000);
+      .catch(() => logCompanyEvent(null, 'usage_snapshot_collection_failed')), 24 * 60 * 60 * 1000);
     runBackupMaintenance();
     setInterval(runBackupMaintenance, 24 * 60 * 60 * 1000);
   });
 })().catch(error => {
-  console.error('Server startup failed:', error);
+  logCompanyEvent(null, 'server_startup_failed');
   process.exitCode = 1;
 });
 
-process.on('unhandledRejection', reason => {
-  console.error('Unhandled promise rejection; shutting down:', reason);
+process.on('unhandledRejection', () => {
+  logCompanyEvent(null, 'unhandled_promise_rejection');
   if (server) {
     server.close(() => process.exit(1));
     setTimeout(() => process.exit(1), 10000).unref();

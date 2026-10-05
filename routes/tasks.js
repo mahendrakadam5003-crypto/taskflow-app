@@ -9,11 +9,12 @@ const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const db = require('../db');
 const { requireAuth, requireAdmin } = require('./auth');
 const { logActivity } = require('../audit');
-const { sendInternalError, wrapAsyncRoutes } = require('../http-errors');
+const { logRequestEvent, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { uploadToTelegram, deleteTelegramMessage } = require('../telegram-storage');
 const { parseMoneyAmount, parsePaymentAmounts } = require('../lib/money');
 const { businessDate } = require('../lib/business-date');
 const { getPlanUsage, reserveUpload, releaseUpload, requireFeature, StorageLimitError } = require('../limits');
+const uploadRateLimit = require('../upload-rate-limit');
 const { csvValue } = require('../csv');
 
 const router = express.Router();
@@ -110,7 +111,7 @@ const handleAsanaUploadError = (uploadMiddleware, label) => (req, res, next) => 
     if (!error) return next();
     const tooLarge = error.code === 'LIMIT_FILE_SIZE';
     const status = tooLarge ? 413 : 400;
-    if (!tooLarge) console.error(`Unable to receive ${label.toLowerCase()}:`, error);
+    if (!tooLarge) logRequestEvent(req, 'upload_request_rejected', 'warn');
     const message = tooLarge
       ? (label === 'Asana project JSON'
         ? 'Asana project JSON exceeds the 20 MB upload limit after compression. Split the export into smaller projects or reduce its history.'
@@ -278,7 +279,7 @@ router.get('/download/:fileId', async (req, res) => {
     if (contentType) res.setHeader('Content-Type', contentType);
     response.data.pipe(res);
   } catch (error) {
-    console.error("Storage streaming link extraction failed:", error.message);
+    logRequestEvent(req, 'attachment_download_failed');
     sendInternalError(res, error, 'File download failed');
   }
 });
@@ -659,7 +660,7 @@ router.get('/admin/data-export', requireFeature('export'), requireAdmin, async (
     res.setHeader('Content-Disposition', `attachment; filename="taskflow-projects-${new Date().toISOString().slice(0, 10)}.json"`);
     res.json(backup);
   } catch (error) {
-    console.error('TaskFlow data export failed:', error);
+    logRequestEvent(req, 'taskflow_data_export_failed');
     sendInternalError(res, error, 'TaskFlow data export failed');
   }
 });
@@ -674,7 +675,7 @@ router.get('/admin/asana-import/progress/:id', requireAdmin, (req, res) => {
   res.json(progress);
 });
 
-router.post('/admin/asana-import', requireAdmin, handleAsanaUploadError(asanaImportUpload.array('projects', 20), 'Asana project JSON'), async (req, res) => {
+router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUploadError(asanaImportUpload.array('projects', 20), 'Asana project JSON'), async (req, res) => {
   const files = req.files || [];
   if (!files.length) return res.status(400).json({ error: 'Choose one or more Asana project JSON files.' });
   const progressId = String(req.body?.progress_id || '').slice(0, 100);
@@ -890,7 +891,7 @@ router.post('/admin/asana-import', requireAdmin, handleAsanaUploadError(asanaImp
       updateProgress(totalImportUnits, totalImportUnits, `Imported ${sourceProject.name}.`, 'complete');
       results.push({ file: file.originalname, status: 'imported', project_id: projectId, project_name: sourceProject.name, tasks: importedTaskCount, subtasks: importedSubtaskCount, comments: importedCommentCount, activity_items: importedStoryCount, unmatched_users: Array.from(unmatchedNames) });
     } catch (error) {
-      console.error(`Asana import failed for ${file.originalname}:`, error);
+      logRequestEvent(req, 'asana_project_import_failed');
       if (progressId) {
         asanaImportProgress.set(progressId, { status: 'failed', percent: currentProgress ? Math.min(99, asanaImportProgress.get(progressId)?.percent || 0) : 0, message: 'Import failed. Please check the server logs.', eta_seconds: null, updated_at: Date.now() });
       }
@@ -909,7 +910,7 @@ router.post('/admin/asana-import', requireAdmin, handleAsanaUploadError(asanaImp
           ]);
         } catch (rollbackError) {
           rollbackFailed = true;
-          console.error(`Asana import rollback failed for ${file.originalname}:`, rollbackError);
+          logRequestEvent(req, 'asana_project_import_rollback_failed');
         }
       }
       results.push({ file: file.originalname, status: 'failed', project_gid: projectGid, error: rollbackFailed ? 'Import failed and cleanup was incomplete; administrator review is required.' : 'Import failed.' });
@@ -918,7 +919,7 @@ router.post('/admin/asana-import', requireAdmin, handleAsanaUploadError(asanaImp
   res.json({ ok: results.every(result => result.status === 'imported'), results });
 });
 
-router.post('/admin/asana-import/:projectId/attachments', requireAdmin, handleAsanaUploadError(asanaAttachmentUpload.array('attachments', 5), 'Asana attachment'), async (req, res) => {
+router.post('/admin/asana-import/:projectId/attachments', requireAdmin, uploadRateLimit, handleAsanaUploadError(asanaAttachmentUpload.array('attachments', 5), 'Asana attachment'), async (req, res) => {
   const projectId = Number(req.params.projectId);
   const project = await db.prepare('SELECT id, asana_gid FROM projects WHERE id = ? AND asana_gid IS NOT NULL').get(projectId);
   if (!project) return res.status(404).json({ error: 'Imported Asana project not found.' });
@@ -976,13 +977,13 @@ router.post('/admin/asana-import/:projectId/attachments', requireAdmin, handleAs
     } catch (error) {
       if (stored?.messageId) {
         try { await deleteTelegramMessage(stored.messageId); }
-        catch (cleanupError) { console.error(`Failed to clean up Asana attachment ${filename} after import failure:`, cleanupError); }
+        catch (cleanupError) { logRequestEvent(req, 'asana_attachment_cleanup_failed'); }
       }
       if (reservation) {
         try { await releaseUpload(reservation); }
-        catch (cleanupError) { console.error(`Failed to release Asana attachment reservation for ${filename}:`, cleanupError); }
+        catch (cleanupError) { logRequestEvent(req, 'asana_upload_reservation_release_failed'); }
       }
-      console.error(`Asana attachment import failed for ${file.originalname}:`, error);
+      logRequestEvent(req, 'asana_attachment_import_failed');
       results.push({
         filename: file.originalname,
         status: 'failed',
@@ -1074,7 +1075,7 @@ router.put('/project-action-access/:userId', requireAdmin, async (req, res) => {
       .run(userId, ...values, req.session.userId);
     res.json({ ok: true });
   } catch (error) {
-    console.error('Project and task permission save failed:', error);
+    logRequestEvent(req, 'project_task_permissions_save_failed');
     sendInternalError(res, error, 'Project and task permission save failed');
   }
 });
@@ -1629,7 +1630,7 @@ async function requireTaskCheckinToComment(req, res, next) {
   }
 }
 
-router.post('/tasks/:id/comments', requireTaskCheckinToComment, handleCommentUploadError, async (req, res) => {
+router.post('/tasks/:id/comments', requireTaskCheckinToComment, uploadRateLimit, handleCommentUploadError, async (req, res) => {
   try {
     const body = String(req.body.body || '').trim();
     if (!body && !req.file) return res.status(400).json({ error: 'Write a comment or attach an image.' });
@@ -1653,10 +1654,10 @@ router.post('/tasks/:id/comments', requireTaskCheckinToComment, handleCommentUpl
       } catch (error) {
         if (attachment?.messageId) {
           try { await deleteTelegramMessage(attachment.messageId); }
-          catch (cleanupError) { console.error('Failed to clean up a TaskFlow comment attachment after save failure:', cleanupError); }
+          catch (cleanupError) { logRequestEvent(req, 'comment_attachment_cleanup_failed'); }
         }
         try { await releaseUpload(reservation); }
-        catch (cleanupError) { console.error('Failed to release a TaskFlow comment upload reservation:', cleanupError); }
+        catch (cleanupError) { logRequestEvent(req, 'comment_upload_reservation_release_failed'); }
         throw error;
       }
     }

@@ -3,7 +3,7 @@ services:
     name: taskflow-app
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm ci && npm test
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
@@ -19,6 +19,8 @@ services:
       - key: SUPERADMIN_USERNAME
         value: super admin
       - key: SUPERADMIN_PASSWORD
+        sync: false
+      - key: INITIAL_ADMIN_PASSWORD
         sync: false
       - key: TURSO_PLATFORM_TOKEN
         sync: false
