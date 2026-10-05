@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const sessionSecret = String(process.env.SESSION_SECRET || '').trim();
 if (sessionSecret.length < 32) {
   console.error('SESSION_SECRET must be set to a random value of at least 32 characters before startup.');
@@ -18,6 +19,7 @@ const { hasControlDatabaseConfiguration } = require('./tenant-manager');
 const { collectUsageSnapshots } = require('./usage-snapshots');
 const { createBackupManager } = require('./backup-manager');
 const { logCompanyEvent } = require('./http-errors');
+const { createUserErrorReporter } = require('./user-error-reporter');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -45,6 +47,7 @@ function verifyUnsafeRequestOrigin(req, res, next) {
 }
 
 const db = require('./db');
+const reportUserError = createUserErrorReporter({ getDatabase: getControlDatabase, isConfigured: hasControlDatabaseConfiguration });
 const backupManager = createBackupManager({ tenantDatabase: db });
 let backupMaintenanceRunning = false;
 
@@ -362,6 +365,11 @@ app.use(helmet({
 }));
 app.use(express.json({ limit: '2mb' }));
 app.use(verifyUnsafeRequestOrigin);
+app.use((req, res, next) => {
+  req.requestId = crypto.randomUUID();
+  res.setHeader('X-Request-ID', req.requestId);
+  next();
+});
 const sessionOptions = {
   name: 'taskflow.sid.v2',
   secret: sessionSecret,
@@ -384,6 +392,7 @@ app.use(session(sessionOptions));
 app.use(createCompanyContextMiddleware({ runWithTenant: db.runWithTenant }));
 app.use((req, res, next) => {
   res.locals.company_id = req.companyTenantId ?? null;
+  res.locals.reportUserError = (event, statusCode) => reportUserError(req, event, statusCode);
   next();
 });
 app.use((req, res, next) => {
@@ -413,6 +422,7 @@ app.use((error, req, res, next) => {
   const status = Number(error.statusCode || error.status);
   const clientError = status >= 400 && status < 500;
   console.error(JSON.stringify({ event: 'http_request_failed', company_id: req.companyTenantId ?? null }));
+  if (!clientError) reportUserError(req, 'unhandled_request_error', 500);
   res.status(clientError ? status : 500).json({
     error: clientError ? 'Invalid request.' : 'Internal server error.'
   });

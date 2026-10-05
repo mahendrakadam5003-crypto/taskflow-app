@@ -49,6 +49,14 @@
       </div>
       <p id="overview-error" class="message error hidden" role="alert"></p>
       <p id="management-message" class="message success hidden" role="status"></p>
+      <section id="user-error-inbox" class="companies-panel user-error-inbox" aria-labelledby="user-error-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">OPERATIONS</p><h2 id="user-error-heading">User error inbox <span id="user-error-count" class="total-pill">0 open</span></h2></div>
+          <button id="user-error-refresh" type="button" class="button button-quiet" aria-label="Refresh user errors">Refresh</button>
+        </div>
+        <p id="user-error-load-error" class="message error hidden" role="alert"></p>
+        <div id="user-error-list" class="record-list user-error-list" aria-live="polite"></div>
+      </section>
       <nav class="control-nav" aria-label="Super-admin pages">
         <button type="button" class="control-nav-button active" data-admin-page="overview">Overview &amp; companies</button>
         <button type="button" class="control-nav-button" data-admin-page="plans">Plans</button>

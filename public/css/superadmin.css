@@ -71,6 +71,12 @@ footer span { padding: 0 6px; color: var(--accent); }
 .summary-value { margin: 15px 0 0; font-size: 29px; font-weight: 650; letter-spacing: -.04em; }
 .summary-caption { margin-top: 4px; color: #75869c; font-size: 10px; }
 .provision-panel { margin-bottom: 20px; }
+.user-error-inbox { margin-top: 20px; }
+.user-error-inbox .section-heading h2 { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.user-error-list { padding: 0 24px; }
+.user-error-row { align-items: center; }
+.user-error-row code { color: #9aeee2; }
+.user-error-empty { margin: 0; padding: 18px 0; color: var(--muted); font-size: 12px; }
 .provision-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; padding: 18px 24px 24px; }
 .form-field { min-width: 0; }
 .provision-form label { align-self: end; }

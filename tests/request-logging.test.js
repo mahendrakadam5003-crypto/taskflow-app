@@ -6,10 +6,14 @@ const { logRequestEvent, sendInternalError } = require('../http-errors');
 
 test('request logs include company ID and exclude exception contents', () => {
   const lines = [];
+  const reports = [];
   const originalError = console.error;
   console.error = line => lines.push(line);
   const response = {
-    locals: { company_id: 202 },
+    locals: {
+      company_id: 202,
+      reportUserError: (event, statusCode) => reports.push([event, statusCode])
+    },
     headersSent: false,
     status(status) {
       this.statusCode = status;
@@ -34,4 +38,5 @@ test('request logs include company ID and exclude exception contents', () => {
   ]);
   assert.equal(response.statusCode, 500);
   assert.deepEqual(response.body, { error: 'Internal server error.' });
+  assert.deepEqual(reports, [['upload_processing_failed', 500]]);
 });

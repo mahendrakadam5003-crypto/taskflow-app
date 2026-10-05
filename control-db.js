@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 7;
+const CURRENT_SCHEMA_VERSION = 8;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -200,6 +200,27 @@ const CONTROL_MIGRATIONS = [{
     'CREATE INDEX IF NOT EXISTS companies_delete_after_idx ON companies(status, delete_after)',
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [7] }
   ]
+  }, {
+    version: 8,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS user_error_reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
+        company_code TEXT,
+        actor_user_id INTEGER,
+        request_id TEXT NOT NULL,
+        event TEXT NOT NULL,
+        method TEXT NOT NULL,
+        route TEXT NOT NULL,
+        status_code INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        resolved_at TEXT,
+        resolved_by INTEGER REFERENCES super_admins(id) ON DELETE SET NULL
+      )`,
+      'CREATE INDEX IF NOT EXISTS user_error_reports_status_created_idx ON user_error_reports(resolved_at, created_at)',
+      'CREATE INDEX IF NOT EXISTS user_error_reports_company_created_idx ON user_error_reports(company_id, created_at)',
+      { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [8] }
+    ]
 }];
 
 function getControlDatabaseConfig(environment = process.env) {

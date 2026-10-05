@@ -209,6 +209,62 @@ function createSuperAdminRouter({
     return res.json({ authenticated: false });
   }));
 
+  router.get('/user-errors', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const controlDb = await getDatabase();
+    const status = req.query.status === 'all' ? 'all' : 'open';
+    const requestedLimit = Number(req.query.limit);
+    const limit = Number.isSafeInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 100) : 50;
+    const [errorsResult, pendingResult] = await Promise.all([
+      controlDb.execute({
+        sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
+          e.event, e.method, e.route, e.status_code, e.created_at, e.resolved_at,
+          c.name AS company_name, c.code AS registered_company_code
+          FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
+          WHERE ? = 'all' OR e.resolved_at IS NULL
+          ORDER BY e.created_at DESC, e.id DESC LIMIT ?`,
+        args: [status, limit]
+      }),
+      controlDb.execute('SELECT COUNT(*) AS count FROM user_error_reports WHERE resolved_at IS NULL')
+    ]);
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      pendingCount: Number(pendingResult.rows?.[0]?.count || 0),
+      errors: (errorsResult.rows || []).map(row => ({
+        id: Number(row.id),
+        companyId: row.company_id == null ? null : Number(row.company_id),
+        companyCode: row.registered_company_code || row.company_code || null,
+        companyName: row.company_name || null,
+        actorUserId: row.actor_user_id == null ? null : Number(row.actor_user_id),
+        requestId: row.request_id,
+        event: row.event,
+        method: row.method,
+        route: row.route,
+        statusCode: Number(row.status_code),
+        createdAt: row.created_at,
+        resolvedAt: row.resolved_at
+      }))
+    });
+  }));
+
+  router.post('/user-errors/:errorId/resolve', handle(async (req, res) => {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+    const errorId = Number(req.params.errorId);
+    if (!Number.isSafeInteger(errorId) || errorId < 1) return res.status(400).json({ error: 'Choose a valid error report.' });
+    const controlDb = await getDatabase();
+    const result = await controlDb.execute({
+      sql: `UPDATE user_error_reports SET resolved_at = datetime('now'), resolved_by = ?
+        WHERE id = ? AND resolved_at IS NULL`,
+      args: [admin.id, errorId]
+    });
+    if (Number(result.rowsAffected || 0) !== 1) return res.status(404).json({ error: 'Open error report not found.' });
+    await writeAudit(controlDb, admin, null, 'User error report resolved', `Error report ${errorId} was reviewed and resolved.`);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ id: errorId, resolved: true });
+  }));
+
   router.get('/overview', handle(async (req, res) => {
     const admin = await getAuthenticatedAdmin(req);
     if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });

@@ -87,6 +87,35 @@ function renderSummary(summary) {
     </article>`).join('');
 }
 
+function renderUserErrors(result) {
+  document.getElementById('user-error-count').textContent = `${result.pendingCount} open`;
+  const list = document.getElementById('user-error-list');
+  list.innerHTML = result.errors.length
+    ? result.errors.map(error => {
+      const company = error.companyName || error.companyCode || (error.companyId ? `Company #${error.companyId}` : 'Unknown company');
+      const event = error.event.replace(/[_-]+/g, ' ');
+      return `<article class="record-row user-error-row">
+        <div><strong>${escapeHtml(company)} · ${escapeHtml(event)}</strong>
+          <small>${escapeHtml(error.method)} ${escapeHtml(error.route)} · HTTP ${escapeHtml(error.statusCode)} · ${escapeHtml(formatDate(error.createdAt))}</small>
+          <small>Request <code>${escapeHtml(error.requestId)}</code>${error.actorUserId ? ` · User #${escapeHtml(error.actorUserId)}` : ''}</small>
+        </div>
+        ${error.resolvedAt ? `<span>Resolved ${escapeHtml(formatDate(error.resolvedAt))}</span>` : `<button class="button button-quiet" type="button" data-error-resolve="${error.id}">Resolve</button>`}
+      </article>`;
+    }).join('')
+    : '<p class="user-error-empty">No open user errors.</p>';
+}
+
+async function loadUserErrors(status = 'open') {
+  const errorTarget = document.getElementById('user-error-load-error');
+  errorTarget.classList.add('hidden');
+  try {
+    renderUserErrors(await request(`user-errors?status=${status}`));
+  } catch (error) {
+    errorTarget.textContent = error.message;
+    errorTarget.classList.remove('hidden');
+  }
+}
+
 function renderCompanies(companies, plans) {
   overviewData = overviewData || { companies, plans };
   const planSelect = document.getElementById('new-company-plan');
@@ -292,6 +321,7 @@ async function loadOverview() {
     renderCompanies(data.companies, data.plans);
     overviewError.classList.add('hidden');
     showOverview();
+    loadUserErrors();
   } catch (error) {
     if (error.status === 401) return showLogin();
     overviewError.textContent = error.message;
@@ -317,6 +347,21 @@ document.querySelectorAll('[data-admin-page]').forEach(button => {
 
 document.getElementById('company-search').addEventListener('input', getFilteredCompanies);
 document.getElementById('company-status-filter').addEventListener('change', getFilteredCompanies);
+document.getElementById('user-error-refresh').addEventListener('click', () => loadUserErrors());
+document.getElementById('user-error-list').addEventListener('click', async event => {
+  const button = event.target.closest('[data-error-resolve]');
+  if (!button) return;
+  button.disabled = true;
+  try {
+    await request(`user-errors/${encodeURIComponent(button.dataset.errorResolve)}/resolve`, { method: 'POST' });
+    await loadUserErrors();
+  } catch (error) {
+    const target = document.getElementById('user-error-load-error');
+    target.textContent = error.message;
+    target.classList.remove('hidden');
+    button.disabled = false;
+  }
+});
 
 document.getElementById('company-rows').addEventListener('click', event => {
   const button = event.target.closest('[data-company-open]');

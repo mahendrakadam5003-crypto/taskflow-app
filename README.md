@@ -54,6 +54,8 @@ To enable daily private Telegram backups, set `AUTO_DAILY_BACKUPS=true`, `TELEGR
 
 Cancelling a company blocks sign-in immediately and schedules retirement 30 days later. At retirement, TaskFlow creates a final backup, removes referenced Telegram file/location messages and local uploads, deletes the tenant database, then anonymizes the registry row while retaining its audit history. If the final backup or cleanup fails, the company remains pending and the alert chat is notified. Restoring a backup always creates a separate database; review its verified table/row counts in the super-admin panel before explicitly switching the company to it. The previous database is retained for rollback. Staged restores can be discarded before activation.
 
+Unexpected server errors appear in the super-admin **User error inbox** when the control database is configured. Reports include a request ID, company, route, method, status, and safe event label only; they never store exception text, request bodies, passwords, tokens, or GPS coordinates. Expected client errors such as validation failures and permission denials are not reported as incidents.
+
 The local server listens on `127.0.0.1:3000`. Open `http://127.0.0.1:3000` on the PC itself. Local installs do not accept connections from other LAN devices.
 
 On an empty database, set `INITIAL_ADMIN_PASSWORD` as a private environment variable before first startup. It must contain 10 to 72 UTF-8 bytes; the password is never printed to logs, and the admin must change it at first login. Existing databases are not reseeded.
