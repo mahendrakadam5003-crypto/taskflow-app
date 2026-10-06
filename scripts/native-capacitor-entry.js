@@ -5,6 +5,7 @@ import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Haptics } from '@capacitor/haptics';
 import { App } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { Browser } from '@capacitor/browser';
 
 window.TaskFlowBiometricAuth = BiometricAuth;
 window.TaskFlowAndroidBiometryStrength = AndroidBiometryStrength;
@@ -15,4 +16,5 @@ window.TaskFlowCameraSource = CameraSource;
 window.TaskFlowHaptics = Haptics;
 window.TaskFlowApp = App;
 window.TaskFlowLocalNotifications = LocalNotifications;
+window.TaskFlowBrowser = Browser;
 window.Capacitor = Capacitor;
