@@ -159,24 +159,6 @@ function distanceBetweenPoints(firstLat, firstLng, secondLat, secondLng) {
   return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-async function isInsideConfiguredOffice(lat, lng) {
-  const rows = await db.prepare(`SELECT key, value FROM settings
-    WHERE key IN ('office_lat', 'office_lng', 'office_radius_m')`).all();
-  const settings = Object.fromEntries((rows || []).map(row => [row.key, row.value]));
-  const latitudeValue = String(settings.office_lat || '').trim();
-  const longitudeValue = String(settings.office_lng || '').trim();
-  if (!latitudeValue && !longitudeValue) return true;
-  const officeLat = Number(latitudeValue);
-  const officeLng = Number(longitudeValue);
-  const radiusMeters = Number(settings.office_radius_m);
-  if (!latitudeValue || !longitudeValue || !Number.isFinite(officeLat) || officeLat < -90 || officeLat > 90
-    || !Number.isFinite(officeLng) || officeLng < -180 || officeLng > 180
-    || !Number.isFinite(radiusMeters) || radiusMeters < 1) {
-    throw new Error('Configured office location or radius is invalid.');
-  }
-  return distanceBetweenPoints(lat, lng, officeLat, officeLng) <= radiusMeters;
-}
-
 async function recordLocationPoint(attendanceId, userId, lat, lng, recordedAt, minimumIntervalMs = 0) {
   const previous = await db.prepare(`SELECT latitude, longitude FROM attendance_locations
     WHERE attendance_id = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
@@ -386,7 +368,6 @@ router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
   const coordinates = validateCoordinates(req.body.lat, req.body.lng);
   if (!coordinates) return res.status(400).json({ error: 'A valid latitude and longitude are required to punch in.' });
   const { lat, lng } = coordinates;
-  if (!(await isInsideConfiguredOffice(lat, lng))) return res.status(403).json({ error: 'Punch-in location is outside the configured office radius.' });
   if (!(await requireAttendanceVerification(req, res))) return;
   
   const date = todayStr();

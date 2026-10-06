@@ -21,6 +21,8 @@ const auditEntries = [];
 let timelineQuery = '';
 let liveShiftQuery = '';
 let taskCheckinsQuery = '';
+let officeSettingsReadCount = 0;
+let attendanceRecordForPunchOut = null;
 
 const mockDb = {
   ready: Promise.resolve(),
@@ -33,11 +35,19 @@ const mockDb = {
           return { device_token_hash: deviceHash, device_name: 'Test device' };
         }
         if (sql.includes('SELECT allow_phone, allow_laptop FROM attendance_device_access')) return { allow_phone: 1, allow_laptop: 1 };
-        if (sql.includes('SELECT * FROM attendance WHERE user_id = ? AND date = ?')) return null;
+        if (sql.includes('SELECT * FROM attendance WHERE user_id = ? AND date = ?')) return attendanceRecordForPunchOut;
         if (sql.includes('SELECT latitude, longitude FROM attendance_locations')) return null;
         return null;
       },
       all: async () => {
+        if (sql.includes('FROM settings') && sql.includes('office_radius_m')) {
+          officeSettingsReadCount += 1;
+          return [
+            { key: 'office_lat', value: '18.52' },
+            { key: 'office_lng', value: '73.85' },
+            { key: 'office_radius_m', value: '100' }
+          ];
+        }
         if (sql.includes('FROM attendance_locations al JOIN users u')) {
           timelineQuery = sql;
           return [
@@ -160,9 +170,50 @@ test('required attendance verification blocks direct punches without password an
   assert.deepEqual(await wrongPassword.json(), { error: 'Attendance password verification failed.' });
   assert.equal(writes.length, 0);
 
-  const verified = await request('AttendancePassword123');
+  const verified = await fetch(`${baseUrl}/api/attendance/punch-in`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({
+      device_id: deviceId,
+      lat: 19.076,
+      lng: 72.8777,
+      verification_password: 'AttendancePassword123'
+    })
+  });
   assert.equal(verified.status, 200);
   assert.ok(writes.some(write => write.sql.includes('INSERT OR IGNORE INTO attendance')));
+  assert.equal(officeSettingsReadCount, 0, 'office radius must not block an off-site punch');
+});
+
+test('employees can punch out away from the configured office', async () => {
+  writes.length = 0;
+  attendanceRecordForPunchOut = {
+    id: 35,
+    punch_in: '2026-10-06T03:00:00.000Z',
+    punch_out: null,
+    location_status: '📍 In: Office'
+  };
+  try {
+    const response = await fetch(`${baseUrl}/api/attendance/punch-out`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        device_id: deviceId,
+        lat: 19.076,
+        lng: 72.8777,
+        verification_password: 'AttendancePassword123'
+      })
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.ok, true);
+    assert.match(result.status, /Out: Main Street, Pune/);
+    assert.equal(officeSettingsReadCount, 0, 'office radius must not block an off-site punch-out');
+    const punchOutUpdate = writes.find(write => write.sql.includes('UPDATE attendance SET punch_out'));
+    assert.deepEqual(punchOutUpdate.args.slice(1, 3), [19.076, 72.8777]);
+  } finally {
+    attendanceRecordForPunchOut = null;
+  }
 });
 
 test('admin live timeline returns stored distance and place-change totals', async () => {
