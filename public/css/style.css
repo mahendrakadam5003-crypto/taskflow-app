@@ -460,6 +460,9 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .attn-table th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 9px 12px; border-bottom: 1px solid var(--line); text-transform: uppercase; letter-spacing: .04em;}
 .attn-table td { padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 13.5px; }
 .reimbursement-description { flex: 1 1 100%; min-height: 88px; resize: vertical; overflow-y: hidden; line-height: 1.45; }
+.receipt-source-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.receipt-source-actions .icon { width: 16px; height: 16px; }
+.receipt-selection { flex-basis: 100%; margin: -6px 0 0; }
 .attn-table tr:last-child td { border-bottom: none; }
 .reimbursement-row { cursor: pointer; }
 .reimbursement-row:hover { background: #FAFAF8; }

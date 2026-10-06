@@ -1361,6 +1361,8 @@ async function renderReimbursements() {
           <input id="reimbursement-date" type="date" value="${todayISO()}" required>
           <textarea id="reimbursement-description" class="reimbursement-description" rows="2" placeholder="Description"></textarea>
           <input id="reimbursement-receipt" type="file" accept="image/*,.pdf" multiple aria-label="Choose receipt photos or files">
+          <div class="receipt-source-actions"><button class="btn btn-secondary btn-sm" id="reimbursement-gallery" type="button">${icon('gallery')} Choose from gallery</button>${window.Capacitor?.isNativePlatform?.() ? `<button class="btn btn-secondary btn-sm" id="reimbursement-camera" type="button">${icon('camera')} Take photo</button>` : ''}</div>
+          <p id="reimbursement-receipt-selection" class="hint receipt-selection" aria-live="polite">No receipts selected</p>
           <button class="btn btn-primary" id="reimbursement-submit" type="submit">Submit claim</button>
         </form>
         <div id="reimbursement-form-error" class="form-error"></div>
@@ -1402,6 +1404,13 @@ async function renderReimbursements() {
   let reimbursementHasMore = false;
   let editingReimbursementId = null;
   let reimbursementSubmissionKey = null;
+  let selectedReceiptFiles = [];
+  const updateReceiptSelection = () => {
+    const label = $('#reimbursement-receipt-selection');
+    if (label) label.textContent = selectedReceiptFiles.length
+      ? `${selectedReceiptFiles.length} receipt${selectedReceiptFiles.length === 1 ? '' : 's'} selected`
+      : 'No receipts selected';
+  };
   const showExpenseForm = (row = null) => {
     editingReimbursementId = row ? Number(row.id) : null;
     reimbursementSubmissionKey = row ? null : (reimbursementSubmissionKey || crypto.randomUUID());
@@ -1419,6 +1428,8 @@ async function renderReimbursements() {
     description.style.height = 'auto';
     description.style.height = `${description.scrollHeight}px`;
     $('#reimbursement-receipt').value = '';
+    selectedReceiptFiles = [];
+    updateReceiptSelection();
     $('#reimbursement-form-title').textContent = row ? 'Edit expense' : 'Submit expense';
     $('#reimbursement-submit').textContent = row ? 'Save changes' : 'Submit claim';
     $('#reimbursement-form-error').textContent = '';
@@ -1433,12 +1444,54 @@ async function renderReimbursements() {
     editingReimbursementId = null;
     reimbursementSubmissionKey = null;
     $('#reimbursement-form').reset();
+    selectedReceiptFiles = [];
+    updateReceiptSelection();
     $('#employee-reimbursement-form').classList.add('hidden');
     $('#employee-reimbursement-overview').classList.remove('hidden');
   };
   $('#reimbursement-description')?.addEventListener('input', event => {
     event.currentTarget.style.height = 'auto';
     event.currentTarget.style.height = `${event.currentTarget.scrollHeight}px`;
+  });
+  const receiptInput = $('#reimbursement-receipt');
+  receiptInput?.addEventListener('change', () => {
+    selectedReceiptFiles.push(...Array.from(receiptInput.files || []));
+    receiptInput.value = '';
+    updateReceiptSelection();
+  });
+  $('#reimbursement-gallery')?.addEventListener('click', () => receiptInput?.click());
+  $('#reimbursement-camera')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const error = $('#reimbursement-form-error');
+    button.disabled = true;
+    error.textContent = '';
+    try {
+      const camera = window.TaskFlowCamera;
+      if (!camera) throw new Error('Camera is unavailable. Update TaskFlow and try again.');
+      let permission = await camera.checkPermissions();
+      if (permission.camera !== 'granted') permission = await camera.requestPermissions({ permissions: ['camera'] });
+      if (permission.camera !== 'granted') throw new Error('Allow camera access for TaskFlow in phone settings, then try again.');
+      const photo = await camera.getPhoto({
+        source: window.TaskFlowCameraSource.Camera,
+        resultType: window.TaskFlowCameraResultType.Base64,
+        quality: 85,
+        width: 1800,
+        height: 1800,
+        allowEditing: false,
+        saveToGallery: false
+      });
+      if (!photo.base64String) throw new Error('The camera did not return a photo. Try again.');
+      const mimeType = photo.format === 'jpg' ? 'image/jpeg' : `image/${photo.format}`;
+      const binary = atob(photo.base64String);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      selectedReceiptFiles.push(new File([bytes], `receipt-${Date.now()}.${photo.format}`, { type: mimeType }));
+      updateReceiptSelection();
+    } catch (captureError) {
+      error.textContent = captureError.message || 'Unable to capture receipt photo.';
+    } finally {
+      button.disabled = false;
+    }
   });
   const refreshReimbursementSummary = async () => {
     try {
@@ -1597,7 +1650,7 @@ async function renderReimbursements() {
       formData.append('expense_date', $('#reimbursement-date').value);
       formData.append('description', $('#reimbursement-description').value.trim());
       if (!editing) formData.append('submission_key', reimbursementSubmissionKey || crypto.randomUUID());
-      Array.from($('#reimbursement-receipt').files || []).forEach(receipt => formData.append('receipt', receipt));
+      selectedReceiptFiles.forEach(receipt => formData.append('receipt', receipt));
       const response = await fetch(editing ? `/api/reimbursements/${editingReimbursementId}` : '/api/reimbursements', {
         method: editing ? 'PUT' : 'POST', body: formData, credentials: 'same-origin'
       });
@@ -1611,6 +1664,8 @@ async function renderReimbursements() {
       $('#reimbursement-form-title').textContent = 'Submit expense';
       $('#reimbursement-submit').textContent = 'Submit claim';
       $('#reimbursement-receipt').value = '';
+      selectedReceiptFiles = [];
+      updateReceiptSelection();
       $('#reimbursement-description').style.height = 'auto';
       $('#reimbursement-form-error').textContent = '';
       $('#reimbursement-form-success').textContent = editing ? 'Expense updated successfully.' : 'Expense submitted successfully.';
@@ -3048,8 +3103,15 @@ function setAttendancePunchProgress(message) {
   progress.classList.toggle('hidden', !message);
 }
 
-function vibrateAttendance(pattern) {
-  try { navigator.vibrate?.(pattern); } catch {}
+function vibrateAttendance(pulses = 1) {
+  const haptics = window.TaskFlowHaptics;
+  if (haptics) {
+    const pulse = () => haptics.vibrate({ duration: 90 }).catch(() => {});
+    pulse();
+    if (pulses > 1) setTimeout(pulse, 180);
+    return;
+  }
+  try { navigator.vibrate?.(pulses > 1 ? [90, 90, 90] : 90); } catch {}
 }
 
 async function verifyAttendanceIfRequired(action) {
@@ -3058,7 +3120,7 @@ async function verifyAttendanceIfRequired(action) {
   const biometricAuth = window.TaskFlowBiometricAuth;
   if (!window.Capacitor?.isNativePlatform?.() || !biometricAuth) {
     setAttendanceBiometricFeedback('error', 'TaskFlow mobile verification is unavailable.');
-    vibrateAttendance([90, 70, 90]);
+    vibrateAttendance(2);
     throw new Error('Attendance verification requires the installed TaskFlow mobile app.');
   }
   setAttendanceBiometricFeedback('pending', 'Verify with fingerprint or phone screen lock.');
@@ -3068,15 +3130,20 @@ async function verifyAttendanceIfRequired(action) {
       androidTitle: `Verify before punch ${action}`,
       androidSubtitle: 'Use fingerprint, face, or your phone screen lock',
       allowDeviceCredential: true,
-      iosFallbackTitle: ''
+      androidConfirmationRequired: false,
+      androidBiometryStrength: window.TaskFlowAndroidBiometryStrength?.weak,
+      iosFallbackTitle: 'Use device passcode'
     });
   } catch (error) {
-    setAttendanceBiometricFeedback('error', 'Verification failed. Try again.');
-    vibrateAttendance([90, 70, 90]);
-    throw new Error('Phone verification failed. Punch ' + action + ' was not recorded.');
+    const failureDetail = error?.code || error?.message;
+    setAttendanceBiometricFeedback('error', failureDetail
+      ? `Verification failed (${failureDetail}). Use your phone screen lock and try again.`
+      : 'Verification failed. Use your phone screen lock and try again.');
+    vibrateAttendance(2);
+    throw new Error('Phone verification failed. Use your phone screen lock and try again.');
   }
   setAttendanceBiometricFeedback('success', 'Phone verification successful.');
-  vibrateAttendance(90);
+  vibrateAttendance(1);
   return 'native-device-credential';
 }
 
