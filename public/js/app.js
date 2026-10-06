@@ -3829,8 +3829,6 @@ async function renderAdmin() {
         finishDataToolsProgress();
         if (projectList.length || attachmentCount) {
           await loadProjects();
-          const projectToOpen = projectList.filter(project => project.id).sort((a, b) => b.tasks - a.tasks)[0];
-          if (projectToOpen) await openProject(projectToOpen.id);
         }
         if (failures.length) {
           dataToolsStatus.textContent = `${summary.join(' ')} Review the listed issues before leaving this page.`;
