@@ -3454,10 +3454,10 @@ function renderAttendanceDeviceAccess(devices) {
 
     page.forEach(person => {
       const row = document.createElement('div');
-      row.className = 'admin-form-row';
+      row.className = 'admin-form-row attendance-device-access-row';
       const deviceStatus = person.registered_device_name
         || (Number(person.device_rebind_pending) === 1 ? 'Reset; next punch will auto-bind' : 'No device registered');
-      row.innerHTML = `<div class="attendance-device-admin-person"><b>${escapeHtml(person.name)}</b><span>${escapeHtml(person.username || '')}</span><span>${escapeHtml(deviceStatus)}</span>${person.registered_device_info ? `<small>${escapeHtml(person.registered_device_info)}</small>` : ''}</div>
+      row.innerHTML = `<div class="attendance-device-admin-person"><b>${escapeHtml(person.name)}</b><span class="attendance-device-username">${escapeHtml(person.username || '')}</span><span class="attendance-device-status">${escapeHtml(deviceStatus)}</span>${person.registered_device_info ? `<small>${escapeHtml(person.registered_device_info)}</small>` : ''}</div>
         <label><input type="checkbox" data-device-phone="${person.id}" ${Number(person.allow_phone) === 1 ? 'checked' : ''}> Phone</label>
         <label><input type="checkbox" data-device-laptop="${person.id}" ${Number(person.allow_laptop) === 1 ? 'checked' : ''}> Laptop</label>
         <button class="btn btn-secondary btn-sm save-device-access" data-device-user="${person.id}">Save access</button>

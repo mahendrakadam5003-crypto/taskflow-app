@@ -546,14 +546,22 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .attendance-registered-device b { color: var(--ink); }
 .attendance-device-edit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; }
 .attendance-device-edit input { flex: 1 1 180px; width: auto; margin: 0; }
-.attendance-device-admin-person { display: flex; min-width: 190px; flex-direction: column; gap: 3px; }
-.attendance-device-admin-person span { color: var(--green); font-size: 13px; }
-.attendance-device-admin-person small { color: var(--muted); }
+.attendance-device-access-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; align-items: center; gap: 8px 12px; margin: 0; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.attendance-device-access-row > label { white-space: nowrap; }
+.attendance-device-admin-person { display: flex; min-width: 0; align-items: baseline; gap: 6px 10px; white-space: nowrap; }
+.attendance-device-admin-person b { flex: 0 0 175px; overflow: hidden; text-overflow: ellipsis; }
+.attendance-device-admin-person .attendance-device-username { flex: 0 0 100px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; }
+.attendance-device-admin-person .attendance-device-status { flex: 0 1 180px; overflow: hidden; color: var(--green); font-size: 12px; text-overflow: ellipsis; }
+.attendance-device-admin-person small { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; }
 .attendance-present { background: var(--green-bg); color: var(--green); }
 .attendance-absent { background: #fff0ef; color: #b42318; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 760px) {
+  .attendance-device-access-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .attendance-device-admin-person { grid-column: 1 / -1; }
+  .attendance-device-admin-person b { flex-basis: 140px; }
+  .attendance-device-admin-person .attendance-device-status { flex-basis: 120px; }
   .app { flex-direction: column; height: 100vh; }
   .sidebar { position: fixed; inset: 0 auto 0 0; width: min(86vw, 320px); height: 100vh; max-height: none; flex-direction: column; padding: 12px 0; z-index: 55; transform: translateX(-100%); transition: transform .2s ease; box-shadow: 10px 0 30px rgba(0,0,0,.18); }
   .app.mobile-nav-open .sidebar { transform: translateX(0); }
