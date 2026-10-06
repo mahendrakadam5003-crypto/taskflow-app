@@ -10,8 +10,10 @@ const storagePath = require.resolve('../telegram-storage');
 const originals = new Map([dbPath, authPath, auditPath, storagePath].map(modulePath => [modulePath, require.cache[modulePath]]));
 let projectQuery = '';
 const importedTaskRows = [];
+let tenantContextCalls = 0;
 
 const mockDb = {
+  runWithTenant(tenantId, callback) { tenantContextCalls += 1; return callback(); },
   prepare(sql) {
     if (sql.includes('FROM projects ORDER BY name, id')) projectQuery = sql;
     return {
@@ -51,6 +53,7 @@ const tasksRouter = require('../routes/tasks');
 const app = express();
 app.use(express.json());
 app.use(session({ name: 'task-export-test.sid', secret: 'task-export-test-session-secret-at-least-32-chars', resave: false, saveUninitialized: false }));
+app.use((req, res, next) => { req.companyTenantId = 'legacy'; next(); });
 app.post('/test-session', (req, res) => {
   req.session.userId = 1;
   req.session.role = 'admin';
@@ -105,6 +108,7 @@ test('admin project CSV export quotes fields and neutralizes spreadsheet formula
 
 test('admin Asana import accepts month-keyed JSON and keeps completed tasks completed', async () => {
   importedTaskRows.length = 0;
+  const contextCallsBefore = tenantContextCalls;
   const source = {
     project: { gid: '1200', name: 'Monthly Asana project', created_at: '2026-10-01T00:00:00.000Z', members: [] },
     'Oct 26': [{
@@ -126,6 +130,7 @@ test('admin Asana import accepts month-keyed JSON and keeps completed tasks comp
   const result = await response.json();
   assert.equal(result.results[0].project_name, 'Monthly Asana project');
   assert.equal(result.results[0].tasks, 1);
+  assert.equal(tenantContextCalls, contextCallsBefore + 1);
   assert.equal(importedTaskRows.length, 1);
   assert.equal(importedTaskRows[0].args[1], 'Completed October task');
   assert.equal(importedTaskRows[0].args[7], 'done');

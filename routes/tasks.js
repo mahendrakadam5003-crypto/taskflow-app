@@ -118,6 +118,15 @@ const handleAsanaUploadError = (uploadMiddleware, label) => (req, res, next) => 
     res.status(status).json({ error: message });
   });
 };
+const withTenantDatabaseContext = (req, res, next) => {
+  const tenantId = req.companyTenantId ?? req.session?.companyId;
+  if (tenantId == null) return next(new Error('The company tenant context is missing.'));
+  try {
+    return db.runWithTenant(tenantId, next);
+  } catch (error) {
+    return next(error);
+  }
+};
 
 async function canAccessProject(projectId, userId, admin = false) {
   if (admin) return true;
@@ -668,7 +677,7 @@ router.get('/admin/asana-import/progress/:id', requireAdmin, (req, res) => {
   res.json(progress);
 });
 
-router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUploadError(asanaImportUpload.array('projects', 20), 'Asana project JSON'), async (req, res) => {
+router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUploadError(asanaImportUpload.array('projects', 20), 'Asana project JSON'), withTenantDatabaseContext, async (req, res) => {
   const files = req.files || [];
   if (!files.length) return res.status(400).json({ error: 'Choose one or more Asana project JSON files.' });
   const progressId = String(req.body?.progress_id || '').slice(0, 100);
@@ -923,7 +932,7 @@ router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUpl
   res.json({ ok: results.every(result => result.status === 'imported'), results });
 });
 
-router.post('/admin/asana-import/:projectId/attachments', requireAdmin, uploadRateLimit, handleAsanaUploadError(asanaAttachmentUpload.array('attachments', 5), 'Asana attachment'), async (req, res) => {
+router.post('/admin/asana-import/:projectId/attachments', requireAdmin, uploadRateLimit, handleAsanaUploadError(asanaAttachmentUpload.array('attachments', 5), 'Asana attachment'), withTenantDatabaseContext, async (req, res) => {
   const projectId = Number(req.params.projectId);
   const project = await db.prepare('SELECT id, asana_gid FROM projects WHERE id = ? AND asana_gid IS NOT NULL').get(projectId);
   if (!project) return res.status(404).json({ error: 'Imported Asana project not found.' });
