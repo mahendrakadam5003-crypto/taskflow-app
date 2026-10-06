@@ -521,7 +521,6 @@ function startAttendancePolling() {
   stopAttendancePolling();
   attendancePollTimer = setInterval(() => {
     if (document.hidden) return; 
-    renderLiveList();
     renderHistory();
     renderPunchCard();
   }, 15000); 
@@ -1238,7 +1237,7 @@ function showView(view) {
   } else if (view === 'attendance') {
     const viewAttendance = $('#view-attendance');
     if (viewAttendance) viewAttendance.classList.remove('hidden');
-    renderPunchCard(); renderLiveList(); renderHistory();
+    renderPunchCard(); renderHistory();
     if (ME && ME.role === 'admin') renderAdminAttendance(PEOPLE, 'admin-attendance-monitor');
     startAttendancePolling();
   } else if (view === 'admin') {
@@ -3221,37 +3220,6 @@ async function renderPunchCard() {
   } catch (err) {
     stopAttendanceClock();
     card.innerHTML = `<div class="form-error" role="alert">Unable to load attendance: ${escapeHtml(err.message)}</div>`;
-  }
-}
-
-async function renderLiveList() {
-  const list = $('#live-attendance-list');
-  if (!list) return;
-  try {
-    const rawRows = await api('/attendance/live');
-    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
-    if (!rows || !rows.length) {
-      list.innerHTML = '<tr><td colspan="3" class="hint" style="text-align:center; padding:15px; color:#888;">No field technicians active right now.</td></tr>';
-      return;
-    }
-    list.innerHTML = rows.map(r => `
-      <tr>
-        <td data-label="Employee"><b>${escapeHtml(r.user_name || r.USER_NAME)}</b></td>
-        <td data-label="Punch in">${fmtTime(r.punch_in || r.PUNCH_IN)}</td>
-        <td data-label="Location"><a href="https://www.google.com/maps?q=${r.in_lat || r.IN_LAT},${r.in_lng || r.IN_LNG}" target="_blank" rel="noopener" class="map-link">${icon('pin')} View live site</a><button class="link-btn live-timeline-btn" data-user-id="${r.user_id || r.USER_ID}" data-user-name="${escapeHtml(r.user_name || r.USER_NAME)}">View timeline</button></td>
-      </tr>
-    `).join('');
-    $$('.live-timeline-btn').forEach(button => {
-      button.onclick = async () => {
-        try {
-          const timeline = await api(`/attendance/live/${button.dataset.userId}/timeline`);
-          showModal(`<h3>Location timeline: ${escapeHtml(button.dataset.userName)}</h3>${timeline.length ? `<div class="location-timeline">${timeline.map((point, index) => `<div class="location-timeline-item"><b>${index + 1}. ${escapeHtml(fmtDateTime(point.recorded_at))}</b><span>${Number(point.latitude).toFixed(6)}, ${Number(point.longitude).toFixed(6)}</span><a href="https://www.google.com/maps?q=${point.latitude},${point.longitude}" target="_blank" rel="noopener">Open map</a></div>`).join('')}</div>` : '<p class="hint">No live location points recorded yet.</p>'}<div class="modal-actions"><button class="btn btn-primary" id="location-timeline-close">Close</button></div>`);
-          $('#location-timeline-close')?.addEventListener('click', closeModal);
-        } catch (error) { showAppNotification(error.message); }
-      };
-    });
-  } catch (error) {
-    list.innerHTML = `<tr><td colspan="3" class="form-error" role="alert">Live attendance unavailable: ${escapeHtml(error.message)}</td></tr>`;
   }
 }
 

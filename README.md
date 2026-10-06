@@ -4,7 +4,7 @@ TaskFlow runs on your PC. Depending on configuration, it can also use Turso for 
 
 ## What's in it
 - **Projects & tasks** — same layout as before: sidebar of projects, task list, detail panel with assignee/due date/description/subtasks/comments. Optional PIN lock per project.
-- **Attendance** — employees punch in/punch out from their phone or PC. GPS coordinates are recorded as an indicative reference only; they can be spoofed and do not prove physical presence. Admins get a live "who's on the clock right now" view, full history, and CSV export.
+- **Attendance** — employees punch in/punch out from their phone or PC and review their attendance history. GPS coordinates are recorded as an indicative reference only; they can be spoofed and do not prove physical presence. Admins can review attendance records and export them as CSV. Employee location timelines are available in Tracking.
 - **Real logins** — every person gets their own username + password (not just a name field). Roles: `admin` (sees attendance for everyone, manages people) and `employee` (sees their own).
 
 ## Interface and accessibility
