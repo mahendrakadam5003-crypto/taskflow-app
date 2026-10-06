@@ -3374,6 +3374,64 @@ async function loadTrackingTimeline(userId, selectedButton, selectedDate = today
 }
 
 // ================= ADMINISTRATIVE CORE VIEW MODULE =================
+function addAdminListPagination(container, searchLabel) {
+  if (!container) return;
+  const rows = container.tagName === 'TBODY'
+    ? Array.from(container.rows)
+    : Array.from(container.children);
+  const anchor = container.tagName === 'TBODY' ? container.closest('table') : container;
+  if (!anchor?.parentElement) return;
+
+  const controls = document.createElement('div');
+  controls.className = 'admin-form-row permission-list-controls';
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.placeholder = searchLabel;
+  search.setAttribute('aria-label', searchLabel);
+  const pageSizeLabel = document.createElement('label');
+  pageSizeLabel.append('Rows per page ');
+  const pageSizeSelect = document.createElement('select');
+  pageSizeSelect.setAttribute('aria-label', `${searchLabel} rows per page`);
+  [25, 50, 100].forEach(size => {
+    const option = document.createElement('option');
+    option.value = String(size);
+    option.textContent = String(size);
+    pageSizeSelect.appendChild(option);
+  });
+  pageSizeLabel.appendChild(pageSizeSelect);
+  const count = document.createElement('span');
+  count.className = 'hint';
+  count.setAttribute('aria-live', 'polite');
+  const pagination = document.createElement('div');
+  pagination.className = 'permission-pagination';
+  anchor.parentElement.insertBefore(controls, anchor);
+  controls.append(search, pageSizeLabel, count);
+  anchor.parentElement.insertBefore(pagination, anchor.nextSibling);
+
+  let pageIndex = 0;
+  const renderPage = () => {
+    const query = search.value.trim().toLocaleLowerCase();
+    const filtered = rows.filter(row => row.textContent.toLocaleLowerCase().includes(query));
+    const pageSize = Number(pageSizeSelect.value) || 25;
+    const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+    pageIndex = Math.min(pageIndex, pageCount - 1);
+    const start = pageIndex * pageSize;
+    const visibleRows = new Set(filtered.slice(start, start + pageSize));
+    rows.forEach(row => { row.hidden = !visibleRows.has(row); });
+    count.textContent = filtered.length
+      ? `Showing ${start + 1}-${Math.min(start + visibleRows.size, filtered.length)} of ${filtered.length} users`
+      : 'No matching users';
+    pagination.innerHTML = pageCount > 1
+      ? `<button type="button" class="btn btn-secondary btn-sm" data-list-page="previous" ${pageIndex === 0 ? 'disabled' : ''}>Previous</button><span>Page ${pageIndex + 1} of ${pageCount}</span><button type="button" class="btn btn-secondary btn-sm" data-list-page="next" ${pageIndex >= pageCount - 1 ? 'disabled' : ''}>Next</button>`
+      : '';
+    pagination.querySelector('[data-list-page="previous"]')?.addEventListener('click', () => { pageIndex--; renderPage(); });
+    pagination.querySelector('[data-list-page="next"]')?.addEventListener('click', () => { pageIndex++; renderPage(); });
+  };
+  search.oninput = () => { pageIndex = 0; renderPage(); };
+  pageSizeSelect.onchange = () => { pageIndex = 0; renderPage(); };
+  renderPage();
+}
+
 function renderAttendanceDeviceAccess(devices) {
   const list = $('#attendance-device-access-list');
   const search = $('#attendance-device-access-search');
@@ -4180,6 +4238,7 @@ async function renderAdmin() {
           }
         });
       });
+      addAdminListPagination(tbody, 'Search team members by name, username, email, or department');
     }
 
     const departmentList = $('#department-list');
@@ -4189,6 +4248,7 @@ async function renderAdmin() {
       row.innerHTML = `<span style="flex:1;">${escapeHtml(department.name || department.NAME)}</span><button class="btn btn-danger btn-sm" data-delete-department="${department.id}">Delete</button>`;
       departmentList.appendChild(row);
     });
+    addAdminListPagination(departmentList, 'Search departments');
 
     const accessList = $('#reimbursement-access-list');
     reimbursementAccess.forEach((person) => {
@@ -4203,6 +4263,7 @@ async function renderAdmin() {
         <button class="btn btn-secondary btn-sm save-reimbursement-access" data-user-id="${person.user_id}">Save</button>`;
       accessList.appendChild(row);
     });
+    addAdminListPagination(accessList, 'Search approvers by name or username');
 
     const trackingAccessList = $('#tracking-access-list');
     trackingAccess.forEach((person) => {
@@ -4211,6 +4272,7 @@ async function renderAdmin() {
       row.innerHTML = `<div><b>${escapeHtml(person.name)}</b><span class="tracking-username">${escapeHtml(person.username)}</span></div><span class="tracking-access-status ${person.tracking_allowed ? 'allowed' : 'denied'}">${person.tracking_allowed ? 'Allowed' : 'Denied'}</span><label class="tracking-toggle"><input type="checkbox" ${person.tracking_allowed ? 'checked' : ''} data-tracking-access-user="${person.id}"><span>Allow tracking view</span></label>`;
       trackingAccessList.appendChild(row);
     });
+    addAdminListPagination(trackingAccessList, 'Search employees by name or username');
     const paymentAccessList = $('#payment-history-access-list');
     paymentAccess.forEach((person) => {
       const row = document.createElement('div');
@@ -4218,6 +4280,7 @@ async function renderAdmin() {
       row.innerHTML = `<div><b>${escapeHtml(person.name)}</b><span class="tracking-username">${escapeHtml(person.username)}</span></div><span class="tracking-access-status ${person.allowed ? 'allowed' : 'denied'}">${person.allowed ? 'Allowed' : 'Denied'}</span><label class="tracking-toggle"><input type="checkbox" ${person.allowed ? 'checked' : ''} data-payment-access-user="${person.user_id}"><span>Allow payment history</span></label>`;
       paymentAccessList.appendChild(row);
     });
+    addAdminListPagination(paymentAccessList, 'Search employees by name or username');
     const taskCheckinAccessList = $('#task-checkin-access-list');
     taskCheckinAccess.forEach((person) => {
       const row = document.createElement('div');
@@ -4225,6 +4288,7 @@ async function renderAdmin() {
       row.innerHTML = `<div><b>${escapeHtml(person.name)}</b><span class="tracking-username">${escapeHtml(person.username)}</span></div><label class="tracking-toggle"><input type="checkbox" ${Number(person.checkin_required) === 1 ? 'checked' : ''} data-task-checkin-user="${person.id}"><span>Require task GPS check-in/out</span></label>`;
       taskCheckinAccessList.appendChild(row);
     });
+    addAdminListPagination(taskCheckinAccessList, 'Search employees by name or username');
     $$('[data-task-checkin-user]').forEach((checkbox) => {
       checkbox.onchange = async () => {
         try {
@@ -4240,6 +4304,7 @@ async function renderAdmin() {
       row.innerHTML = `<div><b>${escapeHtml(person.name)}</b><span class="tracking-username">${escapeHtml(person.username)}</span></div><label class="tracking-toggle"><input type="checkbox" ${Number(person.can_change_work_mode) === 1 ? 'checked' : ''} data-task-work-mode-user="${person.id}"><span>Can change Office / On-field</span></label>`;
       taskWorkModeAccessList.appendChild(row);
     });
+    addAdminListPagination(taskWorkModeAccessList, 'Search employees by name or username');
     $$('[data-task-work-mode-user]').forEach((checkbox) => {
       checkbox.onchange = async () => {
         try {
