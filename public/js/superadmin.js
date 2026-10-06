@@ -131,7 +131,7 @@ function renderUserErrors(result) {
       const diagnostics = Array.isArray(error.diagnostics) ? error.diagnostics : [];
       const diagnosticDetails = diagnostics.length
         ? `<details class="user-error-diagnostics"><summary>Technical details</summary><ul>${diagnostics.map(item => {
-          const label = [item.type, item.code].filter(Boolean).join(' · ');
+          const label = [item.type, item.code, item.location].filter(Boolean).join(' · ');
           return `<li><strong>${escapeHtml(label || 'Error')}</strong><span>${escapeHtml(item.summary || 'No safe message available.')}</span></li>`;
         }).join('')}</ul></details>`
         : '<small class="user-error-no-diagnostics">No diagnostic details were captured for this report.</small>';

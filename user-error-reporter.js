@@ -30,7 +30,8 @@ function safeErrorDiagnostics(error) {
       /^table [A-Za-z_][A-Za-z0-9_]* has no column named [A-Za-z_][A-Za-z0-9_]*$/i,
       /^(?:database is (?:locked|busy)|foreign key constraint failed|datatype mismatch|string or blob too big)$/i,
       /^(?:unique|not null|check) constraint failed(?:: [A-Za-z0-9_., ]+| \([A-Za-z0-9_]+\))?$/i,
-      /^near '[A-Za-z_][A-Za-z0-9_]*': syntax error$/i
+      /^near '[A-Za-z_][A-Za-z0-9_]*': syntax error$/i,
+      /^database access attempted without a tenant company context\.?$/i
     ].some(pattern => pattern.test(message)) ? message.slice(0, 180) : ({
       ECONNRESET: 'Connection reset by remote host.',
       ECONNREFUSED: 'Connection refused.',
@@ -40,7 +41,21 @@ function safeErrorDiagnostics(error) {
       SQLITE_BUSY: 'Database is busy or locked.',
       SQLITE_LOCKED: 'Database is locked.'
     })[code] || null;
-    diagnostics.push({ type, code, summary: safeSummary });
+    const diagnostic = { type, code, summary: safeSummary };
+    const stack = typeof current.stack === 'string' ? current.stack.split('\n').slice(1) : [];
+    for (const frame of stack) {
+      const match = frame.replace(/\\/g, '/').match(/(?:^|\/)(routes|lib|public|scripts|server\.js)\/(?:([^():]+\.js):)?(\d+):\d+/);
+      if (match) {
+        diagnostic.location = match[1] === 'server.js' ? `server.js:${match[3]}` : `${match[1]}/${match[2]}:${match[3]}`;
+        break;
+      }
+      const serverMatch = frame.replace(/\\/g, '/').match(/(?:^|\/)server\.js:(\d+):\d+/);
+      if (serverMatch) {
+        diagnostic.location = `server.js:${serverMatch[1]}`;
+        break;
+      }
+    }
+    diagnostics.push(diagnostic);
     current = current.cause ?? (Array.isArray(current.errors) ? current.errors[0] : null);
   }
   return diagnostics.length ? JSON.stringify(diagnostics) : null;

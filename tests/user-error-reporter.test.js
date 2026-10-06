@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { createUserErrorReporter } = require('../user-error-reporter');
+const { createUserErrorReporter, safeErrorDiagnostics } = require('../user-error-reporter');
 
 test('unexpected errors persist request metadata without exception or request contents', async () => {
   const statements = [];
@@ -47,6 +47,19 @@ test('error diagnostics retain safe SQLite details and causes without persisting
     { type: 'Error', code: 'ECONNRESET', summary: 'Connection reset by remote host.' }
   ]);
   assert.doesNotMatch(JSON.stringify(statements[0]), /private token|abc123|SQLITE_ERROR:/);
+});
+
+test('unknown errors expose only an application-relative source location and safe tenant context details', () => {
+  const error = Object.assign(new Error('private query value: secret-123'), {
+    stack: 'Error: private query value: secret-123\n    at handler (C:\\app\\routes\\tasks.js:123:45)'
+  });
+  assert.deepEqual(JSON.parse(safeErrorDiagnostics(error)), [{
+    type: 'Error', code: null, summary: null, location: 'routes/tasks.js:123'
+  }]);
+  assert.deepEqual(JSON.parse(safeErrorDiagnostics(new Error('Database access attempted without a tenant company context.'))), [{
+    type: 'Error', code: null, summary: 'Database access attempted without a tenant company context.'
+  }]);
+  assert.doesNotMatch(safeErrorDiagnostics(error), /C:\\app|secret-123/);
 });
 
 test('one request produces no duplicate inbox reports when multiple error boundaries run', async () => {
