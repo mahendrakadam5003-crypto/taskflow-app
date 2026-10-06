@@ -26,6 +26,7 @@
     "@capacitor/geolocation": "^7.1.5",
     "@capacitor/haptics": "^7.0.2",
     "@capacitor/ios": "^7.6.9",
+    "@capacitor/local-notifications": "^7.0.2",
     "@libsql/client": "^0.3.5",
     "@libsql/sqlite3": "^0.3.1",
     "axios": "^1.7.7",

@@ -68,6 +68,26 @@ test('tenant identity schema upgrade preserves existing users and is repeatable'
     const otpTable = await client.execute('PRAGMA table_info(email_login_otps)');
     assert.ok(otpTable.rows.some(row => row.name === 'code_hash'));
     assert.ok(otpTable.rows.some(row => row.name === 'attempts'));
+    const notificationRecipients = await client.execute('PRAGMA table_info(activity_notification_recipients)');
+    assert.ok(notificationRecipients.rows.some(row => row.name === 'activity_id'));
+    assert.ok(notificationRecipients.rows.some(row => row.name === 'user_id'));
+    const recipientInsert = await client.execute({
+      sql: 'INSERT INTO users (name, username, password_hash) VALUES (?, ?, ?)',
+      args: ['Notification recipient', 'notification.recipient', 'hash']
+    });
+    const activityInsert = await client.execute({
+      sql: 'INSERT INTO activity_log (actor_id, action, entity_type, details) VALUES (?, ?, ?, ?)',
+      args: [77, 'Task comment added', 'task', 'Project task']
+    });
+    await client.execute({
+      sql: 'INSERT INTO activity_notification_recipients (activity_id, user_id) VALUES (?, ?)',
+      args: [activityInsert.lastInsertRowid, recipientInsert.lastInsertRowid]
+    });
+    const notification = await client.execute({
+      sql: 'SELECT a.action FROM activity_notification_recipients n JOIN activity_log a ON a.id=n.activity_id WHERE n.user_id=?',
+      args: [recipientInsert.lastInsertRowid]
+    });
+    assert.equal(notification.rows[0].action, 'Task comment added');
     const userColumns = await client.execute('PRAGMA table_info(users)');
     assert.ok(userColumns.rows.some(row => row.name === 'date_of_birth'));
     assert.ok(userColumns.rows.some(row => row.name === 'phone'));

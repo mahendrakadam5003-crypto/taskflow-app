@@ -454,6 +454,13 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS idx_activity_log_created_id ON activity_log(created_at DESC, id DESC)');
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS idx_activity_log_actor_id ON activity_log(actor_id, id DESC)');
     await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS idx_activity_log_subject_user_id ON activity_log(subject_user_id, id DESC)');
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS activity_notification_recipients (
+      activity_id INTEGER NOT NULL REFERENCES activity_log(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (activity_id, user_id)
+    );`);
+    await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS activity_notification_recipients_user_idx ON activity_notification_recipients(user_id, activity_id DESC)');
     if (needsSchemaUpgrade) {
       const activityColumns = await dbDriverInterface.prepare('PRAGMA table_info(activity_log)').all();
       if (!activityColumns.some(row => row.name === 'subject_user_id')) {

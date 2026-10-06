@@ -381,12 +381,15 @@ router.get('/users/directory', requireAuth, async (req, res) => {
 
 router.get('/activity', requireAuth, async (req, res) => {
   try {
-    const visibilityFilter = req.session.role === 'admin' ? '' : ' WHERE a.actor_id = ? OR a.subject_user_id = ?';
-    const visibilityParams = req.session.role === 'admin' ? [] : [req.session.userId, req.session.userId];
+    const isAdmin = req.session.role === 'admin';
+    const visibilityFilter = isAdmin ? '' : ' WHERE a.actor_id = ? OR a.subject_user_id = ? OR n.user_id = ?';
+    const visibilityParams = isAdmin ? [] : [req.session.userId, req.session.userId, req.session.userId];
     const activityRowsPromise = db.prepare(`SELECT a.*, u.name AS actor_name
-      FROM activity_log a LEFT JOIN users u ON u.id = a.actor_id
+      FROM activity_log a
+      LEFT JOIN users u ON u.id = a.actor_id
+      LEFT JOIN activity_notification_recipients n ON n.activity_id = a.id AND n.user_id = ?
       ${visibilityFilter}
-      ORDER BY a.id DESC LIMIT 100`).all(...visibilityParams);
+      ORDER BY a.id DESC LIMIT 100`).all(req.session.userId, ...visibilityParams);
     if (req.session.role !== 'admin') return res.json(await activityRowsPromise || []);
 
     const [activityRows, taskHistoryRows] = await Promise.all([
@@ -396,7 +399,7 @@ router.get('/activity', requireAuth, async (req, res) => {
         FROM task_history h
         JOIN tasks t ON t.id = h.task_id
         LEFT JOIN users u ON u.id = h.actor_id
-        WHERE h.field_name <> 'Task created'
+        WHERE h.field_name NOT IN ('Task created', 'Task check-in', 'Task check-out')
         ORDER BY h.id DESC LIMIT 100`).all()
     ]);
     const taskActivity = (taskHistoryRows || []).map(row => ({

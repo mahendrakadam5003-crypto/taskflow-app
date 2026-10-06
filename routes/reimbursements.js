@@ -3,7 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const db = require('../db');
-const { logActivity } = require('../audit');
+const { logActivity, notifyActivityRecipients } = require('../audit');
 const { csvValue } = require('../csv');
 const { requireAuth, requireAdmin } = require('./auth');
 const { logRequestEvent, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
@@ -413,7 +413,16 @@ router.post('/', uploadRateLimit, handleReceiptUpload, async (req, res) => {
       }
       throw error;
     }
-    await logActivity(req, 'Reimbursement added', 'reimbursement', info.lastInsertRowid, `${amount} ${currency} - ${category}`, req.session.userId);
+    const activityId = await logActivity(req, 'Reimbursement added', 'reimbursement', info.lastInsertRowid, `${amount} ${currency} - ${category}`, req.session.userId);
+    try {
+      const approvers = await db.prepare(`SELECT ra.user_id FROM reimbursement_access ra
+        JOIN users approver ON approver.id=ra.user_id AND approver.active=1
+        JOIN users claimant ON claimant.id=? AND claimant.active=1
+        WHERE ra.approval_level > 0 AND approver.department=claimant.department`).all(req.session.userId);
+      await notifyActivityRecipients(activityId, (approvers || []).map(approver => approver.user_id));
+    } catch (notificationError) {
+      logRequestEvent(req, 'reimbursement_notification_failed', 'warn');
+    }
     res.json({ ok: true, id: info.lastInsertRowid });
   } catch (error) {
     if (error instanceof StorageLimitError) return res.status(error.statusCode).json({ error: error.message });

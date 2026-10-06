@@ -154,7 +154,10 @@ require.cache[auditPath] = {
   id: auditPath,
   filename: auditPath,
   loaded: true,
-  exports: { logActivity: async (...args) => { auditEntries.push(args); } }
+  exports: {
+    async logActivity(...args) { auditEntries.push(args); return auditEntries.length; },
+    async notifyActivityRecipients() {}
+  }
 };
 require.cache[storagePath] = {
   id: storagePath,

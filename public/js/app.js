@@ -506,6 +506,8 @@ let attendancePollTimer = null;
 let attendanceClockTimer = null;
 let notificationsPollTimer = null;
 let notificationsPollBusy = false;
+let knownActivityNotificationKeys = null;
+let notificationSequence = 0;
 let taskListPollTimer = null;
 let taskListPollBusy = false;
 let taskListVisibilityHandler = null;
@@ -580,20 +582,65 @@ async function syncLiveTracking() {
 
 function startNotificationsPolling() {
   stopNotificationsPolling();
-  notificationsPollTimer = setInterval(async () => {
+  const pollActivity = async () => {
     if (document.hidden || currentViewName() === 'notifications' || notificationsPollBusy) return;
     notificationsPollBusy = true;
     try {
       const entries = await api('/auth/activity');
+      const keys = new Set(entries.map(entry => `${entry.entity_type || ''}:${entry.id}:${entry.action}:${entry.created_at}`));
+      if (knownActivityNotificationKeys !== null) {
+        const newEntries = entries.filter(entry => !knownActivityNotificationKeys.has(`${entry.entity_type || ''}:${entry.id}:${entry.action}:${entry.created_at}`));
+        if (newEntries.length) {
+          markNotificationsAvailable();
+          await showNativeActivityNotifications(newEntries);
+        }
+      }
+      knownActivityNotificationKeys = keys;
       const newestId = entries.length ? Math.max(...entries.map(entry => Number(entry.id) || 0)) : 0;
-      if (latestNotificationId !== null && newestId > latestNotificationId) markNotificationsAvailable();
       latestNotificationId = Math.max(latestNotificationId || 0, newestId);
     } catch (error) {
       // Notifications are supplementary and should not interrupt the current screen.
     } finally {
       notificationsPollBusy = false;
     }
-  }, 60000);
+  };
+  pollActivity();
+  notificationsPollTimer = setInterval(pollActivity, 60000);
+}
+
+async function requestNativeNotificationPermission() {
+  const notifications = window.TaskFlowLocalNotifications;
+  if (!window.Capacitor?.isNativePlatform?.() || !notifications) return false;
+  try {
+    let permission = await notifications.checkPermissions();
+    if (permission.display !== 'granted') permission = await notifications.requestPermissions();
+    return permission.display === 'granted';
+  } catch (error) {
+    console.warn('Notification permission request failed:', error.message);
+    return false;
+  }
+}
+
+async function showNativeActivityNotifications(entries) {
+  const notifications = window.TaskFlowLocalNotifications;
+  if (!notifications || !window.Capacitor?.isNativePlatform?.()) return;
+  try {
+    const permission = await notifications.checkPermissions();
+    if (permission.display !== 'granted') return;
+    await notifications.schedule({
+      notifications: entries.slice(0, 5).map(entry => {
+        notificationSequence = (notificationSequence + 1) % 1000;
+        return {
+          id: (Date.now() + notificationSequence) % 2147483647,
+          title: String(entry.action || 'TaskFlow update').slice(0, 80),
+          body: [entry.actor_name, entry.details].filter(Boolean).join(' · ').slice(0, 180),
+          schedule: { at: new Date(Date.now() + 1000) }
+        };
+      })
+    });
+  } catch (error) {
+    console.warn('Activity notification could not be displayed:', error.message);
+  }
 }
 
 function stopNotificationsPolling() {
@@ -1128,6 +1175,7 @@ async function enterApp() {
     await loadProjects();
     await renderDashboard();
     syncLiveTracking();
+    requestNativeNotificationPermission();
     startNotificationsPolling();
     const returnView = sessionStorage.getItem('taskflow_return_view') || sessionStorage.getItem('taskflow_last_view') || 'dashboard';
     const returnProjectId = sessionStorage.getItem('taskflow_return_project_id') || sessionStorage.getItem('taskflow_last_project_id');

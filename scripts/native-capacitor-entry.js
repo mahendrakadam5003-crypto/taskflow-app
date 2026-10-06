@@ -4,6 +4,7 @@ import { Geolocation } from '@capacitor/geolocation';
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Haptics } from '@capacitor/haptics';
 import { App } from '@capacitor/app';
+import { LocalNotifications } from '@capacitor/local-notifications';
 
 window.TaskFlowBiometricAuth = BiometricAuth;
 window.TaskFlowAndroidBiometryStrength = AndroidBiometryStrength;
@@ -13,4 +14,5 @@ window.TaskFlowCameraResultType = CameraResultType;
 window.TaskFlowCameraSource = CameraSource;
 window.TaskFlowHaptics = Haptics;
 window.TaskFlowApp = App;
+window.TaskFlowLocalNotifications = LocalNotifications;
 window.Capacitor = Capacitor;

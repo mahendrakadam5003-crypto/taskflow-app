@@ -7,7 +7,7 @@ const { gunzipSync } = require('zlib');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const db = require('../db');
 const { requireAuth, requireAdmin } = require('./auth');
-const { logActivity } = require('../audit');
+const { logActivity, notifyActivityRecipients } = require('../audit');
 const { logRequestEvent, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const storageProvider = require('../storage-provider');
 const { parseMoneyAmount, parsePaymentAmounts } = require('../lib/money');
@@ -203,6 +203,25 @@ async function getTaskCheckinStatus(taskId, userId, admin = false) {
     hasCheckedIn: !!checkin?.check_in_at
   };
 }
+async function notifyTaskRelatedPeople(req, taskId, action) {
+  try {
+    const task = await db.prepare('SELECT id, title, project_id, created_by, assignee_id FROM tasks WHERE id=?').get(taskId);
+    if (!task) return;
+    const members = await db.prepare(`SELECT pm.user_id FROM project_members pm
+      JOIN users u ON u.id=pm.user_id AND u.active=1 WHERE pm.project_id=?`).all(task.project_id);
+    const recipients = [...new Set([
+      task.created_by,
+      task.assignee_id,
+      ...(members || []).map(member => member.user_id)
+    ].map(Number).filter(userId => Number.isSafeInteger(userId) && userId > 0
+      && userId !== Number(req.session.userId)))];
+    const activityId = await logActivity(req, action, 'task', task.id, task.title, req.session.userId);
+    await notifyActivityRecipients(activityId, recipients);
+  } catch (error) {
+    logRequestEvent(req, 'task_activity_notification_failed', 'warn');
+  }
+}
+
 async function canChangeTaskWorkMode(req) {
   if (req.session.role === 'admin') return true;
   return !!(await db.prepare('SELECT user_id FROM task_work_mode_access WHERE user_id=?').get(req.session.userId));
@@ -1520,6 +1539,7 @@ router.post('/tasks/:id/check-in', async (req, res) => {
     await db.prepare('INSERT INTO task_checkins (task_id,user_id,check_in_at,check_in_lat,check_in_lng) VALUES (?,?,?,?,?)').run(req.params.id, req.session.userId, now, lat, lng);
     await db.prepare('INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value) VALUES (?, ?, ?, ?, ?)')
       .run(req.params.id, req.session.userId, 'Task check-in', '', now);
+    await notifyTaskRelatedPeople(req, req.params.id, 'Task check-in');
     res.json({ ok: true, check_in_at: now });
   } catch (err) {
     if (/unique constraint failed: task_checkins\.task_id,\s*task_checkins\.user_id/i.test(String(err.message))) {
@@ -1543,6 +1563,7 @@ router.post('/tasks/:id/check-out', async (req, res) => {
     await db.prepare('UPDATE task_checkins SET check_out_at=?, check_out_lat=?, check_out_lng=? WHERE id=?').run(now, lat, lng, existing.id);
     await db.prepare('INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value) VALUES (?, ?, ?, ?, ?)')
       .run(req.params.id, req.session.userId, 'Task check-out', existing.check_in_at, now);
+    await notifyTaskRelatedPeople(req, req.params.id, 'Task check-out');
     res.json({ ok: true, check_out_at: now });
   } catch (err) { sendInternalError(res, err, 'Task check-out failed'); }
 });
@@ -1681,6 +1702,7 @@ router.post('/tasks/:id/comments', requireTaskCheckinToComment, uploadRateLimit,
           },
           { sql: 'DELETE FROM file_usage WHERE file_reference = ?', args: [reservation] }
         ]);
+        await notifyTaskRelatedPeople(req, req.params.id, 'Task comment added');
         return res.json({ ok: true, id: results?.[1]?.lastInsertRowid });
       } catch (error) {
         if (attachment?.messageId) {
@@ -1694,6 +1716,7 @@ router.post('/tasks/:id/comments', requireTaskCheckinToComment, uploadRateLimit,
     }
     const info = await db.prepare('INSERT INTO comments (task_id, user_id, body, image_path, attachment_name, attachment_type) VALUES (?, ?, ?, ?, ?, ?)')
       .run(req.params.id, req.session.userId, body, null, null, null);
+    await notifyTaskRelatedPeople(req, req.params.id, 'Task comment added');
     res.json({ ok: true, id: info.lastInsertRowid });
   } catch (err) {
     if (err instanceof StorageLimitError) return res.status(err.statusCode).json({ error: err.message });
