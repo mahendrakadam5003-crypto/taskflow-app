@@ -670,7 +670,22 @@ async function requestNativeNotificationPermission() {
           const config = await api('/auth/push/config');
           pushBackendEnabled = !!config.enabled;
         } catch { pushBackendEnabled = false; }
-        if (pushBackendEnabled) await push.register();
+        if (pushBackendEnabled) {
+          if (window.Capacitor.getPlatform() === 'android') {
+            try {
+              await push.createChannel({
+                id: 'taskflow-updates',
+                name: 'TaskFlow updates',
+                description: 'Task and expense updates',
+                importance: 4,
+                visibility: 1
+              });
+            } catch (error) {
+              console.warn('Notification channel setup failed:', error.message);
+            }
+          }
+          await push.register();
+        }
       }
     }
     return permission.display === 'granted';
