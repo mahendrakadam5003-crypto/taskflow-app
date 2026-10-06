@@ -116,20 +116,24 @@ async function cleanupFixture(fixture) {
   });
 }
 
-test('manual backup persists one downloadable archive with row counts, references, and checksum', async () => {
+test('remote-required manual backup is downloadable from Telegram without a local archive', async () => {
   const fixture = await makeFixture();
   try {
-    const backup = await fixture.manager.createCompanyBackup(fixture.companyId, { kind: 'manual', adminId: 1 });
+    const backup = await fixture.manager.createCompanyBackup(fixture.companyId, {
+      kind: 'manual', adminId: 1, requireTelegram: true
+    });
     assert.equal(backup.status, 'complete');
     assert.equal(backup.type, 'tenant-json-v2');
     assert.ok(backup.fileReferences.some(reference => reference.messageId === 77));
-    const file = await fs.readFile(path.join(fixture.backupDirectory, backup.location));
+    assert.equal(fixture.telegram.sent.length, 1);
+    await assert.rejects(fs.access(path.join(fixture.backupDirectory, backup.location)), { code: 'ENOENT' });
+    const { buffer } = await fixture.manager.getBackupArchive(fixture.companyId, backup.id);
     assert.match(backup.checksum, /^[a-f0-9]{64}$/);
     const records = await fixture.controlDb.execute('SELECT backup_kind, row_counts_json, file_references_json FROM backups');
     assert.equal(records.rows[0].backup_kind, 'manual');
     assert.equal(JSON.parse(records.rows[0].row_counts_json).users, 1);
     assert.equal(JSON.parse(records.rows[0].file_references_json).length, 5);
-    assert.ok(file.length > 0);
+    assert.ok(buffer.length > 0);
   } finally {
     await cleanupFixture(fixture);
   }

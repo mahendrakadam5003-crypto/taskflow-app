@@ -32,6 +32,14 @@ services:
         sync: false
       - key: TELEGRAM_CHANNEL_ID
         sync: false
+      - key: AUTO_DAILY_BACKUPS
+        value: true
+      - key: TELEGRAM_BACKUP_CHANNEL_ID
+        sync: false
+      - key: TELEGRAM_BACKUP_ALERT_CHAT_ID
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
       - key: MAIL_PROVIDER
         value: gmail
       - key: GMAIL_CLIENT_ID

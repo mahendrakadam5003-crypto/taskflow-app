@@ -3,7 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const db = require('../db');
-const { logActivity, notifyActivityRecipients } = require('../audit');
+const { logActivity, notifyActivityRecipients, notifyAdmins } = require('../audit');
 const { csvValue } = require('../csv');
 const { requireAuth, requireAdmin } = require('./auth');
 const { logRequestEvent, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
@@ -420,6 +420,7 @@ router.post('/', uploadRateLimit, handleReceiptUpload, async (req, res) => {
         JOIN users claimant ON claimant.id=? AND claimant.active=1
         WHERE ra.approval_level > 0 AND approver.department=claimant.department`).all(req.session.userId);
       await notifyActivityRecipients(activityId, (approvers || []).map(approver => approver.user_id));
+      await notifyAdmins(req, activityId);
     } catch (notificationError) {
       logRequestEvent(req, 'reimbursement_notification_failed', 'warn');
     }

@@ -7,7 +7,7 @@ const { gunzipSync } = require('zlib');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const db = require('../db');
 const { requireAuth, requireAdmin } = require('./auth');
-const { logActivity, notifyActivityRecipients } = require('../audit');
+const { logActivity, notifyActivityRecipients, notifyAdmins } = require('../audit');
 const { logRequestEvent, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const storageProvider = require('../storage-provider');
 const { parseMoneyAmount, parsePaymentAmounts } = require('../lib/money');
@@ -217,6 +217,7 @@ async function notifyTaskRelatedPeople(req, taskId, action) {
       && userId !== Number(req.session.userId)))];
     const activityId = await logActivity(req, action, 'task', task.id, task.title, req.session.userId);
     await notifyActivityRecipients(activityId, recipients);
+    await notifyAdmins(req, activityId);
   } catch (error) {
     logRequestEvent(req, 'task_activity_notification_failed', 'warn');
   }

@@ -1,5 +1,6 @@
 import UIKit
 import Capacitor
+import Darwin
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -46,4 +47,39 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return ApplicationDelegateProxy.shared.application(application, continue: userActivity, restorationHandler: restorationHandler)
     }
 
+}
+
+class TaskFlowBridgeViewController: CAPBridgeViewController {
+    override func capacitorDidLoad() {
+        bridge?.registerPluginInstance(AppDevicePlugin())
+    }
+}
+
+@objc(AppDevicePlugin)
+public class AppDevicePlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "AppDevicePlugin"
+    public let jsName = "AppDevice"
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "getIdentity", returnType: CAPPluginReturnPromise)
+    ]
+
+    @objc public func getIdentity(_ call: CAPPluginCall) {
+        guard let deviceId = UIDevice.current.identifierForVendor?.uuidString else {
+            call.reject("Unable to identify this Apple device.")
+            return
+        }
+
+        var systemInfo = utsname()
+        uname(&systemInfo)
+        let model = withUnsafePointer(to: &systemInfo.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: systemInfo.machine)) {
+                String(cString: $0)
+            }
+        }
+        call.resolve([
+            "device_id": deviceId,
+            "manufacturer": "Apple",
+            "model": model
+        ])
+    }
 }

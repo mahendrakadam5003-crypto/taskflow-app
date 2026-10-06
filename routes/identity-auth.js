@@ -7,6 +7,7 @@ const { rateLimit } = require('express-rate-limit');
 const { getControlDatabase } = require('../control-db');
 const { hasControlDatabaseConfiguration, LEGACY_TENANT_ID } = require('../tenant-manager');
 const { createMailer } = require('../mailer');
+const { authorizeLogin, getLoginDevice, isLoginSessionAllowed } = require('../lib/login-device');
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const passwordMinimumBytes = 10;
@@ -203,7 +204,7 @@ function createIdentityAuthRouter(options = {}) {
   async function verifyEmailCode(email, code, purpose) {
     const row = await database.prepare(`SELECT t.id, t.user_id, t.email, t.code_hash, t.expires_at,
         t.attempts, u.id AS account_id, u.name, u.username, u.role, u.active,
-        u.email AS current_email, u.email_verified, u.must_change_password, u.token_version
+        u.email AS current_email, u.email_verified, u.must_change_password, u.token_version, u.web_access_enabled
       FROM email_login_otps t JOIN users u ON u.id = t.user_id
       WHERE lower(trim(t.email)) = ? AND t.purpose = ? AND t.consumed_at IS NULL
         AND t.expires_at > ? AND t.attempts < 5
@@ -245,9 +246,19 @@ function createIdentityAuthRouter(options = {}) {
     try {
       const user = await verifyEmailCode(email, code, 'login');
       if (!user) return res.status(400).json({ error: 'The sign-in code is invalid, expired, or already used. Request a new code.' });
-      const reason = await authenticateUser(req, user);
-      if (reason) return res.status(reason === 'google_suspended' || reason === 'google_billing_required' ? 403 : 401)
-        .json({ error: reason === 'google_suspended' ? 'Account suspended, contact support.' : reason === 'google_billing_required' ? 'This workspace is locked. Contact your administrator.' : 'Sign-in could not be completed.' });
+      const reason = await authenticateUser(req, user, getLoginDevice(req, req.body));
+      if (reason) {
+        const messages = {
+          google_suspended: ['Account suspended, contact support.', 'ACCOUNT_SUSPENDED'],
+          google_billing_required: ['This workspace is locked. Contact your administrator.', 'BILLING_REQUIRED'],
+          web_login_not_allowed: ['This account is limited to its registered TaskFlow mobile app. Ask your company admin to enable web access.', 'WEB_LOGIN_NOT_ALLOWED'],
+          app_device_mismatch: ['This account is registered to another mobile device. Ask your company admin to reset the registered app device before signing in here.', 'APP_DEVICE_MISMATCH'],
+          app_device_id_required: ['TaskFlow could not identify this app installation. Update the app and try again.', 'APP_DEVICE_ID_REQUIRED']
+        };
+        const [error, responseCode] = messages[reason] || ['Sign-in could not be completed.', 'LOGIN_FAILED'];
+        const status = ['google_suspended', 'google_billing_required', 'web_login_not_allowed', 'app_device_mismatch', 'app_device_id_required'].includes(reason) ? 403 : 401;
+        return res.status(status).json({ error, code: responseCode });
+      }
       return res.json({
         id: user.id,
         name: user.name,
@@ -435,9 +446,28 @@ function createIdentityAuthRouter(options = {}) {
     return res.redirect(303, `/app#auth=${encodeURIComponent(reason)}`);
   }
 
+  router.post('/google/device-context', googleLoginLimiter, async (req, res) => {
+    req.session.pendingLoginDevice = getLoginDevice(req, req.body);
+    req.session.pendingLoginDeviceAt = now();
+    try {
+      await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve()));
+      return res.json({ ok: true });
+    } catch (error) {
+      logRequestEvent(req, 'google_login_device_context_save_failed');
+      return res.status(500).json({ error: 'Google sign-in could not be started. Try again.' });
+    }
+  });
+
   router.get('/google/start', googleLoginLimiter, async (req, res) => {
     const config = googleConfiguration();
     if (!config) return redirectToLogin(res, 'google_unavailable');
+    const loginDevice = Number(req.session?.pendingLoginDeviceAt) > now() - 5 * 60 * 1000
+      ? req.session.pendingLoginDevice
+      : getLoginDevice(req);
+    if (req.session) {
+      delete req.session.pendingLoginDevice;
+      delete req.session.pendingLoginDeviceAt;
+    }
     const state = crypto.randomBytes(32).toString('base64url');
     const verifier = crypto.randomBytes(32).toString('base64url');
     const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
@@ -445,6 +475,7 @@ function createIdentityAuthRouter(options = {}) {
       state,
       verifier,
       companyId: req.companyTenantId ?? LEGACY_TENANT_ID,
+      loginDevice,
       expiresAt: now() + 10 * 60 * 1000
     };
     try {
@@ -497,9 +528,27 @@ function createIdentityAuthRouter(options = {}) {
     return { googleSub: profile.sub, email };
   }
 
-  async function authenticateUser(req, user) {
+  async function authenticateUser(req, user, loginDevice = getLoginDevice(req, req.body)) {
     if (req.companyStatus === 'suspended' && user.role !== 'admin') return 'google_suspended';
     if (req.companyAccessState?.state === 'locked' && user.role !== 'admin') return 'google_billing_required';
+    let loginAccess;
+    if (Number(req.session?.userId) === Number(user.id)) {
+      if (!await isLoginSessionAllowed(database, user, req.session)) return 'login_access_revoked';
+      loginAccess = {
+        loginClient: req.session.loginClient || 'web',
+        loginDeviceHash: req.session.loginDeviceHash || null
+      };
+    } else {
+      const authorization = await authorizeLogin(database, user, loginDevice);
+      if (!authorization.ok) {
+        return {
+          WEB_LOGIN_NOT_ALLOWED: 'web_login_not_allowed',
+          APP_DEVICE_MISMATCH: 'app_device_mismatch',
+          APP_DEVICE_ID_REQUIRED: 'app_device_id_required'
+        }[authorization.code] || 'google_account_unavailable';
+      }
+      loginAccess = authorization;
+    }
     if (Number(user.must_change_password) === 1) {
       await database.prepare(`UPDATE users SET must_change_password = 0, token_version = token_version + 1
         WHERE id = ? AND active = 1`).run(user.id);
@@ -512,6 +561,8 @@ function createIdentityAuthRouter(options = {}) {
     req.session.name = user.name;
     req.session.tokenVersion = Number(user.token_version);
     req.session.companyId = req.companyTenantId ?? LEGACY_TENANT_ID;
+    req.session.loginClient = loginAccess.loginClient;
+    if (loginAccess.loginDeviceHash) req.session.loginDeviceHash = loginAccess.loginDeviceHash;
     await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve()));
     if (req.companyTenantId != null && String(req.companyTenantId) !== LEGACY_TENANT_ID) {
       try {
@@ -559,7 +610,7 @@ function createIdentityAuthRouter(options = {}) {
         }
       }
       if (!user || Number(user.active) !== 1) return redirectToLogin(res, 'google_account_unavailable');
-      const reason = await authenticateUser(req, user);
+      const reason = await authenticateUser(req, user, pending.loginDevice || getLoginDevice(req));
       if (reason) return redirectToLogin(res, reason);
       return res.redirect(303, '/app');
     } catch (error) {

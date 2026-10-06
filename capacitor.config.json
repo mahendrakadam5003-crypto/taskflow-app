@@ -4,6 +4,12 @@
   "server": {
     "url": "https://taskflow-app-zjlw.onrender.com/app"
   },
+  "android": {
+    "appendUserAgent": "TaskFlowNative/1"
+  },
+  "ios": {
+    "appendUserAgent": "TaskFlowNative/1"
+  },
   "webDir": "public",
   "bundledWebRuntime": false
 }

@@ -21,7 +21,8 @@ const employee = {
   email_verified: 1,
   active: 1,
   must_change_password: 0,
-  token_version: 1
+  token_version: 1,
+  web_access_enabled: 1
 };
 const ownClaim = {
   id: 501,

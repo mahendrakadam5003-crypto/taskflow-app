@@ -51,8 +51,8 @@ const mockDb = {
         if (sql.includes('FROM attendance_locations al JOIN users u')) {
           timelineQuery = sql;
           return [
-            { recorded_at: '2026-10-05T04:00:00.000Z', latitude: 18.52, longitude: 73.85, distance_meters: 0, place_changed: 0, user_name: 'Employee' },
-            { recorded_at: '2026-10-05T04:05:00.000Z', latitude: 18.53, longitude: 73.86, distance_meters: 71.5, place_changed: 1, user_name: 'Employee' }
+            { recorded_at: '2026-10-05T04:00:00.000Z', latitude: 18.52, longitude: 73.85, distance_meters: 0, place_changed: 0, activity_type: 'in_vehicle', activity_confidence: 93, user_name: 'Employee' },
+            { recorded_at: '2026-10-05T04:05:00.000Z', latitude: 18.53, longitude: 73.86, distance_meters: 71.5, place_changed: 1, activity_type: 'walking', activity_confidence: 81, user_name: 'Employee' }
           ];
         }
         if (sql.includes('FROM attendance a JOIN users u')) {
@@ -94,7 +94,10 @@ require.cache[auditPath] = {
   id: auditPath,
   filename: auditPath,
   loaded: true,
-  exports: { logActivity: async (...args) => { auditEntries.push(args); } }
+  exports: {
+    async logActivity(...args) { auditEntries.push(args); return auditEntries.length; },
+    async notifyAdmins() {}
+  }
 };
 require.cache[storagePath] = {
   id: storagePath,
@@ -199,11 +202,15 @@ test('required attendance verification blocks unverified punches and accepts nat
       device_id: deviceId,
       lat: 19.076,
       lng: 72.8777,
-      verification_method: 'native-device-credential'
+      verification_method: 'native-device-credential',
+      activity_type: 'in_vehicle',
+      activity_confidence: 93
     })
   });
   assert.equal(verified.status, 200);
   assert.ok(writes.some(write => write.sql.includes('INSERT OR IGNORE INTO attendance')));
+  const recordedActivity = writes.find(write => write.sql.includes('INSERT INTO attendance_locations'));
+  assert.deepEqual(recordedActivity.args.slice(7, 9), ['in_vehicle', 93]);
   assert.equal(officeSettingsReadCount, 0, 'office radius must not block an off-site punch');
 });
 
@@ -249,10 +256,11 @@ test('admin live timeline returns stored distance and place-change totals', asyn
 
   assert.equal(response.status, 200);
   assert.match(timelineQuery, /al\.distance_meters,\s*al\.place_changed/);
+  assert.match(timelineQuery, /al\.activity_type,\s*al\.activity_confidence/);
   assert.deepEqual(await response.json(), {
     points: [
-      { recorded_at: '2026-10-05T04:00:00.000Z', latitude: 18.52, longitude: 73.85, distance_meters: 0, place_changed: 0, user_name: 'Employee' },
-      { recorded_at: '2026-10-05T04:05:00.000Z', latitude: 18.53, longitude: 73.86, distance_meters: 71.5, place_changed: 1, user_name: 'Employee' }
+      { recorded_at: '2026-10-05T04:00:00.000Z', latitude: 18.52, longitude: 73.85, distance_meters: 0, place_changed: 0, activity_type: 'in_vehicle', activity_confidence: 93, user_name: 'Employee' },
+      { recorded_at: '2026-10-05T04:05:00.000Z', latitude: 18.53, longitude: 73.86, distance_meters: 71.5, place_changed: 1, activity_type: 'walking', activity_confidence: 81, user_name: 'Employee' }
     ],
     total_distance_meters: 71.5,
     place_changes: 1

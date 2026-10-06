@@ -50,6 +50,10 @@ test('tenant identity schema upgrade preserves existing users and is repeatable'
       sql: 'INSERT INTO users (id, name, username, password_hash, role) VALUES (?, ?, ?, ?, ?)',
       args: [77, 'Legacy Employee', 'legacy.employee', 'existing-password-hash', 'employee']
     });
+    await client.execute({
+      sql: 'INSERT INTO users (id, name, username, password_hash, role) VALUES (?, ?, ?, ?, ?)',
+      args: [78, 'Legacy Admin', 'legacy.admin', 'admin-password-hash', 'admin']
+    });
     await client.execute('CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime(\'now\')))');
     await client.execute('INSERT INTO schema_version (version) VALUES (3)');
 
@@ -61,7 +65,12 @@ test('tenant identity schema upgrade preserves existing users and is repeatable'
       [77, 'Legacy Employee', 'legacy.employee', 'existing-password-hash', null, 0, null, 'password']
     ]);
     const version = await client.execute('SELECT MAX(version) AS version FROM schema_version');
-    assert.equal(Number(version.rows[0].version), 6);
+    assert.equal(Number(version.rows[0].version), 9);
+    const loginAccess = await client.execute('SELECT web_access_enabled FROM users WHERE id IN (77, 78) ORDER BY id');
+    assert.deepEqual(loginAccess.rows.map(row => Number(row.web_access_enabled)), [0, 1]);
+    const appDevices = await client.execute('PRAGMA table_info(app_login_devices)');
+    assert.ok(appDevices.rows.some(row => row.name === 'device_id_hash'));
+    assert.ok(appDevices.rows.some(row => row.name === 'device_model'));
     const tokenTable = await client.execute('PRAGMA table_info(email_auth_tokens)');
     assert.ok(tokenTable.rows.some(row => row.name === 'token_hash'));
     assert.ok(tokenTable.rows.some(row => row.name === 'expires_at'));
@@ -105,6 +114,23 @@ test('tenant identity schema upgrade preserves existing users and is repeatable'
       args: ['Duplicate Google', 'duplicate.google', 'hash', 'google-sub-1']
     }), /UNIQUE constraint failed/);
   } finally {
+    await client.close();
+  }
+});
+
+test('new tenant initial admin can sign in from the web', async () => {
+  const client = createClient({ url: 'file::memory:' });
+  const previousPassword = process.env.INITIAL_ADMIN_PASSWORD;
+  process.env.INITIAL_ADMIN_PASSWORD = 'tenant-initial-admin-password';
+  try {
+    await initTenantSchema(client);
+    const admin = await client.execute("SELECT role, web_access_enabled FROM users WHERE username = 'admin'");
+    assert.equal(admin.rows.length, 1);
+    assert.equal(admin.rows[0].role, 'admin');
+    assert.equal(Number(admin.rows[0].web_access_enabled), 1);
+  } finally {
+    if (previousPassword === undefined) delete process.env.INITIAL_ADMIN_PASSWORD;
+    else process.env.INITIAL_ADMIN_PASSWORD = previousPassword;
     await client.close();
   }
 });

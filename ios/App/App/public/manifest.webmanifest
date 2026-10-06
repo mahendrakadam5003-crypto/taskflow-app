@@ -2,7 +2,7 @@
   "name": "TaskFlow",
   "short_name": "TaskFlow",
   "description": "Tasks, field attendance, and reimbursements",
-  "start_url": "/",
+  "start_url": "/app",
   "display": "standalone",
   "background_color": "#14213D",
   "theme_color": "#14213D",

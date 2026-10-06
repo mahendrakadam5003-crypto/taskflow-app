@@ -185,10 +185,12 @@ function createBackupManager({
       archive = await createTenantArchive({
         tenantDatabase: getTenantDb(), companyId: Number(companyId), companyCode: company.code, now
       });
-      destination = await persistArchive(archive.buffer, { directory: backupDirectory, filename });
       const telegramClient = getTelegram();
       if (requireTelegram || (telegramClient.configured && ['daily', 'final', 'pre-restore'].includes(kind))) {
         uploadedParts = await telegramClient.uploadArchive(archive.buffer, { companyCode: company.code, backupKey: key });
+      }
+      if (!requireTelegram) {
+        destination = await persistArchive(archive.buffer, { directory: backupDirectory, filename });
       }
     } catch (error) {
       failure = error;

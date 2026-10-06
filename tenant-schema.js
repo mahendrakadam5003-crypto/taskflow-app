@@ -51,6 +51,7 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       active INTEGER NOT NULL DEFAULT 1,
       must_change_password INTEGER NOT NULL DEFAULT 0,
       token_version INTEGER NOT NULL DEFAULT 0,
+      web_access_enabled INTEGER NOT NULL DEFAULT 0 CHECK (web_access_enabled IN (0, 1)),
       email TEXT,
       date_of_birth TEXT,
       phone TEXT,
@@ -332,7 +333,9 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       longitude REAL,
       telegram_message_id INTEGER,
       distance_meters REAL NOT NULL DEFAULT 0,
-      place_changed INTEGER NOT NULL DEFAULT 0
+      place_changed INTEGER NOT NULL DEFAULT 0,
+      activity_type TEXT NOT NULL DEFAULT 'unknown',
+      activity_confidence INTEGER NOT NULL DEFAULT 0
     );`);
     if (needsSchemaUpgrade) {
     const locationColumns = await dbDriverInterface.prepare('PRAGMA table_info(attendance_locations)').all();
@@ -350,7 +353,9 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
         longitude REAL,
         telegram_message_id INTEGER,
         distance_meters REAL NOT NULL DEFAULT 0,
-        place_changed INTEGER NOT NULL DEFAULT 0
+        place_changed INTEGER NOT NULL DEFAULT 0,
+        activity_type TEXT NOT NULL DEFAULT 'unknown',
+        activity_confidence INTEGER NOT NULL DEFAULT 0
       );`);
       await dbDriverInterface.exec(`INSERT INTO attendance_locations_rebuilt
         (id, attendance_id, user_id, recorded_at, latitude, longitude, telegram_message_id, distance_meters, place_changed)
@@ -717,8 +722,8 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
         throw new Error('INITIAL_ADMIN_PASSWORD must contain between 10 and 72 UTF-8 bytes before creating the initial admin account.');
       }
       const hash = bcrypt.hashSync(initialPassword, 10);
-      const result = await dbDriverInterface.prepare(`INSERT INTO users (name, username, password_hash, role, active, must_change_password)
-        SELECT ?, ?, ?, 'admin', 1, 1 WHERE NOT EXISTS (SELECT 1 FROM users)`)
+      const result = await dbDriverInterface.prepare(`INSERT INTO users (name, username, password_hash, role, active, must_change_password, web_access_enabled)
+        SELECT ?, ?, ?, 'admin', 1, 1, 1 WHERE NOT EXISTS (SELECT 1 FROM users)`)
         .run('Admin', 'admin', hash);
       if (result.changes) {
         console.log('Initial admin created from INITIAL_ADMIN_PASSWORD. Change it at first login.');
@@ -787,6 +792,40 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS email_login_otps_user_purpose_idx ON email_login_otps(user_id, purpose, consumed_at)');
       await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS email_login_otps_expiry_idx ON email_login_otps(expires_at)');
       await markSchemaVersion(6);
+    }
+    if (schemaVersion < 7) {
+      const locationColumns = await dbDriverInterface.prepare('PRAGMA table_info(attendance_locations)').all();
+      const existingLocationColumns = new Set(locationColumns.map(column => column.name));
+      if (!existingLocationColumns.has('activity_type')) await dbDriverInterface.exec("ALTER TABLE attendance_locations ADD COLUMN activity_type TEXT NOT NULL DEFAULT 'unknown'");
+      if (!existingLocationColumns.has('activity_confidence')) await dbDriverInterface.exec('ALTER TABLE attendance_locations ADD COLUMN activity_confidence INTEGER NOT NULL DEFAULT 0');
+      await markSchemaVersion(7);
+    }
+    if (schemaVersion < 8) {
+      await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS push_notification_tokens (
+        token TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        platform TEXT NOT NULL CHECK (platform IN ('android', 'ios')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );`);
+      await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS push_notification_tokens_user_idx ON push_notification_tokens(user_id)');
+      await markSchemaVersion(8);
+    }
+    if (schemaVersion < 9) {
+      const userColumns = await dbDriverInterface.prepare('PRAGMA table_info(users)').all();
+      if (!userColumns.some(column => column.name === 'web_access_enabled')) {
+        await dbDriverInterface.exec('ALTER TABLE users ADD COLUMN web_access_enabled INTEGER NOT NULL DEFAULT 0');
+      }
+      await dbDriverInterface.exec("UPDATE users SET web_access_enabled = 1 WHERE role = 'admin'");
+      await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS app_login_devices (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        device_id_hash TEXT NOT NULL,
+        device_model TEXT NOT NULL,
+        registered_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );`);
+      await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS app_login_devices_hash_idx ON app_login_devices(device_id_hash)');
+      await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS app_login_devices_registered_idx ON app_login_devices(registered_at)');
+      await markSchemaVersion(9);
     }
     console.log('Database schema and default settings are ready.');
   } catch (err) {

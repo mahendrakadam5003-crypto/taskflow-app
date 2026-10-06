@@ -17,7 +17,7 @@ TaskFlow is used for attendance and work management. Depending on the features e
 - Attendance punch-in and punch-out times.
 - Device-reported GPS latitude and longitude at attendance punches, during live attendance tracking, and at task check-in/check-out when enabled. The address displayed for a coordinate is derived from that coordinate.
 - Device and browser details, including phone/laptop category, a device name chosen during registration, and a derived browser/model label. The app requests browser model and platform-version client hints; it stores a derived device label rather than the complete raw User-Agent string.
-- A pseudonymous device-binding hash used to enforce the registered-device policy. The original device ID is not stored in that table.
+- For native app sign-in, the device manufacturer/model and a SHA-256 hash of the platform device identifier. The original native identifier is not stored; this binding is used to limit each account to one registered app device until an administrator resets it. Browser login permission is controlled separately by the employer.
 - Work records such as task comments, task history, reimbursement claims, receipts, and administrative activity records when those features are used.
 - If an administrator requires attendance verification, the mobile app requests biometric confirmation and the server verifies a re-entered TaskFlow password before employee punch-in/out. The password is checked transiently and is not written to the attendance record.
 
@@ -43,7 +43,7 @@ Current application defaults are:
 | --- | --- |
 | Exact attendance GPS points and Telegram location messages | 60 days. The app deletes Telegram messages where possible, then removes local points. If Telegram deletion fails, local coordinates are erased and a coordinate-free marker remains so deletion can be retried. |
 | Exact punch-in/out and task check-in/out coordinates and location names | 60 days. Punch/check-in timestamps remain after coordinates are cleared. |
-| Attendance device type and model/browser details | 60 days. The displayed registered-device name is anonymized after 60 days. The device-binding hash remains while the device registration is active and is removed when that registration is reset or deleted. |
+| Attendance and native app device/model details | 60 days for attendance device details. Native app model and device-binding hash remain while the app registration is active and are removed when an administrator resets the device or the account is deleted. |
 | Reimbursement receipts, comment images, and other attachments | No automatic deletion by default (`0` days). An administrator may configure a finite period after review with the accountant. If configured, comment attachments are aged from comment creation and receipts from the expense date; references and metadata are cleared after file deletion succeeds. |
 | Attendance punch times, activity log, task history, and comment text | No automatic expiry. They remain until removed through the employer's separate records-management process or as part of deletion of their parent records. |
 

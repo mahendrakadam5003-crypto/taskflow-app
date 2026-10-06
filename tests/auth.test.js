@@ -24,6 +24,7 @@ const user = {
   active: 1,
   must_change_password: 0,
   token_version: 0,
+  web_access_enabled: 1,
   password_hash: ''
 };
 const otherUser = {
@@ -39,15 +40,20 @@ const otherUser = {
   active: 1,
   must_change_password: 0,
   token_version: 0,
+  web_access_enabled: 1,
   password_hash: ''
 };
 const users = new Map([[user.id, user], [otherUser.id, otherUser]]);
 const deletedSessionUsers = [];
+const appLoginDevices = new Map();
 
 const mockDb = {
   prepare(sql) {
     return {
       get: async (...args) => {
+        if (sql.includes('FROM app_login_devices WHERE user_id')) {
+          return appLoginDevices.get(Number(args[0])) || null;
+        }
         if (sql.includes('FROM users WHERE username = ?')) {
           const found = [...users.values()].find(row => row.username === args[0]);
           return found ? { ...found } : null;
@@ -64,6 +70,23 @@ const mockDb = {
       },
       all: async () => [],
       run: async (...args) => {
+        if (sql.includes('INSERT OR IGNORE INTO app_login_devices')) {
+          const [userId, deviceIdHash, deviceModel] = args;
+          if (!appLoginDevices.has(Number(userId))) {
+            appLoginDevices.set(Number(userId), { device_id_hash: deviceIdHash, device_model: deviceModel });
+          }
+          return { changes: 1 };
+        }
+        if (sql.includes('DELETE FROM app_login_devices')) {
+          return { changes: appLoginDevices.delete(Number(args[0])) ? 1 : 0 };
+        }
+        if (sql.includes('UPDATE users SET web_access_enabled')) {
+          const [enabled, userId] = args;
+          const target = users.get(Number(userId));
+          target.web_access_enabled = enabled;
+          target.token_version += 1;
+          return { changes: 1 };
+        }
         if (sql.includes('DELETE FROM web_sessions WHERE user_id')) {
           deletedSessionUsers.push(Number(args[0]));
           return { changes: 1 };
@@ -120,7 +143,7 @@ const mockDb = {
     users.set(id, {
       id, name, username, password_hash: passwordHash, department, role, active: 1,
       email, date_of_birth: dateOfBirth, phone, email_verified: 0, google_sub: null, auth_provider: 'password',
-      must_change_password: 1, token_version: 0
+      must_change_password: 1, token_version: 0, web_access_enabled: 0
     });
     return [{ rowsAffected: 1 }, { rows: [{ id }] }];
   }
@@ -212,10 +235,11 @@ function nextIp() {
   return `198.51.100.${requestNumber}`;
 }
 
-async function request(route, { method = 'GET', body, cookie, timeoutMs = 3000 } = {}) {
+async function request(route, { method = 'GET', body, cookie, userAgent, timeoutMs = 3000 } = {}) {
   const headers = { 'X-Forwarded-For': nextIp() };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (cookie) headers.Cookie = cookie;
+  if (userAgent) headers['User-Agent'] = userAgent;
   return fetch(`${baseUrl}/api/auth${route}`, {
     method,
     headers,
@@ -436,8 +460,20 @@ test('user seats are enforced for creation and reactivation, and deactivation fr
       method: 'POST',
       body: { username: 'new-seat', password: 'temporary-password-123' }
     });
-    assert.equal(newMemberLogin.status, 200);
-    assert.equal((await newMemberLogin.json()).must_change_password, true);
+    assert.equal(newMemberLogin.status, 403);
+    assert.equal((await newMemberLogin.json()).code, 'WEB_LOGIN_NOT_ALLOWED');
+    const enableNewMemberWeb = await request(`/users/${newUserId}/web-access`, {
+      method: 'PUT',
+      cookie: adminCookie,
+      body: { enabled: true }
+    });
+    assert.equal(enableNewMemberWeb.status, 200);
+    const newMemberWebLogin = await request('/login', {
+      method: 'POST',
+      body: { username: 'new-seat', password: 'temporary-password-123' }
+    });
+    assert.equal(newMemberWebLogin.status, 200);
+    assert.equal((await newMemberWebLogin.json()).must_change_password, true);
 
     const deniedReactivation = await request('/users/2', { method: 'PUT', cookie: adminCookie, body: { active: true } });
     assert.equal(deniedReactivation.status, 403);
@@ -531,5 +567,69 @@ test('admin email changes require reverification and remove the previous Google 
     assert.equal(user.google_sub, null);
   } finally {
     Object.assign(user, snapshot);
+  }
+});
+
+test('native app accounts bind one model while admins control browser access and device reset', async () => {
+  const originalAdmin = { ...user };
+  const originalEmployee = { ...otherUser };
+  appLoginDevices.delete(otherUser.id);
+  try {
+    user.role = 'admin';
+    otherUser.web_access_enabled = 0;
+    otherUser.password_hash = await bcrypt.hash('registered-device-password', 4);
+    const adminCookie = await login('replacement-password-456');
+    const appRequest = (deviceId, model) => request('/login', {
+      method: 'POST',
+      userAgent: 'Mozilla/5.0 TaskFlowNative/1',
+      body: {
+        username: otherUser.username,
+        password: 'registered-device-password',
+        device_id: deviceId,
+        manufacturer: 'Google',
+        model
+      }
+    });
+
+    const firstAppLogin = await appRequest('android-id-pixel-9-12345', 'Pixel 9');
+    assert.equal(firstAppLogin.status, 200);
+    assert.equal(appLoginDevices.get(otherUser.id).device_model, 'Google Pixel 9');
+
+    const secondAppLogin = await appRequest('android-id-galaxy-s25-1234', 'Galaxy S25');
+    assert.equal(secondAppLogin.status, 403);
+    assert.equal((await secondAppLogin.json()).code, 'APP_DEVICE_MISMATCH');
+
+    const deniedBrowserLogin = await request('/login', {
+      method: 'POST',
+      body: { username: otherUser.username, password: 'registered-device-password' }
+    });
+    assert.equal(deniedBrowserLogin.status, 403);
+    assert.equal((await deniedBrowserLogin.json()).code, 'WEB_LOGIN_NOT_ALLOWED');
+
+    const enabled = await request(`/users/${otherUser.id}/web-access`, {
+      method: 'PUT', cookie: adminCookie, body: { enabled: true }
+    });
+    assert.equal(enabled.status, 200);
+    const browserLogin = await request('/login', {
+      method: 'POST',
+      body: { username: otherUser.username, password: 'registered-device-password' }
+    });
+    assert.equal(browserLogin.status, 200);
+
+    const disabled = await request(`/users/${otherUser.id}/web-access`, {
+      method: 'PUT', cookie: adminCookie, body: { enabled: false }
+    });
+    assert.equal(disabled.status, 200);
+    const browserSession = browserLogin.headers.get('set-cookie').split(';', 1)[0];
+    assert.equal((await request('/me', { cookie: browserSession })).status, 401);
+
+    const reset = await request(`/users/${otherUser.id}/app-device`, { method: 'DELETE', cookie: adminCookie });
+    assert.equal(reset.status, 200);
+    assert.equal(appLoginDevices.has(otherUser.id), false);
+    assert.equal((await appRequest('android-id-galaxy-s25-1234', 'Galaxy S25')).status, 200);
+  } finally {
+    Object.assign(user, originalAdmin);
+    Object.assign(otherUser, originalEmployee);
+    appLoginDevices.delete(otherUser.id);
   }
 });

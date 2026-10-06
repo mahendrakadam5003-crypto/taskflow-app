@@ -9,6 +9,8 @@ const { clearCompanyContextCookie } = require('../company-context');
 const { logActivity } = require('../audit');
 const { asyncHandler, logRequestEvent, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { getPlan, getPlanUsage } = require('../limits');
+const { isFirebasePushConfigured } = require('../lib/firebase-push');
+const { authorizeLogin, getLoginDevice, isLoginSessionAllowed } = require('../lib/login-device');
 const { createIdentityAuthRouter, normalizeEmail, validEmail } = require('./identity-auth');
 
 const router = express.Router();
@@ -88,7 +90,11 @@ function saveSession(req) {
   });
 }
 
-async function setAuthenticatedSession(req, user) {
+async function setAuthenticatedSession(req, user, loginAccess = null) {
+  const activeLogin = loginAccess || {
+    loginClient: req.session?.loginClient || 'web',
+    loginDeviceHash: req.session?.loginDeviceHash || null
+  };
   const supportMode = req.session?.supportModeSuperAdminId == null ? null : {
     supportModeSuperAdminId: req.session.supportModeSuperAdminId,
     supportModeExpiresAt: req.session.supportModeExpiresAt,
@@ -100,6 +106,8 @@ async function setAuthenticatedSession(req, user) {
   req.session.name = user.name;
   req.session.tokenVersion = Number(user.token_version);
   req.session.companyId = req.companyTenantId ?? LEGACY_TENANT_ID;
+  req.session.loginClient = activeLogin.loginClient;
+  if (activeLogin.loginDeviceHash) req.session.loginDeviceHash = activeLogin.loginDeviceHash;
   if (supportMode) Object.assign(req.session, supportMode);
   await saveSession(req);
 }
@@ -144,6 +152,7 @@ async function requireAuth(req, res, next) {
     return rejectInvalidSession(req, res);
   }
   if (req.authenticatedUser) {
+    if (!await isLoginSessionAllowed(db, req.authenticatedUser, req.session)) return rejectInvalidSession(req, res);
     if (req.companyStatus === 'suspended'
       && (req.authenticatedUser.role !== 'admin' || !['GET', 'HEAD'].includes(req.method))) {
       return res.status(403).json({
@@ -158,9 +167,10 @@ async function requireAuth(req, res, next) {
   }
   try {
     const user = await db.prepare(`SELECT role, name, active, must_change_password, token_version,
-      email, email_verified FROM users WHERE id = ?`).get(req.session.userId);
+      email, email_verified, web_access_enabled FROM users WHERE id = ?`).get(req.session.userId);
     if (!user || Number(user.active) !== 1) return rejectInvalidSession(req, res);
     if (Number(req.session.tokenVersion) !== Number(user.token_version)) return rejectInvalidSession(req, res);
+    if (!await isLoginSessionAllowed(db, user, req.session)) return rejectInvalidSession(req, res);
     req.session.role = user.role;
     req.session.name = user.name;
     if (req.companyStatus === 'suspended'
@@ -222,7 +232,10 @@ router.post('/login', loginIpLimiter, loginUsernameLimiter, loginCompanyLimiter,
       });
     }
 
-    await setAuthenticatedSession(req, user);
+    const loginDevice = getLoginDevice(req, req.body);
+    const loginAccess = await authorizeLogin(db, user, loginDevice);
+    if (!loginAccess.ok) return res.status(loginAccess.status).json({ error: loginAccess.error, code: loginAccess.code });
+    await setAuthenticatedSession(req, user, loginAccess);
     if (req.companyTenantId != null && String(req.companyTenantId) !== LEGACY_TENANT_ID) {
       try {
         const controlDb = await getControlDatabase();
@@ -353,11 +366,55 @@ router.get('/me', requireAuth, async (req, res) => {
 // ---- Admin: user management endpoints ----
 router.get('/users', requireAdmin, async (req, res) => {
   try {
-    const users = await db.prepare(`SELECT id, name, username, email, email_verified, date_of_birth,
-      phone, department, role, active, created_at FROM users ORDER BY name`).all();
+    const users = await db.prepare(`SELECT u.id, u.name, u.username, u.email, u.email_verified, u.date_of_birth,
+      u.phone, u.department, u.role, u.active, u.created_at, u.web_access_enabled,
+      d.device_model AS app_device_model, d.registered_at AS app_device_registered_at
+      FROM users u LEFT JOIN app_login_devices d ON d.user_id = u.id ORDER BY u.name`).all();
     res.json(users);
   } catch (err) {
     sendInternalError(res, err, 'User list request failed');
+  }
+});
+
+router.put('/users/:id/web-access', requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  const enabled = req.body?.enabled;
+  if (!Number.isSafeInteger(userId) || userId < 1 || typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'A valid user and web-access setting are required.' });
+  }
+  try {
+    const target = await db.prepare('SELECT id, name, active, web_access_enabled FROM users WHERE id = ?').get(userId);
+    if (!target) return res.status(404).json({ error: 'User not found.' });
+    if (Number(target.active) !== 1) return res.status(400).json({ error: 'Cannot change login access for an inactive account.' });
+    if (userId === Number(req.session.userId) && !enabled) {
+      return res.status(400).json({ error: 'Ask another company admin to disable your own web access.' });
+    }
+    if (Number(target.web_access_enabled) !== Number(enabled)) {
+      await db.prepare('UPDATE users SET web_access_enabled = ?, token_version = token_version + 1 WHERE id = ?')
+        .run(enabled ? 1 : 0, userId);
+      await deleteUserSessions(userId, req.session.companyId);
+      await logActivity(req, 'Web login access changed', 'user', userId,
+        `${target.name}: ${enabled ? 'allowed' : 'blocked'}`, userId);
+    }
+    res.json({ ok: true, web_access_enabled: enabled });
+  } catch (error) {
+    sendInternalError(res, error, 'Web login access could not be updated');
+  }
+});
+
+router.delete('/users/:id/app-device', requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (!Number.isSafeInteger(userId) || userId < 1) return res.status(400).json({ error: 'Invalid user id.' });
+  try {
+    const target = await db.prepare('SELECT id, name FROM users WHERE id = ?').get(userId);
+    if (!target) return res.status(404).json({ error: 'User not found.' });
+    await db.prepare('DELETE FROM app_login_devices WHERE user_id = ?').run(userId);
+    await db.prepare('UPDATE users SET token_version = token_version + 1 WHERE id = ?').run(userId);
+    await deleteUserSessions(userId, req.session.companyId);
+    await logActivity(req, 'Registered app device reset', 'user', userId, target.name, userId);
+    res.json({ ok: true });
+  } catch (error) {
+    sendInternalError(res, error, 'Registered app device could not be reset');
   }
 });
 
@@ -376,6 +433,38 @@ router.get('/users/directory', requireAuth, async (req, res) => {
     res.json(rows);
   } catch (err) {
     sendInternalError(res, err, 'User directory request failed');
+  }
+});
+
+router.get('/push/config', requireAuth, (req, res) => {
+  res.json({ enabled: isFirebasePushConfigured() });
+});
+
+router.post('/push/register', requireAuth, async (req, res) => {
+  const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+  const platform = req.body?.platform;
+  if (token.length < 20 || token.length > 4096 || !['android', 'ios'].includes(platform)) {
+    return res.status(400).json({ error: 'A valid push token and platform are required.' });
+  }
+  try {
+    await db.prepare(`INSERT INTO push_notification_tokens (token, user_id, platform, updated_at)
+      VALUES (?, ?, ?, datetime('now'))
+      ON CONFLICT(token) DO UPDATE SET user_id=excluded.user_id, platform=excluded.platform, updated_at=datetime('now')`)
+      .run(token, req.session.userId, platform);
+    res.json({ ok: true });
+  } catch (error) {
+    sendInternalError(res, error, 'Push token registration failed');
+  }
+});
+
+router.delete('/push/register', requireAuth, async (req, res) => {
+  const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+  if (!token) return res.status(400).json({ error: 'A push token is required.' });
+  try {
+    await db.prepare('DELETE FROM push_notification_tokens WHERE token=? AND user_id=?').run(token, req.session.userId);
+    res.json({ ok: true });
+  } catch (error) {
+    sendInternalError(res, error, 'Push token removal failed');
   }
 });
 

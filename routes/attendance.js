@@ -6,7 +6,7 @@ const db = require('../db');
 const { csvValue } = require('../csv');
 const axios = require('axios'); // Added axios to make the free API call
 const { requireAuth, requireAdmin } = require('./auth');
-const { logActivity } = require('../audit');
+const { logActivity, notifyAdmins } = require('../audit');
 const { sendLocationToTelegram } = require('../telegram-storage');
 const { logRequestEvent, wrapAsyncRoutes } = require('../http-errors');
 const { requireFeature } = require('../limits');
@@ -160,20 +160,31 @@ function distanceBetweenPoints(firstLat, firstLng, secondLat, secondLng) {
   return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-async function recordLocationPoint(attendanceId, userId, lat, lng, recordedAt, minimumIntervalMs = 0) {
+function getActivitySignal(body = {}) {
+  const allowedTypes = new Set(['in_vehicle', 'on_bicycle', 'walking', 'running', 'on_foot', 'still', 'tilting']);
+  const type = allowedTypes.has(String(body.activity_type)) ? String(body.activity_type) : 'unknown';
+  const confidence = Number(body.activity_confidence);
+  return {
+    type,
+    confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(100, Math.round(confidence))) : 0
+  };
+}
+
+async function recordLocationPoint(attendanceId, userId, lat, lng, recordedAt, minimumIntervalMs = 0, activity = {}) {
   const previous = await db.prepare(`SELECT latitude, longitude FROM attendance_locations
     WHERE attendance_id = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
     ORDER BY recorded_at DESC, id DESC LIMIT 1`).get(attendanceId);
   const distanceMeters = previous ? distanceBetweenPoints(Number(previous.latitude), Number(previous.longitude), Number(lat), Number(lng)) : 0;
   const placeChanged = distanceMeters >= 50 ? 1 : 0;
+  const activitySignal = getActivitySignal(activity);
   const info = minimumIntervalMs > 0
-    ? await db.prepare(`INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed)
-      SELECT ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (
+    ? await db.prepare(`INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed, activity_type, activity_confidence)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (
         SELECT 1 FROM attendance_locations WHERE attendance_id=? AND recorded_at >= ?
-      )`).run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged,
+      )`).run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged, activitySignal.type, activitySignal.confidence,
       attendanceId, new Date(Date.now() - minimumIntervalMs).toISOString())
-    : await db.prepare('INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged);
+    : await db.prepare('INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed, activity_type, activity_confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged, activitySignal.type, activitySignal.confidence);
   if (minimumIntervalMs > 0 && !info.changes) return null;
   return { id: info.lastInsertRowid, distanceMeters, placeChanged };
 }
@@ -376,14 +387,15 @@ router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
   if (!punchIn) return res.status(400).json({ error: 'Already punched in today' });
   const { attendanceId, locationName, now, mapStr } = punchIn;
   const recordedAt = new Date().toISOString();
-  const locationInfo = await recordLocationPoint(attendanceId, req.session.userId, lat, lng, recordedAt);
+  const locationInfo = await recordLocationPoint(attendanceId, req.session.userId, lat, lng, recordedAt, 0, req.body);
   try {
     const telegramMessageId = await sendLocationToTelegram(lat, lng, `Live tracking started: ${req.session.userId}`);
     await db.prepare('UPDATE attendance_locations SET telegram_message_id = ? WHERE id = ?').run(telegramMessageId, locationInfo.id);
   } catch (error) {
     logRequestEvent(req, 'attendance_punch_location_notification_failed', 'warn');
   }
-  await logActivity(req, 'Punched in', 'attendance', attendanceId, `${date} - ${locationName}`, req.session.userId);
+  const activityId = await logActivity(req, 'Punched in', 'attendance', attendanceId, `${date} - ${locationName}`, req.session.userId);
+  await notifyAdmins(req, activityId);
   res.json({ ok: true, time: now, status: mapStr });
 });
 
@@ -397,7 +409,7 @@ router.post('/location-update', async (req, res) => {
   const attendance = await db.prepare('SELECT id, punch_in, punch_out FROM attendance WHERE user_id = ? AND date = ?').get(req.session.userId, todayStr());
   if (!attendance?.punch_in || attendance.punch_out) return res.status(400).json({ error: 'Live tracking is only available during an active shift.' });
   const recordedAt = new Date().toISOString();
-  const locationInfo = await recordLocationPoint(attendance.id, req.session.userId, lat, lng, recordedAt, 30_000);
+  const locationInfo = await recordLocationPoint(attendance.id, req.session.userId, lat, lng, recordedAt, 30_000, req.body);
   if (!locationInfo) return res.json({ ok: true, ignored: true, recorded_at: recordedAt });
   try {
     const telegramMessageId = await sendLocationToTelegram(lat, lng, `Live tracking update: ${req.session.userId}`);
@@ -432,7 +444,8 @@ router.post('/punch-out', attendanceVerificationLimiter, async (req, res) => {
   
   await db.prepare('UPDATE attendance SET punch_out = ?, out_lat = ?, out_lng = ?, out_location_text = ?, out_device_type = ?, out_device_info = ?, location_status = ? WHERE id = ?')
     .run(now, lat, lng, outLocationName, deviceType, device.info, finalLocationStatus, existing.id);
-  await logActivity(req, 'Punched out', 'attendance', existing.id, `${date} - ${outLocationName}`, req.session.userId);
+  const activityId = await logActivity(req, 'Punched out', 'attendance', existing.id, `${date} - ${outLocationName}`, req.session.userId);
+  await notifyAdmins(req, activityId);
   res.json({ ok: true, time: now, status: finalLocationStatus });
 });
 
@@ -475,7 +488,8 @@ router.post('/admin-punch-in', requireAdmin, async (req, res) => {
   const date = todayStr();
   const punchIn = await savePunchIn(userId, date, null, null, device, { adminEnteredBy: true, req });
   if (!punchIn) return res.status(400).json({ error: 'This employee is already punched in today.' });
-  await logActivity(req, 'Admin entered punch-in', 'attendance', punchIn.attendanceId, `${date} - ${employee.id}`, userId);
+  const activityId = await logActivity(req, 'Admin entered punch-in', 'attendance', punchIn.attendanceId, `${date} - ${employee.id}`, userId);
+  await notifyAdmins(req, activityId);
   res.json({ ok: true });
 });
 
@@ -494,7 +508,8 @@ router.post('/admin-punch-out', requireAdmin, async (req, res) => {
   const status = `${existing.location_status || '📍 In: Unknown'} | Out: Entered by admin`;
   await db.prepare('UPDATE attendance SET punch_out = ?, out_lat = ?, out_lng = ?, out_location_text = ?, out_device_type = ?, out_device_info = ?, location_status = ? WHERE id = ?')
     .run(now, null, null, 'Entered by admin', null, 'Entered by admin', status, existing.id);
-  await logActivity(req, 'Admin entered punch-out', 'attendance', existing.id, `${existing.date} - ${employee.id}`, userId);
+  const activityId = await logActivity(req, 'Admin entered punch-out', 'attendance', existing.id, `${existing.date} - ${employee.id}`, userId);
+  await notifyAdmins(req, activityId);
   res.json({ ok: true });
 });
 
@@ -569,8 +584,8 @@ router.get('/live/:userId/timeline', requireAdmin, async (req, res) => {
   const userId = Number(req.params.userId);
   if (!Number.isSafeInteger(userId) || userId < 1) return res.status(400).json({ error: 'Invalid employee ID.' });
   const selectedDate = String(req.query.date || todayStr());
-  const rows = await db.prepare(`SELECT al.recorded_at, al.latitude, al.longitude,
-      al.distance_meters, al.place_changed, u.name AS user_name
+    const rows = await db.prepare(`SELECT al.recorded_at, al.latitude, al.longitude,
+      al.distance_meters, al.place_changed, al.activity_type, al.activity_confidence, u.name AS user_name
     FROM attendance_locations al JOIN users u ON u.id = al.user_id
     JOIN attendance a ON a.id = al.attendance_id
     WHERE al.user_id = ? AND a.date = ? AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL
@@ -620,7 +635,7 @@ router.get('/tracking/:userId/timeline', async (req, res) => {
   if (!Number.isSafeInteger(userId) || userId < 1) return res.status(400).json({ error: 'Invalid employee ID.' });
   const selectedDate = req.query.date || todayStr();
   if (!isValidDateOnly(String(selectedDate))) return res.status(400).json({ error: 'Choose a valid attendance date.' });
-  const rows = await db.prepare(`SELECT al.recorded_at, al.latitude, al.longitude, al.distance_meters, al.place_changed, u.name AS user_name
+  const rows = await db.prepare(`SELECT al.recorded_at, al.latitude, al.longitude, al.distance_meters, al.place_changed, al.activity_type, al.activity_confidence, u.name AS user_name
     FROM attendance_locations al JOIN users u ON u.id = al.user_id JOIN attendance a ON a.id = al.attendance_id
     WHERE al.user_id = ? AND a.date = ? AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL
     ORDER BY al.recorded_at ASC`).all(userId, selectedDate);

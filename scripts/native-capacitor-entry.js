@@ -1,4 +1,4 @@
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import { AndroidBiometryStrength, BiometricAuth } from '@aparajita/capacitor-biometric-auth';
 import { Geolocation } from '@capacitor/geolocation';
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
@@ -6,6 +6,10 @@ import { Haptics } from '@capacitor/haptics';
 import { App } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Browser } from '@capacitor/browser';
+import { PushNotifications } from '@capacitor/push-notifications';
+
+const ActivityRecognition = registerPlugin('ActivityRecognition');
+const AppDevice = registerPlugin('AppDevice');
 
 window.TaskFlowBiometricAuth = BiometricAuth;
 window.TaskFlowAndroidBiometryStrength = AndroidBiometryStrength;
@@ -17,4 +21,7 @@ window.TaskFlowHaptics = Haptics;
 window.TaskFlowApp = App;
 window.TaskFlowLocalNotifications = LocalNotifications;
 window.TaskFlowBrowser = Browser;
+window.TaskFlowPushNotifications = PushNotifications;
+window.TaskFlowActivityRecognition = ActivityRecognition;
+window.TaskFlowAppDevice = AppDevice;
 window.Capacitor = Capacitor;

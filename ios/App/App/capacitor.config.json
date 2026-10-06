@@ -1,9 +1,25 @@
 {
 	"appId": "com.taskflow.app",
 	"appName": "TaskFlow",
+	"server": {
+		"url": "https://taskflow-app-zjlw.onrender.com/app"
+	},
+	"android": {
+		"appendUserAgent": "TaskFlowNative/1"
+	},
+	"ios": {
+		"appendUserAgent": "TaskFlowNative/1"
+	},
 	"webDir": "public",
 	"bundledWebRuntime": false,
 	"packageClassList": [
-		"BiometricAuthNative"
+		"BiometricAuthNative",
+		"AppPlugin",
+		"CAPBrowserPlugin",
+		"CAPCameraPlugin",
+		"GeolocationPlugin",
+		"HapticsPlugin",
+		"LocalNotificationsPlugin",
+		"PushNotificationsPlugin"
 	]
 }

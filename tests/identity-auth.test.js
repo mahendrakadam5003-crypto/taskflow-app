@@ -22,7 +22,7 @@ const users = new Map([
   [1, {
     id: 1, name: 'Email User', username: 'email.user', email: 'member@example.test',
     email_verified: 0, google_sub: null, role: 'employee', active: 1,
-    password_hash: '', must_change_password: 0, token_version: 0
+    password_hash: '', must_change_password: 0, token_version: 0, web_access_enabled: 1
   }]
 ]);
 const tokens = new Map();
@@ -58,7 +58,8 @@ const database = {
             current_email: user.email,
             email_verified: user.email_verified,
             must_change_password: user.must_change_password,
-            token_version: user.token_version
+            token_version: user.token_version,
+            web_access_enabled: user.web_access_enabled
           };
         }
         if (sql.includes('FROM email_auth_tokens t JOIN users u')) {

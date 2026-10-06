@@ -1378,7 +1378,9 @@ function createSuperAdminRouter({
     if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
     const companyId = Number(req.params.companyId);
     if (!Number.isSafeInteger(companyId) || companyId < 1) return res.status(400).json({ error: 'Choose a valid company.' });
-    const backup = await getBackupManager().createCompanyBackup(companyId, { kind: 'manual', adminId: admin.id });
+    const backup = await getBackupManager().createCompanyBackup(companyId, {
+      kind: 'manual', adminId: admin.id, requireTelegram: true
+    });
     res.set('Cache-Control', 'no-store');
     return res.status(201).json(backup);
   }));

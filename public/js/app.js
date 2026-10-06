@@ -516,6 +516,11 @@ let latestNotificationId = null;
 let pendingSearchTaskId = null;
 let liveTrackingTimer = null;
 let liveTrackingBusy = false;
+let pushListenersRegistered = false;
+let pushBackendEnabled = false;
+let pushTokenRegistered = false;
+let registeredPushToken = null;
+const deliveredPushActivityIds = new Set();
 let selectedTrackingUserId = null;
 
 // ---------- live tracking data synchronization ----------
@@ -544,22 +549,45 @@ function stopAttendanceClock() {
 }
 
 function stopLiveTracking() {
+  const wasTracking = Boolean(liveTrackingTimer);
   if (liveTrackingTimer) {
     clearInterval(liveTrackingTimer);
     liveTrackingTimer = null;
   }
   liveTrackingBusy = false;
+  if (wasTracking) window.TaskFlowActivityRecognition?.stopUpdates?.().catch(error => console.warn('Activity recognition stop failed:', error.message));
+}
+
+async function getTravelActivity(startUpdates = false) {
+  const plugin = window.TaskFlowActivityRecognition;
+  if (!window.Capacitor?.isNativePlatform?.() || !plugin) return { activity_type: 'unknown', activity_confidence: 0 };
+  try {
+    if (startUpdates) await plugin.startUpdates();
+    const activity = await plugin.getCurrentActivity();
+    if (!activity?.updated_at || Date.now() - Number(activity.updated_at) > 10 * 60 * 1000) {
+      return { activity_type: 'unknown', activity_confidence: 0 };
+    }
+    return {
+      activity_type: String(activity.type || 'unknown'),
+      activity_confidence: Number(activity.confidence) || 0
+    };
+  } catch (error) {
+    console.warn('Physical activity recognition unavailable; continuing with GPS only:', error.message);
+    return { activity_type: 'unknown', activity_confidence: 0 };
+  }
 }
 
 function startLiveTracking() {
   if (liveTrackingTimer || !isPhoneDevice()) return;
+  getTravelActivity(true);
   liveTrackingTimer = setInterval(async () => {
     if (document.hidden || liveTrackingBusy) return;
     liveTrackingBusy = true;
     try {
       const coords = await getLiveCoords();
       const devicePayload = await getPunchDevicePayload();
-      await api('/attendance/location-update', { method: 'POST', body: { ...coords, ...devicePayload } });
+      const activityPayload = await getTravelActivity();
+      await api('/attendance/location-update', { method: 'POST', body: { ...coords, ...devicePayload, ...activityPayload } });
     } catch (error) {
       if (/active shift|punched out/i.test(error.message)) stopLiveTracking();
       else console.warn('Live location update failed:', error.message);
@@ -614,6 +642,37 @@ async function requestNativeNotificationPermission() {
   try {
     let permission = await notifications.checkPermissions();
     if (permission.display !== 'granted') permission = await notifications.requestPermissions();
+    const push = window.TaskFlowPushNotifications;
+    if (push) {
+      if (!pushListenersRegistered) {
+        await push.addListener('registration', async token => {
+          try {
+            registeredPushToken = token.value;
+            await api('/auth/push/register', { method: 'POST', body: { token: token.value, platform: window.Capacitor.getPlatform() } });
+            pushTokenRegistered = true;
+          } catch (error) {
+            console.warn('Push token registration failed:', error.message);
+          }
+        });
+        await push.addListener('registrationError', error => console.warn('Push registration failed:', error.error || 'Firebase configuration is missing.'));
+        await push.addListener('pushNotificationReceived', notification => {
+          const activityId = notification.data?.activity_id;
+          if (activityId) deliveredPushActivityIds.add(String(activityId));
+          showAppNotification(notification.body || notification.title || 'TaskFlow has a new update.');
+        });
+        await push.addListener('pushNotificationActionPerformed', () => showView('notifications'));
+        pushListenersRegistered = true;
+      }
+      let pushPermission = await push.checkPermissions();
+      if (pushPermission.receive !== 'granted') pushPermission = await push.requestPermissions();
+      if (pushPermission.receive === 'granted') {
+        try {
+          const config = await api('/auth/push/config');
+          pushBackendEnabled = !!config.enabled;
+        } catch { pushBackendEnabled = false; }
+        if (pushBackendEnabled) await push.register();
+      }
+    }
     return permission.display === 'granted';
   } catch (error) {
     console.warn('Notification permission request failed:', error.message);
@@ -621,14 +680,31 @@ async function requestNativeNotificationPermission() {
   }
 }
 
+async function unregisterPushToken() {
+  const push = window.TaskFlowPushNotifications;
+  if (registeredPushToken) {
+    try { await api('/auth/push/register', { method: 'DELETE', body: { token: registeredPushToken } }); }
+    catch (error) { console.warn('Push token removal failed:', error.message); }
+  }
+  if (pushBackendEnabled && push) {
+    try { await push.unregister(); } catch (error) { console.warn('Device push unregister failed:', error.message); }
+  }
+  registeredPushToken = null;
+  pushTokenRegistered = false;
+  pushBackendEnabled = false;
+}
+
 async function showNativeActivityNotifications(entries) {
   const notifications = window.TaskFlowLocalNotifications;
   if (!notifications || !window.Capacitor?.isNativePlatform?.()) return;
+  if (pushBackendEnabled && pushTokenRegistered) return;
   try {
     const permission = await notifications.checkPermissions();
     if (permission.display !== 'granted') return;
+    const pendingEntries = entries.filter(entry => !deliveredPushActivityIds.has(String(entry.id)));
+    if (!pendingEntries.length) return;
     await notifications.schedule({
-      notifications: entries.slice(0, 5).map(entry => {
+      notifications: pendingEntries.slice(0, 5).map(entry => {
         notificationSequence = (notificationSequence + 1) % 1000;
         return {
           id: (Date.now() + notificationSequence) % 2147483647,
@@ -689,6 +765,12 @@ function setLoginStatus(element, message, state = '') {
   element.textContent = message;
   element.classList.toggle('is-error', state === 'error');
   element.classList.toggle('is-success', state === 'success');
+}
+
+async function getLoginDevicePayload() {
+  if (!window.Capacitor?.isNativePlatform?.()) return {};
+  if (!window.TaskFlowAppDevice?.getIdentity) throw new Error('Update the TaskFlow app before signing in.');
+  return window.TaskFlowAppDevice.getIdentity();
 }
 
 (async function init() {
@@ -759,7 +841,8 @@ if (loginForm) {
         body: {
           email: $('#email-login-address').value.trim(),
           code: $('#email-login-code').value.trim(),
-          company_code: saveCompanyCode()
+          company_code: saveCompanyCode(),
+          ...await getLoginDevicePayload()
         }
       });
       if (ME.must_change_password) showSelfPasswordModal(true);
@@ -784,6 +867,9 @@ if (loginForm) {
     google_suspended: 'This company workspace is suspended. Contact support.',
     google_billing_required: 'This workspace is locked. Contact your administrator.',
     google_account_unavailable: 'No active TaskFlow account is linked to that verified Google email. Ask your administrator to add and verify your email first.',
+    web_login_not_allowed: 'Web access is disabled for this account. Ask your company admin to enable it.',
+    app_device_mismatch: 'This account is registered to another mobile device. Ask your company admin to reset the registered app device.',
+    app_device_id_required: 'TaskFlow could not identify this app installation. Update the app and try again.',
     google_failed: 'Google sign-in could not be completed. Try again.'
   };
   if (authReason && authMessages[authReason]) {
@@ -808,7 +894,8 @@ if (loginForm) {
         body: {
           username: userField.value.trim(),
           password: passField.value,
-          company_code: companyField?.value.trim() || ''
+          company_code: companyField?.value.trim() || '',
+          ...await getLoginDevicePayload()
         },
       });
       ME = Array.isArray(rawLogin) ? rawLogin[0] : rawLogin;
@@ -819,12 +906,18 @@ if (loginForm) {
     }
   });
 
-  $('#google-login-button')?.addEventListener('click', () => {
+  $('#google-login-button')?.addEventListener('click', async () => {
     const companyCode = companyField?.value.trim() || '';
     if (companyCode) localStorage.setItem('taskflow.companyCode', companyCode);
     else localStorage.removeItem('taskflow.companyCode');
     const query = companyCode ? `?company_code=${encodeURIComponent(companyCode)}` : '';
-    location.assign(`/api/auth/google/start${query}`);
+    try {
+      await api('/auth/google/device-context', { method: 'POST', body: await getLoginDevicePayload() });
+      location.assign(`/api/auth/google/start${query}`);
+    } catch (error) {
+      const errorEl = $('#login-error');
+      if (errorEl) errorEl.textContent = error.message;
+    }
   });
 
 }
@@ -837,6 +930,7 @@ if (btnLogout) {
     stopLiveTracking();
     stopNotificationsPolling();
     stopTaskListPolling();
+    await unregisterPushToken();
     await api('/auth/logout', { method: 'POST' });
     location.reload();
   });
@@ -875,6 +969,7 @@ if (dashboardLogoutButton) {
     stopLiveTracking();
     stopNotificationsPolling();
     stopTaskListPolling();
+    await unregisterPushToken();
     await api('/auth/logout', { method: 'POST' });
     location.reload();
   });
@@ -3359,8 +3454,9 @@ async function renderPunchCard() {
           const verificationMethod = await verifyAttendanceIfRequired('out');
           const coords = await getLiveCoords();
           const devicePayload = await getPunchDevicePayload();
+          const activityPayload = await getTravelActivity();
           setAttendancePunchProgress('Connecting to TaskFlow...');
-          await api('/attendance/punch-out', { method: 'POST', body: { ...coords, ...devicePayload, verification_method: verificationMethod } });
+          await api('/attendance/punch-out', { method: 'POST', body: { ...coords, ...devicePayload, ...activityPayload, verification_method: verificationMethod } });
           stopLiveTracking();
           showAppNotification('Punched out successfully.');
           await renderPunchCard();
@@ -3381,8 +3477,9 @@ async function renderPunchCard() {
           const verificationMethod = await verifyAttendanceIfRequired('in');
           const coords = await getLiveCoords();
           const devicePayload = await getPunchDevicePayload();
+          const activityPayload = await getTravelActivity(true);
           setAttendancePunchProgress('Connecting to TaskFlow...');
-          await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload, verification_method: verificationMethod } });
+          await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload, ...activityPayload, verification_method: verificationMethod } });
           showAppNotification('Punched in successfully.');
           await renderPunchCard();
           if (verificationMethod) setAttendanceBiometricFeedback('success', 'Punch in recorded.');
@@ -3503,6 +3600,7 @@ async function loadTrackingTimeline(userId, selectedButton, selectedDate = today
     const latest = routePoints[routePoints.length - 1] || timeline[timeline.length - 1];
     const totalDistanceKm = Number(trackingData.total_distance_meters || 0) / 1000;
     const distanceLabel = totalDistanceKm >= 1 ? `${totalDistanceKm.toFixed(2)} km` : `${Number(trackingData.total_distance_meters || 0).toFixed(0)} m`;
+    const travelModeLabels = { in_vehicle: 'In vehicle', on_bicycle: 'Bicycle', walking: 'Walking', running: 'Running', on_foot: 'On foot', still: 'Still', tilting: 'Moving', unknown: 'Unknown' };
     const routeWaypoints = routePoints.length > 2
       ? routePoints.slice(1, -1).filter((_, index, middle) => index % Math.max(1, Math.ceil(middle.length / 8)) === 0).slice(0, 8)
       : [];
@@ -3533,7 +3631,7 @@ async function loadTrackingTimeline(userId, selectedButton, selectedDate = today
       <div class="tracking-event-timeline">${eventTimeline}</div>
       ${routeUrl ? `<div class="tracking-route-link"><a class="btn btn-secondary btn-sm tracking-map-link" href="${routeUrl}" target="_blank" rel="noopener">View travel route in Google Maps</a><span class="hint">${routePoints.length} GPS points · estimated ${distanceLabel}</span></div>` : ''}
       ${latest ? `<iframe class="tracking-map" title="Latest employee location" src="${mapEmbedUrl}" loading="lazy" referrerpolicy="no-referrer"></iframe>` : '<div class="tracking-map tracking-map-empty">No location points recorded yet.</div>'}
-      <div class="tracking-timeline">${timeline.length ? timeline.map((point, index) => `<a class="tracking-point tracking-map-link" href="https://www.google.com/maps?q=${point.latitude},${point.longitude}" target="_blank" rel="noopener"><b>${index + 1}. ${escapeHtml(fmtDateTime(point.recorded_at))}${Number(point.place_changed) ? ' · Place changed' : ''}</b><span>+${Number(point.distance_meters || 0).toFixed(0)} m · ${Number(point.latitude).toFixed(6)}, ${Number(point.longitude).toFixed(6)}</span></a>`).join('') : `<div class="hint">No location records for ${escapeHtml(selectedDate)}. If the employee punched in, confirm their GPS punch-in was saved.</div>`}</div>`;
+      <div class="tracking-timeline">${timeline.length ? timeline.map((point, index) => `<a class="tracking-point tracking-map-link" href="https://www.google.com/maps?q=${point.latitude},${point.longitude}" target="_blank" rel="noopener"><b>${index + 1}. ${escapeHtml(fmtDateTime(point.recorded_at))}${Number(point.place_changed) ? ' · Place changed' : ''}</b><span>+${Number(point.distance_meters || 0).toFixed(0)} m · ${Number(point.latitude).toFixed(6)}, ${Number(point.longitude).toFixed(6)}</span><small>Travel: ${escapeHtml(travelModeLabels[point.activity_type] || 'Unknown')} · ${Number(point.activity_confidence || 0)}% confidence</small></a>`).join('') : `<div class="hint">No location records for ${escapeHtml(selectedDate)}. If the employee punched in, confirm their GPS punch-in was saved.</div>`}</div>`;
     detail.querySelectorAll('.tracking-map-link').forEach(link => link.addEventListener('click', openTrackingMapLink));
   } catch (error) {
     detail.innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
@@ -3858,6 +3956,7 @@ async function renderAdmin() {
               <th style="padding:10px;">Department</th>
               <th style="padding:10px;">Role</th>
               <th style="padding:10px;">Status</th>
+              <th style="padding:10px;">Login access</th>
               <th style="padding:10px;">Biometric</th>
               <th style="padding:10px;">Actions</th>
             </tr>
@@ -4391,11 +4490,41 @@ async function renderAdmin() {
           <td style="padding:10px;">${escapeHtml(u.department || u.DEPARTMENT || 'No department')}</td>
           <td style="padding:10px;">${escapeHtml(u.role || u.ROLE)}</td>
           <td style="padding:10px;"><span class="badge" style="background:${Number(u.active ?? u.ACTIVE) === 1 ? '#c8e6c9' : '#eeeeee'}; color:${Number(u.active ?? u.ACTIVE) === 1 ? '#25602a' : '#555'}; padding:4px 8px; border-radius:4px; font-size:12px;">${Number(u.active ?? u.ACTIVE) === 1 ? 'Active' : 'Disabled'}</span></td>
+          <td style="padding:10px;"><label><input type="checkbox" data-web-login-user="${u.id}" ${Number(u.web_access_enabled) === 1 ? 'checked' : ''}> Allow browser login</label><br><small>App device: ${escapeHtml(u.app_device_model || 'Not registered')}</small>${u.app_device_model ? `<br><button class="btn btn-danger btn-sm admin-reset-app-device" type="button" data-user-id="${u.id}">Reset app device</button>` : ''}</td>
           <td style="padding:10px;"><label class="admin-biometric-toggle"><input type="checkbox" data-verification-user="${u.id}" ${verificationByUser.get(Number(u.id)) ? 'checked' : ''}><span>${verificationByUser.get(Number(u.id)) ? 'Required' : 'Off'}</span></label></td>
           <td style="padding:10px;">${actionsHtml}</td>
         `;
         tbody.appendChild(tr);
         tr.querySelector('.admin-edit-user').onclick = () => adminEditUser(u, departments);
+        tr.querySelector('[data-web-login-user]').onchange = async event => {
+          const checkbox = event.currentTarget;
+          const enabled = checkbox.checked;
+          checkbox.disabled = true;
+          try {
+            await api(`/auth/users/${Number(u.id)}/web-access`, { method: 'PUT', body: { enabled } });
+            u.web_access_enabled = enabled ? 1 : 0;
+            showAppNotification(`Browser login ${enabled ? 'allowed' : 'blocked'} for ${u.name}.`);
+          } catch (error) {
+            checkbox.checked = !enabled;
+            showAppNotification(error.message);
+          } finally {
+            checkbox.disabled = false;
+          }
+        };
+        tr.querySelector('.admin-reset-app-device')?.addEventListener('click', async event => {
+          const button = event.currentTarget;
+          const confirmed = await confirmModal('Reset registered app device?', `Clear ${u.app_device_model}'s app registration? The user can register a different Android device on their next app sign-in.`, 'Reset device', true);
+          if (!confirmed) return;
+          button.disabled = true;
+          try {
+            await api(`/auth/users/${Number(u.id)}/app-device`, { method: 'DELETE' });
+            showAppNotification('Registered app device reset. The user can now sign in on another phone.');
+            await renderAdmin();
+          } catch (error) {
+            button.disabled = false;
+            showAppNotification(error.message);
+          }
+        });
         tr.querySelector('.admin-send-email-verification')?.addEventListener('click', async event => {
           const button = event.currentTarget;
           button.disabled = true;
@@ -4827,6 +4956,7 @@ function showSelfPasswordModal(forced = false) {
   $('#self-password-cancel').onclick = async () => {
     if (!forced) return closeModal();
     try {
+      await unregisterPushToken();
       await api('/auth/logout', { method: 'POST' });
       ME = null;
       location.reload();

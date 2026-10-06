@@ -1,4 +1,5 @@
 const db = require('./db');
+const { sendPushToUsers } = require('./lib/firebase-push');
 
 async function logActivity(req, action, entityType, entityId, details = '', subjectUserId = null) {
   const result = await db.prepare(`INSERT INTO activity_log (actor_id, subject_user_id, action, entity_type, entity_id, details)
@@ -10,7 +11,11 @@ async function logActivity(req, action, entityType, entityId, details = '', subj
     entityId == null ? null : Number(entityId),
     details
   );
-  return result.lastInsertRowid;
+  const activityId = result.lastInsertRowid;
+  if (subjectUserId != null && Number(subjectUserId) !== Number(req.session.userId)) {
+    await notifyActivityRecipients(activityId, [subjectUserId]);
+  }
+  return activityId;
 }
 
 async function notifyActivityRecipients(activityId, userIds) {
@@ -22,6 +27,23 @@ async function notifyActivityRecipients(activityId, userIds) {
     sql: 'INSERT OR IGNORE INTO activity_notification_recipients (activity_id, user_id) VALUES (?, ?)',
     args: [id, userId]
   })));
+  try {
+    const activity = await db.prepare('SELECT action FROM activity_log WHERE id=?').get(id);
+    await sendPushToUsers(db, recipients, { activityId: id, action: activity?.action });
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'activity_push_send_failed' }));
+  }
 }
 
-module.exports = { logActivity, notifyActivityRecipients };
+async function notifyAdmins(req, activityId) {
+  try {
+    const admins = await db.prepare("SELECT id FROM users WHERE role='admin' AND active=1").all();
+    await notifyActivityRecipients(activityId, (admins || [])
+      .map(admin => Number(admin.id))
+      .filter(userId => userId !== Number(req.session.userId)));
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'admin_activity_push_failed' }));
+  }
+}
+
+module.exports = { logActivity, notifyActivityRecipients, notifyAdmins };
