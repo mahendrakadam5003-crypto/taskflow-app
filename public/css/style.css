@@ -323,7 +323,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 
 /* ---------- Task drawer ---------- */
 .drawer {
-  position: fixed; top: 0; right: 0; height: 100vh; width: min(50vw, 760px); max-width: 92vw;
+  position: fixed; top: 0; right: 0; height: 100vh; width: min(42vw, 640px); min-width: min(420px, 92vw); max-width: 92vw;
   background: var(--surface); border-left: 1px solid var(--line); box-shadow: -14px 0 40px rgba(20,33,61,.16);
   display: flex; flex-direction: column; z-index: 40; transform: translateX(100%); transition: transform .2s ease, visibility .2s ease;
 }
@@ -580,7 +580,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   .main { padding: 60px 14px 20px; flex: 1; overflow-y: auto; }
   .app.focused-view .mobile-topbar { padding: 0 12px; height: 52px; }
   .app.project-shell .mobile-menu-btn { display: inline-flex; }
-  .drawer { width: 100%; max-width: 100%; }
+  .drawer { width: 100%; min-width: 0; max-width: 100%; }
   .app.focused-view .drawer, .app.project-shell .drawer { top: 52px; height: calc(100vh - 52px); }
   .tracking-layout { grid-template-columns:1fr; min-height:0; }.tracking-people { max-height:260px; overflow:auto; }.tracking-detail { min-height:500px; }
   .tracking-detail-header { flex-direction:column; gap:8px; }.tracking-event { grid-template-columns:64px 24px minmax(0,1fr); gap:8px; }.tracking-event-marker { width:22px; height:22px; }.tracking-event-marker::after { top:20px; left:8px; }

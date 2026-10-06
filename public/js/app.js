@@ -2254,6 +2254,8 @@ function showTaskDrawerLoading() {
 async function openTaskDrawer(taskId) {
   const drawer = $('#task-drawer');
   if (!drawer) return;
+  const drawerBody = drawer.querySelector('.drawer-body');
+  if (drawerBody) drawerBody.scrollTop = 0;
   $$('.task-row.is-selected').forEach(row => row.classList.remove('is-selected'));
   document.querySelector(`.task-row[data-task-id="${CSS.escape(String(taskId))}"]`)?.classList.add('is-selected');
   activeTaskDrawerController?.abort();
@@ -2638,6 +2640,8 @@ async function openTaskDrawer(taskId) {
       if (!canEditTask && Number(task.can_change_work_mode) !== 1) return;
       try {
         await saveChanges();
+        closeDrawer();
+        showAppNotification('Task saved successfully.');
       } catch (err) {
         showTaskSaveError(err, 'Task save failed');
       }
