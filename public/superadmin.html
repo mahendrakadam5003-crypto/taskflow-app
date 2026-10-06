@@ -59,7 +59,13 @@
       </nav>
 
       <section id="control-overview-page" class="control-page" role="tabpanel" aria-labelledby="admin-tab-overview" tabindex="0">
-        <div id="summary-cards" class="summary-grid"></div>
+        <div id="summary-loading" class="data-skeleton summary-skeleton" role="status" aria-label="Loading overview summary">
+          <span class="skeleton-block skeleton-label"></span><span class="skeleton-block skeleton-value"></span><span class="skeleton-block skeleton-copy"></span>
+          <span class="skeleton-block skeleton-label"></span><span class="skeleton-block skeleton-value"></span><span class="skeleton-block skeleton-copy"></span>
+          <span class="skeleton-block skeleton-label"></span><span class="skeleton-block skeleton-value"></span><span class="skeleton-block skeleton-copy"></span>
+          <span class="skeleton-block skeleton-label"></span><span class="skeleton-block skeleton-value"></span><span class="skeleton-block skeleton-copy"></span>
+        </div>
+        <div id="summary-cards" class="summary-grid hidden" aria-busy="true"></div>
       </section>
 
       <section id="companies-page" class="control-page hidden" role="tabpanel" aria-labelledby="admin-tab-companies" tabindex="0">
@@ -98,7 +104,7 @@
         </form>
         <div id="created-company-details" class="created-details hidden" role="status" aria-live="polite"></div>
       </section>
-      <section class="companies-panel">
+      <section id="registered-company-panel" class="companies-panel" aria-busy="true">
         <div class="section-heading">
           <div>
             <p class="eyebrow">TENANTS</p>
@@ -121,6 +127,9 @@
         <div id="company-quick-filters" class="company-quick-filters" role="group" aria-label="Quick company filters">
           <button type="button" class="filter-chip active" data-company-quick-filter="all" aria-pressed="true">All companies</button>
           <button type="button" class="filter-chip" data-company-quick-filter="attention" aria-pressed="false">Needs attention</button>
+        </div>
+        <div id="company-loading" class="data-skeleton table-skeleton" role="status" aria-label="Loading company workspaces">
+          <span class="skeleton-block skeleton-row"></span><span class="skeleton-block skeleton-row"></span><span class="skeleton-block skeleton-row"></span>
         </div>
         <div id="empty-state" class="empty-state hidden">
           <div class="empty-icon" aria-hidden="true">⌂</div>
@@ -156,6 +165,9 @@
             <button id="demo-request-refresh" type="button" class="button button-quiet">Refresh</button>
           </div>
           <p id="demo-request-load-error" class="message error hidden" role="alert"></p>
+          <div id="demo-request-loading" class="data-skeleton list-skeleton hidden" role="status" aria-label="Loading demo and trial requests">
+            <span class="skeleton-block skeleton-row"></span><span class="skeleton-block skeleton-row"></span><span class="skeleton-block skeleton-row"></span>
+          </div>
           <div id="demo-request-list" class="record-list" aria-live="polite"></div>
         </section>
       </section>
@@ -186,13 +198,23 @@
             <p id="plan-form-error" class="message error hidden" role="alert"></p>
             <div class="form-actions"><button class="button button-primary" type="submit">Save plan</button><button id="plan-cancel" class="button button-quiet hidden" type="button">Cancel edit</button></div>
           </form>
-          <div id="plan-rows" class="plan-list" aria-live="polite"></div>
+          <div id="plan-catalog-state" class="plan-list" aria-busy="true">
+            <div id="plan-loading" class="data-skeleton list-skeleton" role="status" aria-label="Loading entitlement plans">
+              <span class="skeleton-block skeleton-row"></span><span class="skeleton-block skeleton-row"></span><span class="skeleton-block skeleton-row"></span>
+            </div>
+            <p id="plan-load-error" class="message error hidden" role="alert"></p>
+            <div id="plan-rows" class="plan-list hidden" aria-live="polite"></div>
+          </div>
         </div>
         <section class="detail-panel detail-wide pricing-editor" aria-labelledby="pricing-editor-heading">
           <div class="section-heading"><div><p class="eyebrow">VERSIONED SETTINGS</p><h3 id="pricing-editor-heading">Pricing = what a company pays</h3></div></div>
           <p class="muted">Per-seat rates, billing cycle, tax, and trial settings determine what a company is charged.</p>
           <p class="footnote">Price changes create a new immutable version. Existing subscriptions retain their locked price unless you choose next-renewal pricing.</p>
-          <form id="pricing-form" class="pricing-form">
+          <div id="pricing-loading" class="data-skeleton pricing-skeleton" role="status" aria-label="Loading versioned pricing settings">
+            <span class="skeleton-block skeleton-row"></span><span class="skeleton-block skeleton-row"></span><span class="skeleton-block skeleton-row"></span>
+          </div>
+          <p id="pricing-load-error" class="message error hidden" role="alert"></p>
+          <form id="pricing-form" class="pricing-form hidden">
             <section class="tier-editor" aria-labelledby="pricing-tiers-heading">
               <div class="section-heading"><div><h4 id="pricing-tiers-heading">Volume pricing tiers</h4><p class="muted">The rate applies to every seat in the selected tier. Leave the final “To seats” blank for no upper limit.</p></div><button id="pricing-add-tier" class="button button-quiet" type="button">Add tier</button></div>
               <p class="footnote">Landing-page highlights are edited in these pricing tiers and must match the feature checkboxes on the plan you assign: Attendance, Reimbursements, and Data export.</p>
@@ -262,6 +284,9 @@
             <h3>No invoices found</h3>
             <p>There are no invoices matching this status filter.</p>
           </div>
+          <div id="invoice-loading" class="data-skeleton table-skeleton hidden" role="status" aria-label="Loading cross-company invoices">
+            <span class="skeleton-block skeleton-row"></span><span class="skeleton-block skeleton-row"></span><span class="skeleton-block skeleton-row"></span>
+          </div>
           <div id="invoice-table-wrap" class="table-wrap hidden">
             <table>
               <thead><tr><th scope="col">Company</th><th scope="col">Invoice</th><th scope="col">Status</th><th scope="col">Amount</th><th scope="col">Due date</th><th scope="col">Issued</th><th scope="col"></th></tr></thead>
@@ -280,6 +305,9 @@
             <button id="billing-requests-refresh" type="button" class="button button-quiet">Refresh</button>
           </div>
           <p id="billing-requests-error" class="message error hidden" role="alert"></p>
+          <div id="billing-requests-loading" class="data-skeleton list-skeleton hidden" role="status" aria-label="Loading pending billing requests">
+            <span class="skeleton-block skeleton-row"></span><span class="skeleton-block skeleton-row"></span>
+          </div>
           <div id="cross-company-billing-requests" class="record-list billing-request-list" aria-live="polite"></div>
         </section>
       </section>
@@ -291,6 +319,9 @@
             <button id="user-error-refresh" type="button" class="button button-quiet" aria-label="Refresh user errors">Refresh</button>
           </div>
           <p id="user-error-load-error" class="message error hidden" role="alert"></p>
+          <div id="user-error-loading" class="data-skeleton list-skeleton hidden" role="status" aria-label="Loading user error reports">
+            <span class="skeleton-block skeleton-row"></span><span class="skeleton-block skeleton-row"></span><span class="skeleton-block skeleton-row"></span>
+          </div>
           <div id="user-error-list" class="record-list user-error-list" aria-live="polite"></div>
         </section>
       </section>

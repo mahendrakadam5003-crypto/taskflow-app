@@ -20,6 +20,7 @@ let companySort = { key: 'name', direction: 1 };
 let invoicePage = 1;
 let invoicePageCount = 1;
 let invoiceStatusFilter = 'all';
+let pricingLoadPromise = null;
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -50,6 +51,13 @@ async function request(path, options) {
     throw error;
   }
   return result;
+}
+
+function setDataLoading(skeletonId, contentIds, loading, busyTargetId = null) {
+  document.getElementById(skeletonId).classList.toggle('hidden', !loading);
+  for (const id of contentIds) document.getElementById(id).classList.toggle('hidden', loading);
+  const busyTarget = document.getElementById(busyTargetId || contentIds[0]);
+  busyTarget.setAttribute('aria-busy', String(loading));
 }
 
 function showLogin(message = '') {
@@ -107,6 +115,7 @@ function renderSummary(summary) {
       <div class="summary-value">${escapeHtml(card.value)}</div>
       <div class="summary-caption">${escapeHtml(card.caption)}</div>
     </article>`).join('');
+  setDataLoading('summary-loading', ['summary-cards'], false);
 }
 
 function renderUserErrors(result) {
@@ -133,11 +142,14 @@ function renderUserErrors(result) {
 async function loadUserErrors(status = 'open') {
   const errorTarget = document.getElementById('user-error-load-error');
   errorTarget.classList.add('hidden');
+  setDataLoading('user-error-loading', ['user-error-list'], true, 'user-error-inbox');
   try {
     renderUserErrors(await request(`user-errors?status=${status}`));
   } catch (error) {
-    errorTarget.textContent = error.message;
+    errorTarget.textContent = `Could not load user error reports. Refresh and try again. ${error.message}`;
     errorTarget.classList.remove('hidden');
+  } finally {
+    setDataLoading('user-error-loading', ['user-error-list'], false, 'user-error-inbox');
   }
 }
 
@@ -151,6 +163,8 @@ function renderCompanies(companies, plans) {
   ).join('');
   if (plans.some(plan => String(plan.id) === currentPlanId)) planSelect.value = currentPlanId;
   getFilteredCompanies();
+  document.getElementById('company-loading').classList.add('hidden');
+  document.getElementById('registered-company-panel').setAttribute('aria-busy', 'false');
 }
 
 function formatDate(value) {
@@ -236,6 +250,10 @@ function renderCrossCompanyBillingRequests(requests) {
 async function loadCrossCompanyInvoices() {
   const errorTarget = document.getElementById('billing-error');
   errorTarget.classList.add('hidden');
+  document.getElementById('invoice-loading').classList.remove('hidden');
+  document.getElementById('invoice-table-wrap').classList.add('hidden');
+  document.getElementById('invoice-empty').classList.add('hidden');
+  document.getElementById('billing-page').setAttribute('aria-busy', 'true');
   try {
     const query = new URLSearchParams({
       page: String(invoicePage),
@@ -251,12 +269,16 @@ async function loadCrossCompanyInvoices() {
   } catch (error) {
     errorTarget.textContent = `Could not load cross-company invoices. Refresh and try again. ${error.message}`;
     errorTarget.classList.remove('hidden');
+  } finally {
+    document.getElementById('invoice-loading').classList.add('hidden');
+    document.getElementById('billing-page').setAttribute('aria-busy', 'false');
   }
 }
 
 async function loadCrossCompanyBillingRequests() {
   const errorTarget = document.getElementById('billing-requests-error');
   errorTarget.classList.add('hidden');
+  setDataLoading('billing-requests-loading', ['cross-company-billing-requests'], true, 'pending-billing-heading');
   try {
     const result = await request('billing-requests');
     if (!Array.isArray(result.requests)) throw new Error('The pending billing request response was invalid.');
@@ -264,6 +286,8 @@ async function loadCrossCompanyBillingRequests() {
   } catch (error) {
     errorTarget.textContent = `Could not load pending billing requests. Refresh and try again. ${error.message}`;
     errorTarget.classList.remove('hidden');
+  } finally {
+    setDataLoading('billing-requests-loading', ['cross-company-billing-requests'], false, 'pending-billing-heading');
   }
 }
 
@@ -428,9 +452,20 @@ function renderPlanRows() {
 const PLAN_FEATURE_NAMES = ['attendance', 'reimbursements', 'export'];
 
 async function loadPlans() {
-  const result = await request('plans');
-  planRecords = result.plans;
-  renderPlanRows();
+  const errorTarget = document.getElementById('plan-load-error');
+  errorTarget.classList.add('hidden');
+  setDataLoading('plan-loading', ['plan-rows'], true, 'plan-catalog-state');
+  try {
+    const result = await request('plans');
+    planRecords = result.plans;
+    renderPlanRows();
+  } catch (error) {
+    errorTarget.textContent = `Could not load plans. Reopen Plans & Pricing or refresh the page to try again. ${error.message}`;
+    errorTarget.classList.remove('hidden');
+    throw error;
+  } finally {
+    setDataLoading('plan-loading', ['plan-rows'], false, 'plan-catalog-state');
+  }
 }
 
 function formatPaise(value, currency) {
@@ -691,14 +726,36 @@ async function previewPricing() {
 }
 
 async function loadPricing() {
-  const result = await request('pricing');
-  livePricing = result.pricing;
-  populatePricingForm(result.pricing);
-  renderPricingPreview({
-    preview: result.preview,
-    warnings: result.warnings,
-    affectedExistingSubscriptions: result.affectedExistingSubscriptions
-  });
+  if (pricingLoadPromise) return pricingLoadPromise;
+  const errorTarget = document.getElementById('pricing-load-error');
+  errorTarget.classList.add('hidden');
+  setDataLoading('pricing-loading', ['pricing-form'], true, 'pricing-editor-heading');
+  pricingLoadPromise = (async () => {
+    let loaded = false;
+    try {
+      const result = await request('pricing');
+      livePricing = result.pricing;
+      populatePricingForm(result.pricing);
+      renderPricingPreview({
+        preview: result.preview,
+        warnings: result.warnings,
+        affectedExistingSubscriptions: result.affectedExistingSubscriptions
+      });
+      loaded = true;
+    } catch (error) {
+      errorTarget.textContent = `Could not load pricing settings. Reopen Plans & Pricing or refresh the page to try again. ${error.message}`;
+      errorTarget.classList.remove('hidden');
+      throw error;
+    } finally {
+      setDataLoading('pricing-loading', ['pricing-form'], false, 'pricing-editor-heading');
+      if (!loaded) document.getElementById('pricing-form').classList.add('hidden');
+    }
+  })();
+  try {
+    return await pricingLoadPromise;
+  } finally {
+    pricingLoadPromise = null;
+  }
 }
 
 function resetPlanForm() {
@@ -924,6 +981,7 @@ function renderDemoRequests() {
 async function loadDemoRequests() {
   const errorTarget = document.getElementById('demo-request-load-error');
   errorTarget.classList.add('hidden');
+  setDataLoading('demo-request-loading', ['demo-request-list'], true, 'demo-request-inbox');
   const pricingLoad = livePricing
     ? Promise.resolve(null)
     : loadPricing().then(() => null).catch(error => error);
@@ -937,8 +995,10 @@ async function loadDemoRequests() {
     }
   } catch (error) {
     await pricingLoad;
-    errorTarget.textContent = error.message;
+    errorTarget.textContent = `Could not load demo and trial requests. Refresh and try again. ${error.message}`;
     errorTarget.classList.remove('hidden');
+  } finally {
+    setDataLoading('demo-request-loading', ['demo-request-list'], false, 'demo-request-inbox');
   }
 }
 
@@ -966,6 +1026,13 @@ function prefillDemoRequest(item) {
 }
 
 async function loadOverview() {
+  const firstLoad = overviewData === null;
+  if (firstLoad) {
+    document.getElementById('summary-loading').classList.remove('hidden');
+    document.getElementById('summary-cards').classList.add('hidden');
+    document.getElementById('company-loading').classList.remove('hidden');
+    document.getElementById('registered-company-panel').setAttribute('aria-busy', 'true');
+  }
   try {
     const data = await request('overview');
     overviewData = data;
@@ -985,6 +1052,11 @@ async function loadOverview() {
     loadDemoRequests();
   } catch (error) {
     if (error.status === 401) return showLogin();
+    if (firstLoad) {
+      document.getElementById('summary-loading').classList.add('hidden');
+      document.getElementById('company-loading').classList.add('hidden');
+      document.getElementById('registered-company-panel').setAttribute('aria-busy', 'false');
+    }
     overviewError.textContent = error.message;
     overviewError.classList.remove('hidden');
     showOverview();

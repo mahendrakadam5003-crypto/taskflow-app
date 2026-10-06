@@ -67,6 +67,17 @@ footer span { padding: 0 6px; color: var(--accent); }
 .read-only-pill, .total-pill { display: inline-flex; align-items: center; gap: 9px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 100px; color: #b5c2d2; font-size: 11px; white-space: nowrap; }
 .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; margin-bottom: 20px; }
 .summary-card { min-height: 122px; padding: 20px; border: 1px solid var(--line); border-radius: 13px; background: rgba(23, 36, 56, .76); }
+.data-skeleton { display: grid; gap: 12px; }
+.summary-skeleton { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 20px; padding: 20px; border: 1px solid var(--line); border-radius: 13px; background: rgba(23, 36, 56, .5); }
+.skeleton-block { display: block; min-height: 14px; border-radius: 6px; background: linear-gradient(100deg, rgba(159, 178, 204, .08) 20%, rgba(159, 178, 204, .19) 38%, rgba(159, 178, 204, .08) 58%); background-size: 220% 100%; animation: skeleton-shimmer 1.35s ease-in-out infinite; }
+.skeleton-label { height: 12px; }
+.skeleton-value { height: 29px; width: 72%; }
+.skeleton-copy { height: 10px; width: 88%; }
+.table-skeleton { padding: 12px 18px 18px; }
+.list-skeleton { padding: 18px 22px; }
+.pricing-skeleton { padding: 18px 0; }
+.skeleton-row { height: 44px; }
+@keyframes skeleton-shimmer { to { background-position: -220% 0; } }
 .summary-label { color: #92a1b4; font-size: 11px; }
 .summary-value { margin: 15px 0 0; font-size: 29px; font-weight: 650; letter-spacing: -.04em; }
 .summary-caption { margin-top: 4px; color: #75869c; font-size: 10px; }
@@ -206,6 +217,7 @@ td { padding: 16px 18px; border-top: 1px solid var(--line); color: #d7e0eb; font
   .login-card { padding: 27px 23px; }
   #overview-view { padding-top: 40px; }
   .summary-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .summary-skeleton { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .summary-card { min-height: 105px; padding: 15px; }
   .summary-value { font-size: 25px; }
   .page-heading { align-items: flex-start; }
@@ -299,4 +311,8 @@ td { padding: 16px 18px; border-top: 1px solid var(--line); color: #d7e0eb; font
   .landing-pricing-preview { padding: 12px; }
   .pricing-preview { padding-right: 10px; padding-left: 10px; }
   .pricing-preview .section-heading { margin-right: -10px; margin-left: -10px; padding: 16px 10px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-block { animation: none; background: rgba(159, 178, 204, .12); }
 }

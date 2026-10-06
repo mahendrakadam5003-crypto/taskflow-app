@@ -107,6 +107,24 @@ test('super-admin billing tab exposes cross-company invoices and pending billing
   assert.match(script, /companies\/\$\{encodeURIComponent\(companyId\)\}\/billing-requests\/\$\{encodeURIComponent\(requestId\)\}\/\$\{action\}/);
 });
 
+test('super-admin data panels show accessible loading skeletons and honor reduced motion', async () => {
+  const page = await fs.readFile(path.join(__dirname, '..', 'public', 'superadmin.html'), 'utf8');
+  for (const id of [
+    'summary-loading', 'company-loading', 'demo-request-loading', 'plan-loading',
+    'pricing-loading', 'invoice-loading', 'billing-requests-loading', 'user-error-loading'
+  ]) {
+    assert.match(page, new RegExp(`id="${id}"[^>]*role="status"[^>]*aria-label="Loading`));
+  }
+  const script = await fs.readFile(path.join(__dirname, '..', 'public', 'js', 'superadmin.js'), 'utf8');
+  assert.match(script, /function setDataLoading\(skeletonId, contentIds, loading, busyTargetId = null\)/);
+  assert.match(script, /setDataLoading\('demo-request-loading', \['demo-request-list'\], true/);
+  assert.match(script, /setDataLoading\('plan-loading', \['plan-rows'\], true/);
+  assert.match(script, /setDataLoading\('billing-requests-loading', \['cross-company-billing-requests'\], true/);
+  const styles = await fs.readFile(path.join(__dirname, '..', 'public', 'css', 'superadmin.css'), 'utf8');
+  assert.match(styles, /@keyframes skeleton-shimmer/);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.skeleton-block \{ animation: none/);
+});
+
 test('super-admin overview displays the requested company, revenue, invoice, and demo KPIs', async () => {
   const script = await fs.readFile(path.join(__dirname, '..', 'public', 'js', 'superadmin.js'), 'utf8');
   assert.match(script, /label: 'Active companies'/);
