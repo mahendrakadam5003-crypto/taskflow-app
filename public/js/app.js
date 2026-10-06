@@ -3417,7 +3417,7 @@ function addAdminListPagination(container, searchLabel) {
     pageIndex = Math.min(pageIndex, pageCount - 1);
     const start = pageIndex * pageSize;
     const visibleRows = new Set(filtered.slice(start, start + pageSize));
-    rows.forEach(row => { row.hidden = !visibleRows.has(row); });
+    rows.forEach(row => { row.style.display = visibleRows.has(row) ? '' : 'none'; });
     count.textContent = filtered.length
       ? `Showing ${start + 1}-${Math.min(start + visibleRows.size, filtered.length)} of ${filtered.length} users`
       : 'No matching users';
