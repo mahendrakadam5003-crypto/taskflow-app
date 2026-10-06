@@ -2537,6 +2537,38 @@ async function openTaskDrawer(taskId) {
       status: $('#drawer-status').value,
       work_mode: $('#drawer-work-mode').value
     });
+    const syncTaskListRow = (draft, status = task.status) => {
+      const row = document.querySelector(`.task-row[data-task-id="${CSS.escape(String(taskId))}"]`);
+      if (!row) return;
+      const statusFilter = $('#task-filter-status')?.value || 'open';
+      const assigneeFilter = $('#task-filter-assignee')?.value || 'all';
+      row.hidden = (statusFilter === 'open' && status === 'done')
+        || (statusFilter === 'done' && status !== 'done')
+        || (assigneeFilter !== 'all' && String(draft.assignee_id || '') !== assigneeFilter);
+      if (row.hidden) return;
+      row.classList.toggle('done', status === 'done');
+      const statusButton = row.querySelector('.row-complete');
+      if (statusButton) {
+        statusButton.classList.toggle('row-reopen', status === 'done');
+        statusButton.title = status === 'done' ? 'Reopen task' : 'Complete task';
+        statusButton.setAttribute('aria-label', status === 'done' ? 'Reopen task' : 'Complete task');
+      }
+      const title = row.querySelector('.task-title-cell b');
+      if (title) title.textContent = draft.title;
+      const assigneeCell = row.querySelector('.task-assignee-cell .assignee-cell');
+      if (assigneeCell) {
+        const assigneeName = draft.assignee_id
+          ? $('#drawer-assignee').selectedOptions[0]?.textContent || task.assignee_name || 'Unassigned'
+          : task.asana_assignee_name || 'Unassigned';
+        assigneeCell.innerHTML = `<span class="avatar" aria-hidden="true">${escapeHtml(getInitials(assigneeName))}</span>${escapeHtml(assigneeName)}`;
+      }
+      const dueChip = row.querySelector('.task-due-cell .chip');
+      if (dueChip) {
+        const due = getDueState(draft.due_date);
+        dueChip.className = `chip ${due.className}`;
+        dueChip.textContent = due.label;
+      }
+    };
     let savedTaskDraft = getTaskDraft();
     let savedTaskDraftKey = JSON.stringify(savedTaskDraft);
     const showTaskSaveError = (error, action) => {
@@ -2571,13 +2603,7 @@ async function openTaskDrawer(taskId) {
       savedTaskDraft = draft;
       savedTaskDraftKey = draftKey;
       if (saveState) { saveState.textContent = 'Saved'; saveState.className = 'drawer-save-state saved'; saveState.title = ''; }
-      try {
-        await renderTasks();
-        await openTaskDrawer(taskId);
-      } catch (refreshError) {
-        console.error('Task saved, but the task view could not refresh:', refreshError);
-        showAppNotification('Task saved, but the task view could not refresh.');
-      }
+      syncTaskListRow(draft);
     };
     let autosaveTimer = null;
     const queueAutosave = () => {
@@ -2642,7 +2668,7 @@ async function openTaskDrawer(taskId) {
       if (checkInButton) checkInButton.onclick = () => recordTaskLocation('check-in', 'Task check-in recorded.');
       if (checkOutButton) checkOutButton.onclick = () => recordTaskLocation('check-out', 'Task check-out recorded.');
     }
-    const isCompleted = task.status === 'done';
+    let isCompleted = task.status === 'done';
     $('#btn-complete-task').onclick = async () => {
       if (!isCompleted && !$('#drawer-no-billing-required').checked) {
         const billingError = $('#drawer-billing-error');
@@ -2661,9 +2687,15 @@ async function openTaskDrawer(taskId) {
       try {
         clearTimeout(autosaveTimer);
         if (!isCompleted) await saveChanges();
-        await api(`/tasks/${taskId}`, { method: 'PUT', body: { status: isCompleted ? 'open' : 'done' } });
-        await renderTasks();
-        await openTaskDrawer(taskId);
+        const nextStatus = isCompleted ? 'open' : 'done';
+        await api(`/tasks/${taskId}`, { method: 'PUT', body: { status: nextStatus } });
+        isCompleted = nextStatus === 'done';
+        task.status = nextStatus;
+        $('#drawer-status').value = nextStatus;
+        savedTaskDraft = getTaskDraft();
+        savedTaskDraftKey = JSON.stringify(savedTaskDraft);
+        $('#btn-complete-task').textContent = isCompleted ? '↻ Reopen task' : '✓ Complete task';
+        syncTaskListRow(savedTaskDraft, nextStatus);
         showAppNotification(isCompleted ? 'Task reopened successfully.' : 'Task completed successfully.');
       } catch (error) {
         if (!isCompleted && /billing details/i.test(error.message)) {
