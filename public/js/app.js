@@ -2448,14 +2448,14 @@ async function openTaskDrawer(taskId) {
         return `<div class="task-activity-group"><div class="activity-group-entry task-activity-change"><b>${actor}</b> ${message} <span class="activity-inline-time">· ${timestamp}</span>${difference}</div></div>`;
       }).join('');
       const emptyMessage = activityMode === 'comments' ? 'No comments yet.' : 'No activity yet.';
-      activityContainer.innerHTML = `${activityHasMore ? '<button type="button" id="task-activity-load-more" class="link-btn">Load more activity</button>' : ''}${activityHtml || `<div class="hint">${emptyMessage}</div>`}<div id="task-activity-error" class="form-error"></div>`;
+      activityContainer.innerHTML = `${activityHasMore ? '<button type="button" id="task-activity-load-more" class="link-btn">Load older activity</button>' : ''}${activityHtml || `<div class="hint">${emptyMessage}</div>`}<div id="task-activity-error" class="form-error"></div>`;
       bindActivityActions();
       const loadOlderButton = $('#task-activity-load-more');
       if (loadOlderButton) loadOlderButton.onclick = async () => {
         if (activityLoading) return;
         activityLoading = true;
         loadOlderButton.disabled = true;
-        loadOlderButton.textContent = 'Loading more activity...';
+        loadOlderButton.textContent = 'Loading older activity...';
         try {
           const page = await api(`/tasks/${taskId}/activity?limit=15&offset=${activityOffset}`, { signal: controller.signal });
           if (activeTaskDrawerController !== controller) return;
@@ -2467,7 +2467,7 @@ async function openTaskDrawer(taskId) {
           const errorNode = $('#task-activity-error');
           if (errorNode) errorNode.textContent = error.message;
           loadOlderButton.disabled = false;
-          loadOlderButton.textContent = 'Retry loading activity';
+          loadOlderButton.textContent = 'Retry loading older activity';
         } finally {
           activityLoading = false;
         }

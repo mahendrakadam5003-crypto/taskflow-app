@@ -1456,7 +1456,7 @@ router.get('/tasks/:id/activity', async (req, res) => {
         NULL AS user_name, u.name AS actor_name, h.field_name, h.old_value, h.new_value
       FROM task_history h LEFT JOIN users u ON u.id=h.actor_id WHERE h.task_id=?
     ) activity
-    ORDER BY created_at ASC, id ASC, activity_type ASC LIMIT ? OFFSET ?`)
+    ORDER BY created_at DESC, id DESC, activity_type DESC LIMIT ? OFFSET ?`)
       .all(req.params.id, req.params.id, limit + 1, offset);
     const hasMore = rows.length > limit;
     const page = rows.slice(0, limit);

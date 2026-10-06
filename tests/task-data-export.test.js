@@ -9,6 +9,7 @@ const auditPath = require.resolve('../audit');
 const storagePath = require.resolve('../telegram-storage');
 const originals = new Map([dbPath, authPath, auditPath, storagePath].map(modulePath => [modulePath, require.cache[modulePath]]));
 let projectQuery = '';
+let activityQuery = '';
 const importedTaskRows = [];
 const importedHistoryRows = [];
 const importedCommentRows = [];
@@ -29,6 +30,10 @@ const mockDb = {
         return null;
       },
       all: async () => {
+        if (sql.includes("SELECT 'comment' AS activity_type")) {
+          activityQuery = sql;
+          return [];
+        }
         if (sql.includes('FROM projects ORDER BY name, id')) return [{ id: 10, name: 'Export project', created_by: 1, asana_gid: null, created_at: '2026-01-01' }];
         if (sql.includes('FROM project_members')) return [];
         if (sql.includes('FROM tasks t LEFT JOIN users assignee')) return [{ id: 50, project_id: 10, title: '=1+1' }];
@@ -211,4 +216,10 @@ test('task details expose the imported Asana assignee name', async () => {
   assert.equal(response.status, 200);
   assert.equal(task.asana_assignee_name, 'Asana-only person');
   assert.equal(task.assignee_name, 'Asana-only person');
+});
+
+test('task activity pages newest first so later pages contain older entries', async () => {
+  const response = await fetch(`${baseUrl}/api/tasks/91/activity?limit=15&offset=15`, { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+  assert.match(activityQuery, /ORDER BY created_at DESC, id DESC, activity_type DESC/);
 });
