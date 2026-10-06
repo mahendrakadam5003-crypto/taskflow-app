@@ -40,6 +40,21 @@ h2 { margin-bottom: 0; font-size: 19px; }
 .billing-panel { margin-top: 16px; overflow: hidden; }
 .panel-heading { padding: 20px 22px; border-bottom: 1px solid var(--line); }
 .billing-panel > .muted, .manual-payment-note { margin: 17px 22px; }
+.price-summary { margin: 0 22px; }
+.current-pricing-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.current-pricing-grid > div { min-width: 0; display: flex; flex-direction: column; gap: 7px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.current-pricing-grid span { color: var(--muted); font-size: 12px; }
+.current-pricing-grid strong { font-size: 15px; overflow-wrap: anywhere; }
+.tier-table-wrap { margin-top: 12px; }
+.live-quote { margin: 4px 22px 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.live-quote h3 { margin: 0 0 12px; font-size: 15px; }
+.quote-lines { max-width: 480px; margin: 0; }
+.quote-lines > div { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.quote-lines dt { color: var(--muted); }
+.quote-lines dd { margin: 0; text-align: right; font-weight: 600; }
+.quote-lines .quote-total { font-size: 15px; font-weight: 750; }
+.tier-change-note { margin: 0 0 12px; color: var(--amber); font-size: 13px; font-weight: 650; }
+.quote-error { margin: 0 0 12px; color: #9a2222; font-size: 13px; }
 .manual-payment-note, .trial-notice { padding: 14px 16px; border-radius: 9px; background: var(--amber-bg); color: var(--amber); font-size: 13px; line-height: 1.6; }
 .trial-notice { margin-bottom: 16px; }
 .billing-change-form { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 18px 22px; }
@@ -58,6 +73,7 @@ td { font-size: 13px; }
 
 @media (max-width: 760px) {
   .billing-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .current-pricing-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 480px) {
   .billing-shell { width: min(100% - 24px, 1080px); }
@@ -65,8 +81,10 @@ td { font-size: 13px; }
   .billing-header > div { width: 100%; }
   .billing-header .button { flex: 1; }
   .billing-cards { grid-template-columns: 1fr; }
+  .current-pricing-grid { grid-template-columns: 1fr 1fr; gap: 0 12px; }
   .billing-card { min-height: auto; }
   .panel-heading { padding: 17px; }
+  .price-summary, .live-quote { margin-left: 17px; margin-right: 17px; }
 }
 @media print {
   body { background: #fff; }

@@ -132,9 +132,25 @@ test('public pricing is anonymous and pricing edits require super-admin password
     ['team', 'Team', 1, 10, 29900, 322920, 26910],
     ['enterprise', 'Enterprise', 11, null, 19900, 214920, 17910]
   ]);
-  assert.deepEqual(initialPublicPricing.quotes.monthly.map(quote => [quote.seats, quote.tier.name]), [
-    [1, 'Team'], [10, 'Team'], [11, 'Enterprise'], [50, 'Enterprise']
-  ]);
+  const expectedQuotes = [
+    [1, 'monthly', 'Team', 29900, 29900, 5382, 35282],
+    [5, 'monthly', 'Team', 29900, 149500, 26910, 176410],
+    [10, 'monthly', 'Team', 29900, 299000, 53820, 352820],
+    [11, 'monthly', 'Enterprise', 19900, 218900, 39402, 258302],
+    [25, 'monthly', 'Enterprise', 19900, 497500, 89550, 587050],
+    [100, 'monthly', 'Enterprise', 19900, 1990000, 358200, 2348200],
+    [5, 'yearly', 'Team', 322920, 1614600, 290628, 1905228],
+    [10, 'yearly', 'Team', 322920, 3229200, 581256, 3810456],
+    [11, 'yearly', 'Enterprise', 214920, 2364120, 425542, 2789662],
+    [25, 'yearly', 'Enterprise', 214920, 5373000, 967140, 6340140]
+  ];
+  for (const [seats, cycle, tier, unit, subtotal, tax, total] of expectedQuotes) {
+    const quote = initialPublicPricing.quotes[cycle].find(item => item.seats === seats);
+    assert.deepEqual([
+      quote.tier.name, quote.unitPricePaise, quote.subtotalPaise,
+      quote.taxPaise, quote.totalPaise
+    ], [tier, unit, subtotal, tax, total], `${seats} seats, ${cycle}`);
+  }
   const enterpriseQuote = initialPublicPricing.quotes.yearly.find(quote => quote.seats === 11);
   assert.deepEqual([
     enterpriseQuote.unitPricePaise, enterpriseQuote.subtotalPaise,
@@ -142,6 +158,12 @@ test('public pricing is anonymous and pricing edits require super-admin password
   ], [214920, 2364120, 425542, 2789662]);
   assert.equal('created_by' in initialPublicPricing, false);
   assert.equal('note' in initialPublicPricing, false);
+  for (const field of [
+    'versionId', 'trialDays', 'trialMaxUsers', 'trialStorageLimitMb',
+    'gracePeriodDays', 'readOnlyPeriodDays', 'defaultStoragePerSeatMb',
+    'prorateSeats', 'seatAdditionBilling', 'priceChangeScope',
+    'trialApprovalMode', 'effectiveFrom'
+  ]) assert.equal(field in initialPublicPricing, false, `public pricing excludes ${field}`);
   assert.equal('sortOrder' in initialPublicPricing.tiers[0], false);
 
   const unauthenticated = await fetch(`${baseUrl}/api/superadmin/pricing`, {
@@ -221,8 +243,20 @@ test('public pricing is anonymous and pricing edits require super-admin password
   const refreshedPricing = await afterSave.json();
   assert.equal(refreshedPricing.monthlyPricePaise, 24900);
   assert.equal(refreshedPricing.yearlyPricePaise, 261450);
-  assert.equal(versions.length, 2);
-  assert.equal(audits.length, 1);
+
+  const savedTiers = await fetch(`${baseUrl}/api/superadmin/pricing`, {
+    method: 'POST', headers, body: JSON.stringify({ ...pricingTierUpdate(), currentPassword: password })
+  });
+  assert.equal(savedTiers.status, 200);
+  const tieredLandingPricing = await fetch(`${baseUrl}/api/public/pricing`);
+  assert.equal(tieredLandingPricing.status, 200);
+  const tieredPricing = await tieredLandingPricing.json();
+  assert.deepEqual(tieredPricing.tiers.map(tier => tier.name), ['Team', 'Enterprise']);
+  assert.equal(tieredPricing.yearlyDiscountPct, 10);
+  assert.equal(tieredPricing.taxPct, 18);
+  assert.equal(tieredPricing.taxInclusive, false);
+  assert.equal(versions.length, 3);
+  assert.equal(audits.length, 2);
 });
 
 function pricingUpdate() {

@@ -77,6 +77,32 @@ test('tier validation requires contiguous ranges from one through an unlimited f
   ]), /last pricing tier/);
 });
 
+test('Team and Enterprise quote totals match the published monthly and yearly table', () => {
+  const tiers = [
+    { key: 'team', name: 'Team', minSeats: 1, maxSeats: 10, monthlyPricePaise: 29900, yearlyPricePaise: 322920 },
+    { key: 'enterprise', name: 'Enterprise', minSeats: 11, maxSeats: null, monthlyPricePaise: 19900, yearlyPricePaise: 214920 }
+  ];
+  const cases = [
+    [1, 'monthly', 'Team', 29900, 29900, 5382, 35282],
+    [5, 'monthly', 'Team', 29900, 149500, 26910, 176410],
+    [10, 'monthly', 'Team', 29900, 299000, 53820, 352820],
+    [11, 'monthly', 'Enterprise', 19900, 218900, 39402, 258302],
+    [25, 'monthly', 'Enterprise', 19900, 497500, 89550, 587050],
+    [100, 'monthly', 'Enterprise', 19900, 1990000, 358200, 2348200],
+    [5, 'yearly', 'Team', 322920, 1614600, 290628, 1905228],
+    [10, 'yearly', 'Team', 322920, 3229200, 581256, 3810456],
+    [11, 'yearly', 'Enterprise', 214920, 2364120, 425542, 2789662],
+    [25, 'yearly', 'Enterprise', 214920, 5373000, 967140, 6340140]
+  ];
+  for (const [seats, cycle, tierName, unit, subtotal, tax, total] of cases) {
+    const quote = calculateTierQuote({ tiers, seats, cycle, taxPctTenths: 180 });
+    assert.deepEqual([
+      quote.tier.name, quote.unitPricePaise, quote.subtotalPaise,
+      quote.taxPaise, quote.totalPaise
+    ], [tierName, unit, subtotal, tax, total], `${seats} seats, ${cycle}`);
+  }
+});
+
 test('tier quotes select volume rates and calculate yearly tax and savings in paise', () => {
   const tiers = [
     { key: 'team', name: 'Team', minSeats: 1, maxSeats: 10, monthlyPricePaise: 29900, yearlyPricePaise: 322920 },

@@ -13,6 +13,8 @@ function createBillingFixture() {
   const companies = new Map([[1, { id: 1, status: 'trial', trial_policy_version: 1 }], [2, { id: 2, status: 'active', trial_policy_version: null }]]);
   const settings = { min_seats: 1, max_seats: null, tax_inclusive: 0 };
   const pricing = { id: 1, monthly_price_paise: 19900, yearly_discount_pct: 10, yearly_price_paise: 214920, tax_pct: 18, currency: 'INR', effective_from: '2026-10-01T00:00:00.000Z' };
+  const pricingVersions = new Map([[1, pricing]]);
+  let currentPricingVersionId = 1;
   const tiersByVersion = new Map([[1, [{
     tier_key: 'standard', name: 'Standard', tagline: '', highlights: '[]', min_seats: 1,
     max_seats: null, monthly_price_paise: 19900, yearly_price_paise: 214920, sort_order: 0
@@ -39,9 +41,15 @@ function createBillingFixture() {
         read_only_period_days: 7, min_seats: 1, max_seats: null, default_storage_per_seat_mb: null,
         prorate_seats: 1, seat_addition_billing: 'immediate', price_change_scope: 'new_customers', trial_approval_mode: 'manual'
       }] };
-      if (sql.includes('SELECT * FROM pricing_versions')) return { rows: [{ ...pricing }] };
+      if (sql.includes('SELECT * FROM pricing_versions')) {
+        const currentVersion = pricingVersions.get(currentPricingVersionId);
+        return { rows: currentVersion ? [{ ...currentVersion }] : [] };
+      }
       if (sql.includes('FROM pricing_tiers')) return { rows: (tiersByVersion.get(Number(args[0])) || []).map(tier => ({ ...tier })) };
-      if (sql.includes('SELECT monthly_price_paise, yearly_price_paise')) return { rows: [{ ...pricing }] };
+      if (sql.includes('SELECT monthly_price_paise, yearly_price_paise')) {
+        const version = pricingVersions.get(Number(args[0]));
+        return { rows: version ? [{ ...version }] : [] };
+      }
       throw new Error(`Unexpected billing query: ${sql}`);
     },
     async transaction() {
@@ -111,7 +119,10 @@ function createBillingFixture() {
           }
           if (sql.startsWith('SELECT min_seats')) return { rows: [{ ...settings }] };
           if (sql.includes('FROM pricing_tiers')) return { rows: (tiersByVersion.get(Number(args[0])) || []).map(tier => ({ ...tier })) };
-          if (sql.startsWith('SELECT monthly_price_paise, yearly_price_paise')) return { rows: [{ ...pricing }] };
+          if (sql.startsWith('SELECT monthly_price_paise, yearly_price_paise')) {
+            const version = pricingVersions.get(Number(args[0]));
+            return { rows: version ? [{ ...version }] : [] };
+          }
           if (sql.startsWith('UPDATE subscription_change_requests SET status')) {
             const request = billingRequests.find(item => item.id === Number(args[3]) && item.status === 'pending');
             if (request) Object.assign(request, {
@@ -164,7 +175,15 @@ function createBillingFixture() {
       };
     }
   };
-  return { audits, billingRequests, companies, controlDb, events, invoices, payments, sequences, subscriptions, tiersByVersion };
+  return {
+    audits, billingRequests, companies, controlDb, events, invoices, payments,
+    sequences, subscriptions, tiersByVersion,
+    savePricingVersion(version, tiers) {
+      pricingVersions.set(Number(version.id), version);
+      tiersByVersion.set(Number(version.id), tiers);
+      currentPricingVersionId = Number(version.id);
+    }
+  };
 }
 
 test('manual invoice locks current price, numbers invoices, and activates the period only when paid', async () => {
@@ -236,7 +255,7 @@ test('approved subscription changes use the original price version and replace t
   assert.equal(fixture.subscriptions.find(item => item.id === invoice.subscriptionId).status, 'active');
 });
 
-test('new subscriptions and changes resolve the tier from the locked pricing version', async () => {
+test('a saved pricing version does not change an existing subscription tier when seats grow from 10 to 12', async () => {
   const fixture = createBillingFixture();
   fixture.tiersByVersion.set(1, [
     {
@@ -259,12 +278,23 @@ test('new subscriptions and changes resolve the tier from the locked pricing ver
   });
 
   fixture.billingRequests.push({
-    id: 9, company_id: 1, requested_seats: 11, requested_billing_cycle: 'yearly', status: 'pending'
+    id: 9, company_id: 1, requested_seats: 12, requested_billing_cycle: 'yearly', status: 'pending'
   });
+  fixture.savePricingVersion({
+    id: 2, monthly_price_paise: 59900, yearly_discount_pct: 10, yearly_price_paise: 646920,
+    tax_pct: 18, currency: 'INR', effective_from: '2026-10-07T00:00:00.000Z'
+  }, [
+    { tier_key: 'team', name: 'Team', tagline: '', highlights: '[]', min_seats: 1, max_seats: 10,
+      monthly_price_paise: 59900, yearly_price_paise: 646920, sort_order: 0 },
+    { tier_key: 'enterprise', name: 'Enterprise', tagline: '', highlights: '[]', min_seats: 11, max_seats: null,
+      monthly_price_paise: 49900, yearly_price_paise: 538920, sort_order: 1 }
+  ]);
   const change = await createManualSubscriptionChangeInvoice(fixture.controlDb, admin, {
     companyId: 1, requestId: 9, now: new Date('2026-10-06T12:00:00.000Z')
   });
   assert.equal(change.unitPricePaise, 214920);
+  assert.equal(change.totalPaise, 3043267);
+  assert.equal(fixture.subscriptions.find(item => item.id === change.subscriptionId).pricing_version_id, 1);
   assert.match(fixture.events.at(-1)[4], /Enterprise tier/);
 });
 

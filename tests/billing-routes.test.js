@@ -16,7 +16,10 @@ const controlDb = {
       return { rows: args[0] === 42 ? [{ id: 42, code: 'billing-co', name: 'Billing Co', status: 'active', trial_ends_at: null }] : [] };
     }
     if (/FROM subscriptions\s+WHERE company_id =/.test(sql)) {
-      return { rows: args[0] === 42 ? [{ id: 3, billing_cycle: 'monthly', seats: 5, status: 'active', current_period_end: '2026-11-06T00:00:00.000Z' }] : [] };
+      return { rows: args[0] === 42 ? [{
+        id: 3, billing_cycle: 'monthly', seats: 5, unit_price_paise: 29900,
+        pricing_version_id: 1, status: 'active', current_period_end: '2026-11-06T00:00:00.000Z'
+      }] : [] };
     }
     if (sql.includes('JOIN subscriptions s ON s.id = i.subscription_id')) return { rows: [] };
     if (sql.includes('FROM subscription_change_requests WHERE company_id')) {
@@ -53,12 +56,24 @@ const controlDb = {
       }] };
     }
     if (sql.includes('FROM pricing_versions')) {
-      return { rows: [{
-        id: 1, monthly_price_paise: 19900, yearly_discount_pct: 10, yearly_price_paise: 214920,
+      return { rows: [sql.includes('WHERE id = ?') ? {
+        id: 1, monthly_price_paise: 29900, yearly_discount_pct: 10, yearly_price_paise: 322920,
+        tax_pct: 18, currency: 'INR', effective_from: '2026-09-01T00:00:00.000Z'
+      } : {
+        id: 2, monthly_price_paise: 39900, yearly_discount_pct: 10, yearly_price_paise: 430920,
         tax_pct: 18, currency: 'INR', effective_from: '2026-10-01T00:00:00.000Z'
       }] };
     }
-    if (sql.includes('FROM pricing_tiers')) return { rows: [] };
+    if (sql.includes('FROM pricing_tiers')) return { rows: Number(args[0]) === 1 ? [{
+      tier_key: 'team', name: 'Team', tagline: 'Small teams', highlights: '["Projects"]',
+      min_seats: 1, max_seats: 10, monthly_price_paise: 29900, yearly_price_paise: 322920, sort_order: 0
+    }, {
+      tier_key: 'enterprise', name: 'Enterprise', tagline: 'Growing teams', highlights: '["Projects"]',
+      min_seats: 11, max_seats: null, monthly_price_paise: 19900, yearly_price_paise: 214920, sort_order: 1
+    }] : [{
+      tier_key: 'current', name: 'Current', tagline: '', highlights: '[]', min_seats: 1,
+      max_seats: null, monthly_price_paise: 39900, yearly_price_paise: 430920, sort_order: 0
+    }] };
     throw new Error(`Unexpected billing query: ${sql}`);
   }
 };
@@ -111,6 +126,12 @@ test('company billing is admin-only and scopes invoices to the authenticated ten
   const data = await response.json();
   assert.equal(data.company.id, 42);
   assert.equal(data.subscription.seats, 5);
+  assert.equal(data.pricing.monthlyPricePaise, 29900);
+  assert.deepEqual(data.pricing.tiers.map(tier => [tier.name, tier.monthlyPricePaise]), [
+    ['Team', 29900], ['Enterprise', 19900]
+  ]);
+  assert.equal('pricing_version_id' in data.subscription, false);
+  assert.equal('sortOrder' in data.pricing.tiers[0], false);
   assert.deepEqual(data.invoices.map(invoice => invoice.number), ['INV-2026-0001']);
   assert.ok(queryArgs.filter(query => /company_id = \?/.test(query.sql)).every(query => query.args[0] === 42));
 });

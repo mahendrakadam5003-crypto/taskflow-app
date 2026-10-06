@@ -35,13 +35,13 @@ function createBillingRouter({
       const company = companyResult.rows?.[0] || null;
       const id = company ? Number(company.id) : null;
       const getTenantUsage = getUsage || require('../limits').getPlanUsage;
-      const [usage, pricing, subscriptionResult, invoiceResult, requestResult] = await Promise.all([
+      const [usage, currentPricing, subscriptionResult, invoiceResult, requestResult] = await Promise.all([
         getTenantUsage(req),
         getPricing(controlDb),
         id == null
           ? Promise.resolve({ rows: [] })
           : controlDb.execute({
-            sql: 'SELECT id, billing_cycle, seats, unit_price_paise, discount_pct, status, current_period_start, current_period_end, cancel_at_period_end FROM subscriptions WHERE company_id = ? ORDER BY id DESC LIMIT 1',
+            sql: 'SELECT id, billing_cycle, seats, unit_price_paise, discount_pct, pricing_version_id, status, current_period_start, current_period_end, cancel_at_period_end FROM subscriptions WHERE company_id = ? ORDER BY id DESC LIMIT 1',
             args: [id]
           }),
         id == null
@@ -59,6 +59,54 @@ function createBillingRouter({
           })
       ]);
 
+      const subscriptionRow = subscriptionResult.rows?.[0] || null;
+      const subscription = subscriptionRow
+        ? (({ pricing_version_id: _pricingVersionId, ...details }) => details)(subscriptionRow)
+        : null;
+      let pricing = currentPricing;
+      if (subscriptionRow?.pricing_version_id != null) {
+        const versionId = Number(subscriptionRow.pricing_version_id);
+        const [versionResult, tierResult] = await Promise.all([
+          controlDb.execute({
+            sql: 'SELECT monthly_price_paise, yearly_discount_pct, yearly_price_paise, tax_pct, currency FROM pricing_versions WHERE id = ? LIMIT 1',
+            args: [versionId]
+          }),
+          controlDb.execute({
+            sql: `SELECT name, min_seats, max_seats, monthly_price_paise, yearly_price_paise
+              FROM pricing_tiers WHERE pricing_version_id = ? ORDER BY sort_order, id`,
+            args: [versionId]
+          })
+        ]);
+        const version = versionResult.rows?.[0];
+        if (!version) throw new Error('Locked subscription pricing version was not found.');
+        pricing = {
+          ...currentPricing,
+          monthlyPricePaise: Number(version.monthly_price_paise),
+          yearlyDiscountPct: Number(version.yearly_discount_pct),
+          yearlyPricePaise: Number(version.yearly_price_paise),
+          taxPct: Number(version.tax_pct),
+          currency: version.currency,
+          tiers: (tierResult.rows || []).map(tier => ({
+            name: tier.name,
+            minSeats: Number(tier.min_seats),
+            maxSeats: tier.max_seats == null ? null : Number(tier.max_seats),
+            monthlyPricePaise: Number(tier.monthly_price_paise),
+            yearlyPricePaise: Number(tier.yearly_price_paise)
+          }))
+        };
+      } else {
+        pricing = {
+          ...currentPricing,
+          tiers: (currentPricing.tiers || []).map(tier => ({
+            name: tier.name,
+            minSeats: tier.minSeats,
+            maxSeats: tier.maxSeats,
+            monthlyPricePaise: tier.monthlyPricePaise,
+            yearlyPricePaise: tier.yearlyPricePaise
+          }))
+        };
+      }
+
       res.set('Cache-Control', 'no-store');
       return res.json({
         company: company ? {
@@ -74,7 +122,7 @@ function createBillingRouter({
           status: req.companyStatus || 'active',
           trialEndsAt: null
         },
-        subscription: subscriptionResult.rows?.[0] || null,
+        subscription,
         invoices: invoiceResult.rows || [],
         billingRequests: requestResult.rows || [],
         usage,
@@ -85,7 +133,8 @@ function createBillingRouter({
           yearlyPricePaise: pricing.yearlyPricePaise,
           yearlyDiscountPct: pricing.yearlyDiscountPct,
           taxPct: pricing.taxPct,
-          taxInclusive: pricing.taxInclusive
+          taxInclusive: pricing.taxInclusive,
+          tiers: pricing.tiers
         },
         billingRules: { minSeats: pricing.minSeats, maxSeats: pricing.maxSeats }
       });

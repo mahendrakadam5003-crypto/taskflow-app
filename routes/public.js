@@ -100,7 +100,6 @@ function createPublicRouter({
           })
         }));
         cached = {
-          versionId: pricing.versionId,
           monthlyPricePaise: pricing.monthlyPricePaise,
           yearlyDiscountPct: pricing.yearlyDiscountPct,
           yearlyPricePaise: pricing.yearlyPricePaise,
@@ -108,23 +107,12 @@ function createPublicRouter({
           currency: pricing.currency,
           currencySymbol: pricing.currencySymbol,
           taxInclusive: pricing.taxInclusive,
-          trialDays: pricing.trialDays,
-          trialMaxUsers: pricing.trialMaxUsers,
-          trialStorageLimitMb: pricing.trialStorageLimitMb,
-          gracePeriodDays: pricing.gracePeriodDays,
-          readOnlyPeriodDays: pricing.readOnlyPeriodDays,
           minSeats: pricing.minSeats,
           maxSeats: pricing.maxSeats,
-          defaultStoragePerSeatMb: pricing.defaultStoragePerSeatMb,
-          prorateSeats: pricing.prorateSeats,
-          seatAdditionBilling: pricing.seatAdditionBilling,
-          priceChangeScope: pricing.priceChangeScope,
-          trialApprovalMode: pricing.trialApprovalMode,
-          effectiveFrom: pricing.effectiveFrom,
           tiers,
           quotes: {
-            monthly: [1, 10, 11, 50].map(seats => quote(seats, 'monthly')),
-            yearly: [1, 10, 11, 50].map(seats => quote(seats, 'yearly'))
+            monthly: [1, 5, 10, 11, 25, 100].map(seats => quote(seats, 'monthly')),
+            yearly: [5, 10, 11, 25].map(seats => quote(seats, 'yearly'))
           },
           monthlyPreviews,
           yearlyPreviews

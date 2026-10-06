@@ -32,7 +32,20 @@
       <p id="billing-updated" class="muted"></p>
       <section class="billing-panel">
         <div class="panel-heading"><div><p class="eyebrow">CURRENT RATES</p><h2>Per-seat pricing</h2></div></div>
-        <p id="price-summary" class="muted"></p>
+        <div id="price-summary" class="price-summary">
+          <div class="current-pricing-grid">
+            <div><span>Current tier</span><strong id="current-tier">—</strong></div>
+            <div><span>Rate per seat</span><strong id="current-rate">—</strong></div>
+            <div><span>Seats used</span><strong id="current-seats">—</strong></div>
+            <div><span>Next renewal</span><strong id="next-renewal">—</strong></div>
+          </div>
+          <div class="table-wrap tier-table-wrap">
+            <table aria-label="Available pricing tiers">
+              <thead><tr><th>Tier</th><th>Seats</th><th>Monthly / seat</th><th>Yearly / seat</th></tr></thead>
+              <tbody id="pricing-tier-rows"></tbody>
+            </table>
+          </div>
+        </div>
         <p class="manual-payment-note">Payments are handled manually. Request a seat or billing-cycle change below; a TaskFlow administrator will review it and issue an invoice. No charge is made automatically.</p>
         <form id="billing-change-form" class="billing-change-form">
           <label for="requested-seats">Requested seats</label>
@@ -44,6 +57,19 @@
           </select>
           <button id="billing-request-submit" class="button button-primary" type="submit">Request invoice</button>
         </form>
+        <section class="live-quote" aria-live="polite" aria-atomic="true">
+          <h3>Estimated invoice</h3>
+          <p id="tier-change-note" class="tier-change-note hidden"></p>
+          <p id="quote-error" class="quote-error hidden"></p>
+          <dl class="quote-lines">
+            <div><dt>Tier</dt><dd id="quote-tier">—</dd></div>
+            <div><dt>Rate per seat</dt><dd id="quote-rate">—</dd></div>
+            <div><dt>Subtotal</dt><dd id="quote-subtotal">—</dd></div>
+            <div><dt id="quote-tax-label">GST</dt><dd id="quote-tax">—</dd></div>
+            <div class="quote-total"><dt>Total</dt><dd id="quote-total">—</dd></div>
+            <div><dt>Yearly saving</dt><dd id="quote-saving">—</dd></div>
+          </dl>
+        </section>
         <p id="billing-request-message" class="message hidden" role="status"></p>
         <div class="table-wrap"><table>
           <thead><tr><th>Request</th><th>Seats</th><th>Cycle</th><th>Status</th><th>Submitted</th></tr></thead>
