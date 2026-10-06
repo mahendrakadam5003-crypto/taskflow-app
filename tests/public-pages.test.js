@@ -4,15 +4,16 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const { after, before, test } = require('node:test');
 const path = require('node:path');
-const { createPublicPagesRouter } = require('../routes/public-pages');
+const { createAppShellSetHeaders, createPublicPagesRouter } = require('../routes/public-pages');
 
 let server;
 let baseUrl;
 
 before(async () => {
   const app = express();
-  app.use(createPublicPagesRouter(path.join(__dirname, '..', 'public')));
-  app.use(express.static(path.join(__dirname, '..', 'public')));
+  const publicDirectory = path.join(__dirname, '..', 'public');
+  app.use(createPublicPagesRouter(publicDirectory));
+  app.use(express.static(publicDirectory, { setHeaders: createAppShellSetHeaders(publicDirectory) }));
   server = app.listen(0, '127.0.0.1');
   await new Promise((resolve, reject) => {
     server.once('listening', resolve);
@@ -38,7 +39,12 @@ test('public root serves landing page and /app preserves the workspace login', a
 
   const workspace = await fetch(`${baseUrl}/app`);
   assert.equal(workspace.status, 200);
+  assert.match(workspace.headers.get('cache-control'), /no-store/);
   assert.match(await workspace.text(), /id="login-screen"/);
+
+  const appScript = await fetch(`${baseUrl}/js/app.js`);
+  assert.equal(appScript.status, 200);
+  assert.match(appScript.headers.get('cache-control'), /no-store/);
 
   const privacy = await fetch(`${baseUrl}/privacy.html`);
   assert.equal(privacy.status, 200);

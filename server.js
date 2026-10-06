@@ -23,7 +23,7 @@ const { createUserErrorReporter } = require('./user-error-reporter');
 const { createEntitlementMiddleware, createEntitlementService } = require('./entitlements');
 const { createEntitlementScheduler } = require('./entitlement-scheduler');
 const { createPublicRouter } = require('./routes/public');
-const { createPublicPagesRouter } = require('./routes/public-pages');
+const { createAppShellSetHeaders, createPublicPagesRouter } = require('./routes/public-pages');
 const { createBillingRouter } = require('./routes/billing');
 
 const app = express();
@@ -447,7 +447,8 @@ app.use('/api/attendance', attendanceRouter);
 app.use('/api/reimbursements', reimbursementsRouter);
 
 app.use('/uploads', uploadsRouter);
-app.use(express.static(path.join(__dirname, 'public')));
+const publicDirectory = path.join(__dirname, 'public');
+app.use(express.static(publicDirectory, { setHeaders: createAppShellSetHeaders(publicDirectory) }));
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
   const status = Number(error.statusCode || error.status);

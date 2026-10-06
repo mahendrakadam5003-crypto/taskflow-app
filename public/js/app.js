@@ -4641,7 +4641,7 @@ async function adminRemoveUser(userId, userName) {
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
     try {
-      const registration = await navigator.serviceWorker.register('/service-worker.js?v=20261006-1');
+      const registration = await navigator.serviceWorker.register('/service-worker.js', { updateViaCache: 'none' });
       await registration.update();
     } catch (error) {
       console.warn('Service worker update failed:', error);
