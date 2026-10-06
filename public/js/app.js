@@ -1189,11 +1189,18 @@ $$('.mobile-tab[data-view]').forEach((btn) => {
 });
 $('#btn-mobile-more')?.addEventListener('click', () => $('#btn-mobile-nav')?.click());
 
-function showView(view) {
+const taskFlowViewHistory = [];
+let currentTaskFlowView = document.querySelector('.nav-item.active')?.dataset.view || 'dashboard';
+
+function showView(view, { fromBack = false } = {}) {
   const featureForView = { attendance: 'attendance', reimbursements: 'reimbursements' }[view];
   if (featureForView && ME?.features?.[featureForView] === false) {
     showView('dashboard');
     return;
+  }
+  if (view !== currentTaskFlowView) {
+    if (!fromBack) taskFlowViewHistory.push(currentTaskFlowView);
+    currentTaskFlowView = view;
   }
   if (view !== 'attendance') stopAttendanceClock();
   if (mobilePageTitle) mobilePageTitle.textContent = view === 'dashboard' ? 'TaskFlow' : (mobileViewTitles[view] || 'TaskFlow');
@@ -1275,6 +1282,31 @@ function showView(view) {
     if (viewEmpty) viewEmpty.classList.remove('hidden');
   }
 }
+
+window.TaskFlowApp?.addListener('backButton', async () => {
+  const modalBackdrop = $('#modal-backdrop');
+  if (modalBackdrop && !modalBackdrop.classList.contains('hidden')) {
+    if (!forcedPasswordModalOpen) closeModal();
+    return;
+  }
+  if ($('#app')?.classList.contains('drawer-open')) {
+    closeDrawer();
+    return;
+  }
+  if ($('#app')?.classList.contains('mobile-nav-open')) {
+    closeMobileNav();
+    return;
+  }
+  if (taskFlowViewHistory.length) {
+    showView(taskFlowViewHistory.pop(), { fromBack: true });
+    return;
+  }
+  if (currentTaskFlowView !== 'dashboard') {
+    showView('dashboard', { fromBack: true });
+    return;
+  }
+  await window.TaskFlowApp.minimizeApp();
+});
 
 async function renderNotifications() {
   const list = $('#notifications-list');
