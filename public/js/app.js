@@ -3374,6 +3374,102 @@ async function loadTrackingTimeline(userId, selectedButton, selectedDate = today
 }
 
 // ================= ADMINISTRATIVE CORE VIEW MODULE =================
+function renderAttendanceDeviceAccess(devices) {
+  const list = $('#attendance-device-access-list');
+  const search = $('#attendance-device-access-search');
+  const pageSizeSelect = $('#attendance-device-access-page-size');
+  const count = $('#attendance-device-access-count');
+  const pagination = $('#attendance-device-access-pagination');
+  let pageIndex = 0;
+
+  const renderPage = () => {
+    const query = search.value.trim().toLocaleLowerCase();
+    const filtered = devices.filter(person =>
+      `${person.name || ''} ${person.username || ''} ${person.registered_device_name || ''} ${person.registered_device_info || ''}`
+        .toLocaleLowerCase().includes(query));
+    const pageSize = Number(pageSizeSelect.value) || 25;
+    const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+    pageIndex = Math.min(pageIndex, pageCount - 1);
+    const start = pageIndex * pageSize;
+    const page = filtered.slice(start, start + pageSize);
+    list.innerHTML = '';
+
+    page.forEach(person => {
+      const row = document.createElement('div');
+      row.className = 'admin-form-row';
+      const deviceStatus = person.registered_device_name
+        || (Number(person.device_rebind_pending) === 1 ? 'Reset; next punch will auto-bind' : 'No device registered');
+      row.innerHTML = `<div class="attendance-device-admin-person"><b>${escapeHtml(person.name)}</b><span>${escapeHtml(person.username || '')}</span><span>${escapeHtml(deviceStatus)}</span>${person.registered_device_info ? `<small>${escapeHtml(person.registered_device_info)}</small>` : ''}</div>
+        <label><input type="checkbox" data-device-phone="${person.id}" ${Number(person.allow_phone) === 1 ? 'checked' : ''}> Phone</label>
+        <label><input type="checkbox" data-device-laptop="${person.id}" ${Number(person.allow_laptop) === 1 ? 'checked' : ''}> Laptop</label>
+        <button class="btn btn-secondary btn-sm save-device-access" data-device-user="${person.id}">Save access</button>
+        <button class="btn btn-danger btn-sm reset-attendance-device" data-device-user="${person.id}" type="button">Reset device</button>`;
+      row.querySelector('.reset-attendance-device').dataset.deviceName = person.registered_device_name || '';
+      list.appendChild(row);
+    });
+
+    count.textContent = filtered.length
+      ? `Showing ${start + 1}-${Math.min(start + page.length, filtered.length)} of ${filtered.length} users`
+      : 'No matching users';
+    pagination.innerHTML = pageCount > 1
+      ? `<button type="button" class="btn btn-secondary btn-sm" data-device-page="previous" ${pageIndex === 0 ? 'disabled' : ''}>Previous</button><span>Page ${pageIndex + 1} of ${pageCount}</span><button type="button" class="btn btn-secondary btn-sm" data-device-page="next" ${pageIndex >= pageCount - 1 ? 'disabled' : ''}>Next</button>`
+      : '';
+    pagination.querySelector('[data-device-page="previous"]')?.addEventListener('click', () => { pageIndex--; renderPage(); });
+    pagination.querySelector('[data-device-page="next"]')?.addEventListener('click', () => { pageIndex++; renderPage(); });
+
+    list.querySelectorAll('[data-device-phone], [data-device-laptop]').forEach(checkbox => {
+      checkbox.onchange = () => {
+        const row = checkbox.closest('.admin-form-row');
+        const userId = checkbox.dataset.devicePhone || checkbox.dataset.deviceLaptop;
+        const phone = row?.querySelector(`[data-device-phone="${userId}"]`);
+        const laptop = row?.querySelector(`[data-device-laptop="${userId}"]`);
+        if (phone && laptop && !phone.checked && !laptop.checked) checkbox.checked = true;
+      };
+    });
+    list.querySelectorAll('.save-device-access').forEach(button => {
+      button.onclick = async () => {
+        const userId = button.dataset.deviceUser;
+        const row = button.closest('.admin-form-row');
+        const phone = row.querySelector(`[data-device-phone="${userId}"]`);
+        const laptop = row.querySelector(`[data-device-laptop="${userId}"]`);
+        button.disabled = true;
+        try {
+          await api(`/attendance/device-access/${userId}`, { method: 'PUT', body: { allow_phone: phone.checked, allow_laptop: laptop.checked } });
+          showAppNotification('Attendance device access updated.');
+        } catch (error) {
+          showAppNotification(error.message);
+        } finally {
+          button.disabled = false;
+        }
+      };
+    });
+    list.querySelectorAll('.reset-attendance-device').forEach(button => {
+      button.onclick = async () => {
+        const deviceName = button.dataset.deviceName;
+        const confirmed = await confirmModal('Reset attendance device?', `${deviceName ? `Clear ${deviceName}'s device binding` : "Clear this employee's device binding"}? The employee's next punch will automatically bind that browser.`, 'Reset device', true);
+        if (!confirmed) return;
+        try {
+          await api(`/attendance/device-registration/${button.dataset.deviceUser}`, { method: 'DELETE' });
+          const person = devices.find(item => String(item.id) === button.dataset.deviceUser);
+          if (person) {
+            person.registered_device_name = null;
+            person.registered_device_info = null;
+            person.device_rebind_pending = 1;
+          }
+          renderPage();
+          showAppNotification('Device reset successfully.');
+        } catch (error) {
+          showAppNotification(error.message);
+        }
+      };
+    });
+  };
+
+  search.oninput = () => { pageIndex = 0; renderPage(); };
+  pageSizeSelect.onchange = () => { pageIndex = 0; renderPage(); };
+  renderPage();
+}
+
 async function renderAdmin() {
   const wrap = $('#admin-content');
   if (!wrap) return;
@@ -3465,7 +3561,13 @@ async function renderAdmin() {
       <div class="admin-block">
         <h3>Attendance device access</h3>
         <p class="hint">Choose whether each person may punch in and out from a phone, laptop, or both. Laptop punching still requires browser location permission.</p>
+        <div class="admin-form-row permission-list-controls">
+          <input id="attendance-device-access-search" type="search" placeholder="Search by employee, username, or device" aria-label="Search attendance device users">
+          <label>Rows per page <select id="attendance-device-access-page-size" aria-label="Attendance device users per page"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
+          <span id="attendance-device-access-count" class="hint" aria-live="polite"></span>
+        </div>
         <div id="attendance-device-access-list"></div>
+        <div id="attendance-device-access-pagination" class="permission-pagination"></div>
       </div>
 
       <div class="admin-block">
@@ -4199,49 +4301,7 @@ async function renderAdmin() {
     projectActionSearch.oninput = () => { projectActionPage = 0; renderProjectActionPage(); };
     projectActionPageSize.onchange = () => { projectActionPage = 0; renderProjectActionPage(); };
     renderProjectActionPage();
-    const deviceAccessList = $('#attendance-device-access-list');
-    deviceAccess.forEach((person) => {
-      const row = document.createElement('div');
-      row.className = 'admin-form-row';
-      const deviceStatus = person.registered_device_name || (Number(person.device_rebind_pending) === 1 ? 'Reset; next punch will auto-bind' : 'No device registered');
-      row.innerHTML = `<div class="attendance-device-admin-person"><b>${escapeHtml(person.name)}</b><span>${escapeHtml(deviceStatus)}</span>${person.registered_device_info ? `<small>${escapeHtml(person.registered_device_info)}</small>` : ''}</div>
-        <label><input type="checkbox" data-device-phone="${person.id}" ${Number(person.allow_phone) === 1 ? 'checked' : ''}> Phone</label>
-        <label><input type="checkbox" data-device-laptop="${person.id}" ${Number(person.allow_laptop) === 1 ? 'checked' : ''}> Laptop</label>
-        <button class="btn btn-secondary btn-sm save-device-access" data-device-user="${person.id}">Save access</button>
-        <button class="btn btn-danger btn-sm reset-attendance-device" data-device-user="${person.id}" data-device-name="${escapeHtml(person.registered_device_name || '')}" type="button">Reset device</button>`;
-      deviceAccessList.appendChild(row);
-    });
-    $$('[data-device-phone], [data-device-laptop]').forEach((checkbox) => {
-      checkbox.onchange = () => {
-        const row = checkbox.closest('.admin-form-row');
-        const phone = row?.querySelector(`[data-device-phone="${checkbox.dataset.devicePhone || checkbox.dataset.deviceLaptop}"]`);
-        const laptop = row?.querySelector(`[data-device-laptop="${checkbox.dataset.devicePhone || checkbox.dataset.deviceLaptop}"]`);
-        if (phone && laptop && !phone.checked && !laptop.checked) checkbox.checked = true;
-      };
-    });
-    $$('.save-device-access').forEach((button) => {
-      button.onclick = async () => {
-        const userId = button.dataset.deviceUser;
-        const row = button.closest('.admin-form-row');
-        const phone = row.querySelector(`[data-device-phone="${userId}"]`);
-        const laptop = row.querySelector(`[data-device-laptop="${userId}"]`);
-        try {
-          await api(`/attendance/device-access/${userId}`, { method: 'PUT', body: { allow_phone: phone.checked, allow_laptop: laptop.checked } });
-          showAppNotification('Attendance device access updated.');
-        } catch (error) { showAppNotification(error.message); }
-      };
-    });
-    $$('.reset-attendance-device').forEach(button => {
-      button.onclick = async () => {
-        const confirmed = await confirmModal('Reset attendance device?', `${button.dataset.deviceName ? `Clear ${button.dataset.deviceName}'s device binding` : "Clear this employee's device binding"}? The employee's next punch will automatically bind that browser.`, 'Reset device', true);
-        if (!confirmed) return;
-        try {
-          await api(`/attendance/device-registration/${button.dataset.deviceUser}`, { method: 'DELETE' });
-          showAppNotification('Device reset successfully.');
-          await renderAdmin();
-        } catch (error) { showAppNotification(error.message); }
-      };
-    });
+    renderAttendanceDeviceAccess(deviceAccess);
     $$('[data-payment-access-user]').forEach((checkbox) => {
       checkbox.onchange = async () => {
         try {
