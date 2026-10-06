@@ -86,7 +86,7 @@ function createCompanyProvisioner({
     if (companyCodeResult.rows?.[0]) throw new ProvisioningError('That company code is already in use.', 409);
     if (!planResult.rows?.[0]) throw new ProvisioningError('Choose an active plan.', 400);
     if (!environment.APP_BASE_URL || !emailMailer.isConfigured?.()) {
-      throw new ProvisioningError('Configure APP_BASE_URL and SMTP delivery before provisioning invited accounts.', 503);
+      throw new ProvisioningError('Configure APP_BASE_URL and email delivery before provisioning invited accounts.', 503);
     }
 
     const databaseName = `tf-${input.code}`;

@@ -33,8 +33,12 @@ services:
       - key: TELEGRAM_CHANNEL_ID
         sync: false
       - key: MAIL_PROVIDER
-        value: resend
-      - key: RESEND_API_KEY
+        value: gmail
+      - key: GMAIL_CLIENT_ID
         sync: false
-      - key: RESEND_FROM
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false
+      - key: GMAIL_FROM
         sync: false

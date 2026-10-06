@@ -4508,7 +4508,7 @@ async function renderAdmin() {
         });
         const notice = result.invitationSent
           ? ' Optional email verification invitation sent.'
-          : ` Email verification invitation not sent (${result.invitationError || 'check SMTP settings'}); username/password login is ready.`;
+          : ` Email verification invitation not sent (${result.invitationError || 'check email delivery settings'}); username/password login is ready.`;
         reloadWithActionMessage('admin', `Employee added. Share the username and temporary password securely; they must change the password at first sign-in.${notice}`);
       } catch (err) { showAppNotification(err.message); }
     };

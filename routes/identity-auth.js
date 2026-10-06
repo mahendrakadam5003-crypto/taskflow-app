@@ -124,7 +124,7 @@ function createIdentityAuthRouter(options = {}) {
 
   async function deliverLink(req, user, purpose, { invitation = false } = {}) {
     if (!emailDeliveryConfigured()) {
-      return { sent: false, error: 'Email delivery is not configured. Set APP_BASE_URL and SMTP settings, then try again.' };
+      return { sent: false, error: 'Email delivery is not configured. Set APP_BASE_URL and email delivery settings, then try again.' };
     }
     const email = normalizeEmail(user.email);
     if (!validEmail(email)) return { sent: false, error: 'A valid email address is required.' };
@@ -146,7 +146,7 @@ function createIdentityAuthRouter(options = {}) {
     } catch (error) {
       await database.prepare('DELETE FROM email_auth_tokens WHERE token_hash = ?').run(tokenRecord.hash);
       logRequestEvent(req, isVerification ? 'email_verification_delivery_failed' : 'password_reset_delivery_failed', 'warn');
-      return { sent: false, error: 'The email could not be sent. Check SMTP settings and try again.' };
+      return { sent: false, error: 'The email could not be sent. Check email delivery settings and try again.' };
     }
   }
 
@@ -158,7 +158,7 @@ function createIdentityAuthRouter(options = {}) {
 
   async function sendEmailCode(req, user, purpose) {
     if (!publicMailer.isConfigured?.()) {
-      return { sent: false, error: 'Email sign-in is not configured. Set SMTP settings, then try again.' };
+      return { sent: false, error: 'Email sign-in is not configured. Set email delivery settings, then try again.' };
     }
     const email = normalizeEmail(user.email);
     if (!validEmail(email)) return { sent: false, error: 'A valid email address is required.' };
@@ -182,7 +182,7 @@ function createIdentityAuthRouter(options = {}) {
       await database.prepare('DELETE FROM email_login_otps WHERE user_id = ? AND purpose = ?')
         .run(user.id, purpose);
       logRequestEvent(req, purpose === 'enrollment' ? 'email_enrollment_code_delivery_failed' : 'email_login_code_delivery_failed', 'warn');
-      return { sent: false, error: 'The email could not be sent. Check SMTP settings and try again.' };
+      return { sent: false, error: 'The email could not be sent. Check email delivery settings and try again.' };
     }
   }
 
