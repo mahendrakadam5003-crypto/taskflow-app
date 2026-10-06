@@ -1819,11 +1819,12 @@ async function enterProjectView(project) {
     if (assignee) assignee.innerHTML = '<option value="all">All assignees</option>' + members.map(member => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
     const creatorPeople = ME?.role === 'admin' ? PEOPLE : members;
     if (creator) creator.innerHTML = '<option value="all">Anyone</option>' + creatorPeople.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('');
+    restoreTaskFilterPreferences();
   }).catch(error => {
     console.warn('Project member filters unavailable:', error.message);
   });
+  await projectMembersPromise;
   await renderTasks();
-  projectMembersPromise.catch(() => {});
    const newTaskButton = $('#btn-new-task');
    if (newTaskButton) {
   newTaskButton.style.display = PROJECT_ACTION_ACCESS.create_task ? '' : 'none';
@@ -1866,13 +1867,68 @@ async function renderTaskAssigneeFilter(){
   } catch (err) { }
 }
 
+function taskFilterPreferenceKey() {
+  return `taskflow.taskFilters.v1.${ME?.id || 'anonymous'}.${CURRENT_PROJECT?.id || 'none'}`;
+}
+
+function readTaskFilterPreferences() {
+  try {
+    const preferences = JSON.parse(localStorage.getItem(taskFilterPreferenceKey()) || '{}');
+    return preferences && typeof preferences === 'object' ? preferences : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveTaskFilterPreferences() {
+  const searchInput = $('#task-search');
+  const preferences = {
+    status: $('#task-filter-status')?.value || 'open',
+    assignee: $('#task-filter-assignee')?.value || 'all',
+    createdBy: $('#task-filter-created-by')?.value || 'all',
+    dueDate: $('#task-filter-due')?.value || '',
+    createdOn: $('#task-filter-created-on')?.value || '',
+    modifiedOn: $('#task-filter-modified-on')?.value || '',
+    completedOn: $('#task-filter-completed-on')?.value || '',
+    sort: $('#task-sort')?.value || 'manual',
+    search: searchInput?.dataset.fullSearch === 'true' ? searchInput.value.trim() : ''
+  };
+  try {
+    localStorage.setItem(taskFilterPreferenceKey(), JSON.stringify(preferences));
+  } catch { }
+}
+
+function restoreTaskFilterPreferences() {
+  const preferences = readTaskFilterPreferences();
+  const setSelectValue = (selector, value, allowedValues = null) => {
+    const select = $(selector);
+    if (!select) return;
+    const normalizedValue = String(value ?? '');
+    if (allowedValues && !allowedValues.includes(normalizedValue)) return;
+    if (Array.from(select.options).some(option => option.value === normalizedValue)) select.value = normalizedValue;
+  };
+  setSelectValue('#task-filter-status', preferences.status, ['open', 'done', 'all']);
+  setSelectValue('#task-filter-assignee', preferences.assignee);
+  setSelectValue('#task-filter-created-by', preferences.createdBy);
+  setSelectValue('#task-sort', preferences.sort, ['manual', 'title', 'assignee', 'due']);
+  [['#task-filter-due', preferences.dueDate], ['#task-filter-created-on', preferences.createdOn],
+    ['#task-filter-modified-on', preferences.modifiedOn], ['#task-filter-completed-on', preferences.completedOn]]
+    .forEach(([selector, value]) => { const input = $(selector); if (input) input.value = String(value || ''); });
+  const searchInput = $('#task-search');
+  if (searchInput) {
+    searchInput.value = String(preferences.search || '');
+    searchInput.dataset.fullSearch = searchInput.value ? 'true' : 'false';
+  }
+}
+
 function setupTaskFilters() {
   const panel = $('#task-filter-panel');
   if (!panel) return;
+  restoreTaskFilterPreferences();
   $('#btn-task-filters').onclick = () => panel.classList.toggle('hidden');
   $('#btn-close-task-filters').onclick = () => panel.classList.add('hidden');
-  $('#btn-apply-task-filters').onclick = () => { renderTasks(); panel.classList.add('hidden'); };
-  $('#task-sort').onchange = () => renderTasks();
+  $('#btn-apply-task-filters').onclick = () => { saveTaskFilterPreferences(); renderTasks(); panel.classList.add('hidden'); };
+  $('#task-sort').onchange = () => { saveTaskFilterPreferences(); renderTasks(); };
   let searchTimer = null;
   const searchInput = $('#task-search');
   const suggestions = $('#task-search-suggestions');
@@ -1885,6 +1941,7 @@ function setupTaskFilters() {
   const showSuggestions = async () => {
     const value = searchInput.value.trim();
     searchInput.dataset.fullSearch = 'false';
+    saveTaskFilterPreferences();
     if (!value) { hideSuggestions(); return; }
     clearTimeout(searchTimer);
     suggestions.classList.add('hidden');
@@ -1903,7 +1960,7 @@ function setupTaskFilters() {
           };
         });
         const showAll = $('.task-suggestion-all');
-        if (showAll) showAll.onclick = () => { searchInput.dataset.fullSearch = 'true'; hideSuggestions(); renderTasks(); };
+        if (showAll) showAll.onclick = () => { searchInput.dataset.fullSearch = 'true'; hideSuggestions(); saveTaskFilterPreferences(); renderTasks(); };
       } catch (error) { hideSuggestions(); }
     }, 180);
   };
@@ -1913,6 +1970,7 @@ function setupTaskFilters() {
       event.preventDefault();
       searchInput.dataset.fullSearch = 'true';
       hideSuggestions();
+      saveTaskFilterPreferences();
       renderTasks();
     }
     if (event.key === 'Escape') hideSuggestions();
@@ -1922,6 +1980,11 @@ function setupTaskFilters() {
     $('#task-filter-assignee').value = 'all';
     $('#task-filter-created-by').value = 'all';
     ['task-filter-due', 'task-filter-created-on', 'task-filter-modified-on', 'task-filter-completed-on'].forEach(id => { $(`#${id}`).value = ''; });
+    $('#task-sort').value = 'manual';
+    searchInput.value = '';
+    searchInput.dataset.fullSearch = 'false';
+    hideSuggestions();
+    saveTaskFilterPreferences();
     renderTasks();
   };
 }
