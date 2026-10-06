@@ -4,18 +4,22 @@
   "description": "Self-hosted internal task manager + employee attendance (punch in/out, on-site detection)",
   "main": "server.js",
   "engines": {
-    "node": ">=20.18.0"
+    "node": "20.18.0"
   },
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
+    "android:debug": "npx cap sync android && cd android && gradlew assembleDebug",
     "migrate:control": "node scripts/migrate-control-db.js",
     "migrate:all": "node scripts/migrate-all-tenants.js",
     "superadmin:create": "node scripts/create-superadmin.js",
     "company:register-existing": "node scripts/register-legacy-company.js"
   },
   "dependencies": {
-    "@aparajita/capacitor-biometric-auth": "^10.0.0",
+    "@aparajita/capacitor-biometric-auth": "^9.1.2",
+    "@capacitor/android": "^7.6.9",
+    "@capacitor/core": "^7.6.9",
+    "@capacitor/ios": "^7.6.9",
     "@libsql/client": "^0.3.5",
     "@libsql/sqlite3": "^0.3.1",
     "axios": "^1.7.7",
@@ -33,6 +37,7 @@
     "sqlite3": "^5.1.7"
   },
   "devDependencies": {
+    "@capacitor/cli": "^7.6.9",
     "typescript": "^7.0.2"
   }
 }
