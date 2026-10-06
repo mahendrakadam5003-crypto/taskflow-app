@@ -11,6 +11,8 @@ const originals = new Map([dbPath, authPath, auditPath, storagePath].map(moduleP
 let projectQuery = '';
 const importedTaskRows = [];
 const importedHistoryRows = [];
+const importedCommentRows = [];
+const canonicalizedCommentRows = [];
 let taskDetailsFixture = null;
 let tenantContextCalls = 0;
 
@@ -40,6 +42,8 @@ const mockDb = {
           return { lastInsertRowid: 50 + importedTaskRows.length, changes: 1 };
         }
         if (sql.startsWith('INSERT INTO task_history')) importedHistoryRows.push({ sql, args });
+        if (sql.startsWith('INSERT INTO comments')) importedCommentRows.push({ sql, args });
+        if (sql.startsWith('UPDATE comments SET body=')) canonicalizedCommentRows.push({ sql, args });
         return { changes: 1 };
       }
     };
@@ -118,6 +122,8 @@ test('admin project CSV export quotes fields and neutralizes spreadsheet formula
 test('admin Asana import accepts month-keyed JSON and keeps completed tasks completed', async () => {
   importedTaskRows.length = 0;
   importedHistoryRows.length = 0;
+  importedCommentRows.length = 0;
+  canonicalizedCommentRows.length = 0;
   const contextCallsBefore = tenantContextCalls;
   const source = {
     project: { gid: '1200', name: 'Monthly Asana project', created_at: '2026-10-01T00:00:00.000Z', members: [] },
@@ -146,6 +152,13 @@ test('admin Asana import accepts month-keyed JSON and keeps completed tasks comp
           created_at: '2026-10-02T01:00:00.000Z',
           resource_subtype: 'due_date_changed',
           text: 'Asana-only person changed the due date to Oct 4'
+        },
+        {
+          created_by: { gid: 'actor-1', name: 'Asana-only person' },
+          created_at: '2026-10-02T01:01:00.000Z',
+          resource_subtype: 'comment_added',
+          text: 'https://app.asana.com/0/1212477603285297/1212477603285297 please update??',
+          html_text: '<body><a href="https://app.asana.com/0/1212477603285297/1212477603285297" data-asana-type="user">@Amit Waikar</a> please update??</body>'
         }
       ]],
       subtasks: [], attachments: []
@@ -177,6 +190,10 @@ test('admin Asana import accepts month-keyed JSON and keeps completed tasks comp
     'Asana-only person assigned to Mahendra kadam',
     'Asana-only person changed the due date to Oct 4'
   ]);
+  assert.equal(importedCommentRows.length, 1);
+  assert.equal(importedCommentRows[0].args[3], '@Amit Waikar please update??');
+  assert.equal(canonicalizedCommentRows[0].args[0], '@Amit Waikar please update??');
+  assert.equal(canonicalizedCommentRows[0].args[4], 'https://app.asana.com/0/1212477603285297/1212477603285297 please update??');
 });
 
 test('task details expose the imported Asana assignee name', async () => {

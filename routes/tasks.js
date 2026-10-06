@@ -808,6 +808,8 @@ router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUpl
           WHERE task_id=? AND body=? AND created_at=? AND (user_id IS ? OR user_id IS NULL))`);
       const commentBackfill = db.prepare(`UPDATE comments SET user_id=COALESCE(user_id, ?), author_name=COALESCE(author_name, ?)
         WHERE id=(SELECT id FROM comments WHERE task_id=? AND body=? AND created_at=? AND (user_id IS ? OR user_id IS NULL) ORDER BY id LIMIT 1)`);
+      const commentCanonicalize = db.prepare(`UPDATE comments SET body=?, user_id=COALESCE(user_id, ?), author_name=COALESCE(author_name, ?)
+        WHERE id=(SELECT id FROM comments WHERE task_id=? AND body=? AND created_at=? AND (user_id IS ? OR user_id IS NULL) ORDER BY id LIMIT 1)`);
       const historyInsert = db.prepare(`INSERT INTO task_history (task_id, actor_id, author_name, field_name, old_value, new_value, created_at)
         SELECT ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM task_history
           WHERE task_id=? AND field_name=? AND old_value=? AND new_value=? AND created_at=? AND (actor_id IS ? OR actor_id IS NULL))`);
@@ -835,10 +837,16 @@ router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUpl
         for (const story of stories) {
           const actorId = mapPerson(story.created_by);
           const actorName = getPersonName(story.created_by) || null;
-          const text = String(story.text || stripHtml(story.html_text));
+          const rawText = String(story.text || stripHtml(story.html_text));
+          const renderedHtmlText = story.html_text
+            ? stripHtml(String(story.html_text).replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, '$1'))
+            : '';
+          const text = renderedHtmlText || rawText;
           if (story.resource_subtype === 'comment_added' && text.trim()) {
             const commentBody = pathNames.length ? `[Asana subtask: ${currentPath.slice(1).join(' / ')}] ${text}` : text;
+            const legacyCommentBody = pathNames.length ? `[Asana subtask: ${currentPath.slice(1).join(' / ')}] ${rawText}` : rawText;
             const createdAt = story.created_at || new Date().toISOString();
+            await commentCanonicalize.run(commentBody, actorId, actorName, rootTaskId, legacyCommentBody, createdAt, actorId);
             await commentBackfill.run(actorId, actorName, rootTaskId, commentBody, createdAt, actorId);
             await commentInsert.run(rootTaskId, actorId, actorName, commentBody, createdAt, rootTaskId, commentBody, createdAt, actorId);
             importedCommentCount++;
