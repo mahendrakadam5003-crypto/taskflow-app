@@ -3008,8 +3008,10 @@ function getLiveCoords() {
 async function verifyAttendanceIfRequired(action) {
   const setting = await api('/attendance/verification-required');
   if (!setting.required) return null;
-  const biometricAuth = window.Capacitor?.Plugins?.BiometricAuth;
-  if (!biometricAuth) throw new Error('Attendance verification requires the installed TaskFlow mobile app.');
+  const biometricAuth = window.TaskFlowBiometricAuth;
+  if (!window.Capacitor?.isNativePlatform?.() || !biometricAuth) {
+    throw new Error('Attendance verification requires the installed TaskFlow mobile app.');
+  }
   const availability = await biometricAuth.checkBiometry();
   if (!availability.isAvailable) throw new Error('Set up fingerprint or Face ID on this device before punching ' + action + '.');
   try {

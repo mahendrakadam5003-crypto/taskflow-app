@@ -9,6 +9,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
+    "build:native-bridge": "esbuild scripts/native-capacitor-entry.js --bundle --platform=browser --format=iife --target=es2020 --outfile=public/js/native-capacitor.js",
+    "postinstall": "npm run build:native-bridge",
     "android:debug": "npx cap sync android && cd android && gradlew assembleDebug",
     "migrate:control": "node scripts/migrate-control-db.js",
     "migrate:all": "node scripts/migrate-all-tenants.js",
@@ -25,6 +27,7 @@
     "axios": "^1.7.7",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^9.6.0",
+    "esbuild": "^0.28.2",
     "express": "^4.19.2",
     "express-rate-limit": "^8.7.0",
     "express-session": "^1.18.0",
