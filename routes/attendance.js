@@ -118,9 +118,10 @@ async function canPunchFromDevice(userId, deviceType) {
   return deviceType === 'laptop' ? Number(access.allow_laptop) === 1 : Number(access.allow_phone) === 1;
 }
 
-async function requireAttendanceVerification(req, res) {
+async function requireAttendanceVerification(req, res, device) {
   const access = await db.prepare('SELECT user_id FROM attendance_verification_access WHERE user_id=?').get(req.session.userId);
   if (!access) return true;
+  if (req.body.verification_method === 'native-device-credential' && device.type === 'phone') return true;
   const password = req.body.verification_password;
   if (typeof password !== 'string' || !password) {
     res.status(403).json({ error: 'Re-enter your TaskFlow password to verify this attendance punch.' });
@@ -368,7 +369,7 @@ router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
   const coordinates = validateCoordinates(req.body.lat, req.body.lng);
   if (!coordinates) return res.status(400).json({ error: 'A valid latitude and longitude are required to punch in.' });
   const { lat, lng } = coordinates;
-  if (!(await requireAttendanceVerification(req, res))) return;
+  if (!(await requireAttendanceVerification(req, res, device))) return;
   
   const date = todayStr();
   const punchIn = await savePunchIn(req.session.userId, date, lat, lng, device, { req });
@@ -416,7 +417,7 @@ router.post('/punch-out', attendanceVerificationLimiter, async (req, res) => {
   const coordinates = validateCoordinates(req.body.lat, req.body.lng);
   if (!coordinates) return res.status(400).json({ error: 'A valid latitude and longitude are required to punch out.' });
   const { lat, lng } = coordinates;
-  if (!(await requireAttendanceVerification(req, res))) return;
+  if (!(await requireAttendanceVerification(req, res, device))) return;
   
   const date = todayStr();
   const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(req.session.userId, date);

@@ -152,7 +152,7 @@ after(async () => {
   delete require.cache[require.resolve('../routes/attendance')];
 });
 
-test('required attendance verification blocks direct punches without password and accepts a valid re-check', async () => {
+test('required attendance verification blocks unverified punches and accepts native phone verification', async () => {
   writes.length = 0;
   const request = verificationPassword => fetch(`${baseUrl}/api/attendance/punch-in`, {
     method: 'POST',
@@ -170,14 +170,36 @@ test('required attendance verification blocks direct punches without password an
   assert.deepEqual(await wrongPassword.json(), { error: 'Attendance password verification failed.' });
   assert.equal(writes.length, 0);
 
-  const verified = await fetch(`${baseUrl}/api/attendance/punch-in`, {
+  const desktopClaim = await fetch(`${baseUrl}/api/attendance/punch-in`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: cookie,
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0'
+    },
     body: JSON.stringify({
       device_id: deviceId,
       lat: 19.076,
       lng: 72.8777,
-      verification_password: 'AttendancePassword123'
+      verification_method: 'native-device-credential'
+    })
+  });
+  assert.equal(desktopClaim.status, 403);
+  assert.deepEqual(await desktopClaim.json(), { error: 'Re-enter your TaskFlow password to verify this attendance punch.' });
+  assert.equal(writes.length, 0);
+
+  const verified = await fetch(`${baseUrl}/api/attendance/punch-in`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: cookie,
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36'
+    },
+    body: JSON.stringify({
+      device_id: deviceId,
+      lat: 19.076,
+      lng: 72.8777,
+      verification_method: 'native-device-credential'
     })
   });
   assert.equal(verified.status, 200);
@@ -196,12 +218,16 @@ test('employees can punch out away from the configured office', async () => {
   try {
     const response = await fetch(`${baseUrl}/api/attendance/punch-out`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: cookie,
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36'
+      },
       body: JSON.stringify({
         device_id: deviceId,
         lat: 19.076,
         lng: 72.8777,
-        verification_password: 'AttendancePassword123'
+        verification_method: 'native-device-credential'
       })
     });
     assert.equal(response.status, 200);
