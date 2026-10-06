@@ -12,13 +12,49 @@ function normalizeEvent(event) {
     .slice(0, 100) || 'server_error';
 }
 
+function safeErrorDiagnostics(error) {
+  const diagnostics = [];
+  const seen = new Set();
+  let current = error;
+  while (current && typeof current === 'object' && diagnostics.length < 4 && !seen.has(current)) {
+    seen.add(current);
+    const type = typeof current.name === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(current.name)
+      ? current.name : 'Error';
+    const code = typeof current.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(current.code)
+      ? current.code : null;
+    const message = typeof current.message === 'string'
+      ? current.message.replace(/^(?:SQLITE_[A-Z_]+:\s*)+/i, '').trim()
+      : '';
+    const safeSummary = [
+      /^no such (?:table|column|index|function): [A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$/i,
+      /^table [A-Za-z_][A-Za-z0-9_]* has no column named [A-Za-z_][A-Za-z0-9_]*$/i,
+      /^(?:database is (?:locked|busy)|foreign key constraint failed|datatype mismatch|string or blob too big)$/i,
+      /^(?:unique|not null|check) constraint failed(?:: [A-Za-z0-9_., ]+| \([A-Za-z0-9_]+\))?$/i,
+      /^near '[A-Za-z_][A-Za-z0-9_]*': syntax error$/i
+    ].some(pattern => pattern.test(message)) ? message.slice(0, 180) : ({
+      ECONNRESET: 'Connection reset by remote host.',
+      ECONNREFUSED: 'Connection refused.',
+      ETIMEDOUT: 'Connection timed out.',
+      EAI_AGAIN: 'DNS resolution temporarily failed.',
+      ENOTFOUND: 'DNS host not found.',
+      SQLITE_BUSY: 'Database is busy or locked.',
+      SQLITE_LOCKED: 'Database is locked.'
+    })[code] || null;
+    diagnostics.push({ type, code, summary: safeSummary });
+    current = current.cause ?? (Array.isArray(current.errors) ? current.errors[0] : null);
+  }
+  return diagnostics.length ? JSON.stringify(diagnostics) : null;
+}
+
 function createUserErrorReporter({
   getDatabase = getControlDatabase,
   isConfigured = hasControlDatabaseConfiguration,
   logger = console.warn
 } = {}) {
-  return async function reportUserError(req, event, statusCode = 500) {
+  return async function reportUserError(req, event, statusCode = 500, error = null) {
     if (!Number.isInteger(statusCode) || statusCode < 500 || !isConfigured()) return false;
+    if (req?.userErrorReportStarted) return false;
+    if (req) req.userErrorReportStarted = true;
 
     const rawCompanyId = Number(req?.companyTenantId);
     const rawUserId = Number(req?.session?.userId);
@@ -33,17 +69,18 @@ function createUserErrorReporter({
       event: normalizeEvent(event),
       method: typeof req?.method === 'string' ? req.method.slice(0, 10).toUpperCase() : 'UNKNOWN',
       route: `${req?.baseUrl || ''}${route}`.replace(/[?#].*$/, '').slice(0, 300),
-      statusCode
+      statusCode,
+      diagnostics: safeErrorDiagnostics(error)
     };
 
     try {
       const controlDb = await getDatabase();
       await controlDb.execute({
         sql: `INSERT INTO user_error_reports (
-          company_id, company_code, actor_user_id, request_id, event, method, route, status_code
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          company_id, company_code, actor_user_id, request_id, event, method, route, status_code, diagnostics
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [report.companyId, report.companyCode, report.actorUserId, report.requestId,
-          report.event, report.method, report.route, report.statusCode]
+          report.event, report.method, report.route, report.statusCode, report.diagnostics]
       });
       return true;
     } catch (error) {
@@ -53,4 +90,4 @@ function createUserErrorReporter({
   };
 }
 
-module.exports = { createUserErrorReporter, normalizeEvent };
+module.exports = { createUserErrorReporter, normalizeEvent, safeErrorDiagnostics };

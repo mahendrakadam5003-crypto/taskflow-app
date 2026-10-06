@@ -128,10 +128,18 @@ function renderUserErrors(result) {
     ? result.errors.map(error => {
       const company = error.companyName || error.companyCode || (error.companyId ? `Company #${error.companyId}` : 'Unknown company');
       const event = error.event.replace(/[_-]+/g, ' ');
+      const diagnostics = Array.isArray(error.diagnostics) ? error.diagnostics : [];
+      const diagnosticDetails = diagnostics.length
+        ? `<details class="user-error-diagnostics"><summary>Technical details</summary><ul>${diagnostics.map(item => {
+          const label = [item.type, item.code].filter(Boolean).join(' · ');
+          return `<li><strong>${escapeHtml(label || 'Error')}</strong><span>${escapeHtml(item.summary || 'No safe message available.')}</span></li>`;
+        }).join('')}</ul></details>`
+        : '<small class="user-error-no-diagnostics">No diagnostic details were captured for this report.</small>';
       return `<article class="record-row user-error-row">
         <div><strong>${escapeHtml(company)} · ${escapeHtml(event)}</strong>
           <small>${escapeHtml(error.method)} ${escapeHtml(error.route)} · HTTP ${escapeHtml(error.statusCode)} · ${escapeHtml(formatDate(error.createdAt))}</small>
           <small>Request <code>${escapeHtml(error.requestId)}</code>${error.actorUserId ? ` · User #${escapeHtml(error.actorUserId)}` : ''}</small>
+          ${diagnosticDetails}
         </div>
         ${error.resolvedAt ? `<span>Resolved ${escapeHtml(formatDate(error.resolvedAt))}</span>` : `<button class="button button-quiet" type="button" data-error-resolve="${error.id}">Resolve</button>`}
       </article>`;
@@ -169,8 +177,17 @@ function renderCompanies(companies, plans) {
 
 function formatDate(value) {
   if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString([], { dateStyle: 'medium', timeStyle: value.includes(':') ? 'short' : undefined });
+  const rawValue = String(value);
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(rawValue);
+  const sqliteUtc = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/.exec(rawValue);
+  const date = dateOnly
+    ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+    : new Date(sqliteUtc ? `${sqliteUtc[1]}T${sqliteUtc[2]}Z` : rawValue);
+  if (Number.isNaN(date.getTime())) return rawValue;
+  const dateLabel = date.toLocaleDateString([], { dateStyle: 'medium' });
+  return rawValue.includes(':')
+    ? `${dateLabel} ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}`
+    : dateLabel;
 }
 
 function showControlPage(page) {

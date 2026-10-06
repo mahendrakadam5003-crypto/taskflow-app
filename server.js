@@ -405,7 +405,12 @@ app.use(session(sessionOptions));
 app.use(createCompanyContextMiddleware({ runWithTenant: db.runWithTenant }));
 app.use((req, res, next) => {
   res.locals.company_id = req.companyTenantId ?? null;
-  res.locals.reportUserError = (event, statusCode) => reportUserError(req, event, statusCode);
+  res.locals.reportUserError = (event, statusCode, error) => reportUserError(req, event, statusCode, error);
+  res.once('finish', () => {
+    if (res.statusCode >= 500 && !req.userErrorReportStarted) {
+      reportUserError(req, 'http_5xx_response', res.statusCode).catch(() => {});
+    }
+  });
   next();
 });
 app.use((req, res, next) => {
@@ -443,8 +448,9 @@ app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
   const status = Number(error.statusCode || error.status);
   const clientError = status >= 400 && status < 500;
+  const reportStatus = Number.isInteger(status) && status >= 500 && status <= 599 ? status : 500;
   console.error(JSON.stringify({ event: 'http_request_failed', company_id: req.companyTenantId ?? null }));
-  if (!clientError) reportUserError(req, 'unhandled_request_error', 500);
+  if (!clientError) reportUserError(req, 'unhandled_request_error', reportStatus, error);
   res.status(clientError ? status : 500).json({
     error: clientError ? 'Invalid request.' : 'Internal server error.'
   });

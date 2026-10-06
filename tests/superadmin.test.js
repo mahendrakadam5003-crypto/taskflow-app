@@ -71,6 +71,15 @@ test('super-admin plans and pricing page explains the entitlement and price spli
   assert.match(page, /Landing-page highlights are edited in these pricing tiers and must match the feature checkboxes on the plan you assign: Attendance, Reimbursements, and Data export\./);
 });
 
+test('Activity inbox renders escaped diagnostics and explains older reports without details', async () => {
+  const script = await fs.readFile(path.join(__dirname, '..', 'public', 'js', 'superadmin.js'), 'utf8');
+  assert.match(script, /<details class="user-error-diagnostics">/);
+  assert.match(script, /Technical details/);
+  assert.match(script, /escapeHtml\(label \|\| 'Error'\)/);
+  assert.match(script, /escapeHtml\(item\.summary \|\| 'No safe message available\.'/);
+  assert.match(script, /No diagnostic details were captured for this report/);
+});
+
 test('super-admin sections use accessible hash-addressable tabs and keep requests and activity separate', async () => {
   const page = await fs.readFile(path.join(__dirname, '..', 'public', 'superadmin.html'), 'utf8');
   assert.match(page, /<nav class="control-nav" role="tablist"/);
@@ -445,6 +454,42 @@ test('super-admin login uses an isolated hashed session and protects the read-on
     });
     const afterLogout = await fetch(`${baseUrl}/overview`, { headers: { Cookie: cookieHeader.split(';')[0] } });
     assert.equal(afterLogout.status, 401);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await controlDb.close();
+  }
+});
+
+test('super-admin Activity exposes safe error diagnostics and resolves reports', async () => {
+  const { controlDb, server, baseUrl } = await createApp();
+  try {
+    const login = await fetch(`${baseUrl}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'test owner', password: 'Superadmin-Test-Password-2026!' })
+    });
+    const headers = { Cookie: login.headers.get('set-cookie').split(';', 1)[0] };
+    const inserted = await controlDb.execute({
+      sql: `INSERT INTO user_error_reports (request_id, event, method, route, status_code, diagnostics)
+        VALUES (?, ?, ?, ?, ?, ?)`,
+      args: ['req-diagnostic-1', 'unhandled_request_error', 'GET', '/api/attendance/device-access/me', 500,
+        JSON.stringify([{ type: 'Error', code: 'SQLITE_ERROR', summary: 'no such column: allow_phone' }])]
+    });
+
+    const response = await fetch(`${baseUrl}/user-errors?status=all`, { headers });
+    assert.equal(response.status, 200);
+    const report = (await response.json()).errors.find(item => item.id === Number(inserted.lastInsertRowid));
+    assert.deepEqual(report.diagnostics, [
+      { type: 'Error', code: 'SQLITE_ERROR', summary: 'no such column: allow_phone' }
+    ]);
+
+    const resolved = await fetch(`${baseUrl}/user-errors/${report.id}/resolve`, { method: 'POST', headers });
+    assert.equal(resolved.status, 200);
+    const allReports = await fetch(`${baseUrl}/user-errors?status=all`, { headers });
+    const resolvedReport = (await allReports.json()).errors.find(item => item.id === report.id);
+    assert.ok(resolvedReport.resolvedAt);
+    const openReports = await fetch(`${baseUrl}/user-errors`, { headers });
+    assert.equal((await openReports.json()).pendingCount, 0);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await controlDb.close();

@@ -36,7 +36,7 @@ function sendInternalError(res, error, context) {
     event: String(context || 'request_failed').slice(0, 100),
     company_id: res.locals?.company_id ?? null
   }));
-  Promise.resolve(res.locals?.reportUserError?.(context || 'request_failed', 500)).catch(() => {});
+  Promise.resolve(res.locals?.reportUserError?.(context || 'request_failed', 500, error)).catch(() => {});
   if (res.headersSent) return;
   return res.status(500).json({ error: 'Internal server error.' });
 }

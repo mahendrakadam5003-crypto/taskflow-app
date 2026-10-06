@@ -588,7 +588,7 @@ function createSuperAdminRouter({
     const [errorsResult, pendingResult] = await Promise.all([
       controlDb.execute({
         sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
-          e.event, e.method, e.route, e.status_code, e.created_at, e.resolved_at,
+          e.event, e.method, e.route, e.status_code, e.diagnostics, e.created_at, e.resolved_at,
           c.name AS company_name, c.code AS registered_company_code
           FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
           WHERE ? = 'all' OR e.resolved_at IS NULL
@@ -611,6 +611,14 @@ function createSuperAdminRouter({
         method: row.method,
         route: row.route,
         statusCode: Number(row.status_code),
+        diagnostics: (() => {
+          try {
+            const parsed = JSON.parse(row.diagnostics || '[]');
+            return Array.isArray(parsed) ? parsed.slice(0, 4) : [];
+          } catch (error) {
+            return [];
+          }
+        })(),
         createdAt: row.created_at,
         resolvedAt: row.resolved_at
       }))

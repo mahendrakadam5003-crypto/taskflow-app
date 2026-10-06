@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 15;
+const CURRENT_SCHEMA_VERSION = 16;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -467,6 +467,12 @@ const CONTROL_MIGRATIONS = [{
     'CREATE INDEX IF NOT EXISTS invoices_status_due_idx ON invoices(status, due_at)',
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [15] }
   ]
+}, {
+  version: 16,
+  statements: [
+    'ALTER TABLE user_error_reports ADD COLUMN diagnostics TEXT',
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [16] }
+  ]
 }];
 
 function getControlDatabaseConfig(environment = process.env) {
@@ -565,6 +571,12 @@ async function migrateControlDatabase(client) {
         await client.execute(migration.statements[0]);
       }
       for (const statement of migration.statements.slice(1)) await client.execute(statement);
+    } else if (migration.version === 16) {
+      const columns = await client.execute('PRAGMA table_info(user_error_reports)');
+      if (!columns.rows.some(column => column.name === 'diagnostics')) {
+        await client.execute(migration.statements[0]);
+      }
+      await client.execute(migration.statements[1]);
     } else {
       await client.batch(migration.statements, 'write');
     }

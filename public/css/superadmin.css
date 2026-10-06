@@ -87,6 +87,12 @@ footer span { padding: 0 6px; color: var(--accent); }
 .user-error-list { padding: 0 24px; }
 .user-error-row { align-items: center; }
 .user-error-row code { color: #9aeee2; }
+  .user-error-diagnostics { margin-top: 8px; color: #d7e0eb; }
+  .user-error-diagnostics summary { color: #9aeee2; cursor: pointer; }
+  .user-error-diagnostics ul { display: grid; gap: 6px; margin: 8px 0 0; padding-left: 18px; }
+  .user-error-diagnostics li { padding-left: 2px; }
+  .user-error-diagnostics li strong, .user-error-diagnostics li span { display: block; overflow-wrap: anywhere; }
+  .user-error-diagnostics li span, .user-error-no-diagnostics { color: #91a0b4; font-size: 11px; }
 .user-error-empty { margin: 0; padding: 18px 0; color: var(--muted); font-size: 12px; }
 .provision-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; padding: 18px 24px 24px; }
 .form-field { min-width: 0; }
