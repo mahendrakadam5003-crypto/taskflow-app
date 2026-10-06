@@ -57,6 +57,11 @@ test('public root serves landing page and /app preserves the workspace login', a
   assert.match(employeeNoticeHtml, /Turso, Telegram, OpenStreetMap Nominatim/);
   assert.match(employeeNoticeHtml, /No automatic deletion by default/);
 
+  const consentTemplate = await fetch(`${baseUrl}/EMPLOYEE_DATA_CONSENT.md`);
+  assert.equal(consentTemplate.status, 200);
+  assert.match(consentTemplate.headers.get('content-disposition'), /attachment/);
+  assert.match(await consentTemplate.text(), /Employee Attendance and Data Notice/);
+
   const verifyPage = await fetch(`${baseUrl}/verify-email.html`);
   assert.equal(verifyPage.status, 200);
   assert.match(await verifyPage.text(), /noindex,nofollow/);

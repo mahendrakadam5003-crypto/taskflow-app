@@ -22,6 +22,9 @@ function createPublicPagesRouter(publicDirectory) {
     res.setHeader('Cache-Control', APP_SHELL_CACHE_CONTROL);
     res.sendFile(path.join(publicDirectory, 'index.html'));
   });
+  router.get('/EMPLOYEE_DATA_CONSENT.md', (req, res) => {
+    res.download(path.join(publicDirectory, '..', 'EMPLOYEE_DATA_CONSENT.md'));
+  });
   router.get('/employee-data-notice', (req, res) => res.sendFile(path.join(publicDirectory, 'employee-data-notice.html')));
   return router;
 }
