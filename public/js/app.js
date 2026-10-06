@@ -2022,7 +2022,8 @@ async function renderTasks() {
         const reopening = button.classList.contains('row-reopen');
         try {
           await api(`/tasks/${button.dataset.taskId}`, { method: 'PUT', body: { status: reopening ? 'open' : 'done' } });
-          reloadWithActionMessage('project', reopening ? 'Task reopened successfully.' : 'Task completed successfully.', CURRENT_PROJECT.id);
+          await renderTasks();
+          showAppNotification(reopening ? 'Task reopened successfully.' : 'Task completed successfully.');
         } catch (error) { showAppNotification(error.message); }
       };
     });
@@ -2598,7 +2599,9 @@ async function openTaskDrawer(taskId) {
         clearTimeout(autosaveTimer);
         if (!isCompleted) await saveChanges();
         await api(`/tasks/${taskId}`, { method: 'PUT', body: { status: isCompleted ? 'open' : 'done' } });
-        reloadWithActionMessage('project', isCompleted ? 'Task reopened successfully.' : 'Task completed successfully.', CURRENT_PROJECT.id);
+        await renderTasks();
+        await openTaskDrawer(taskId);
+        showAppNotification(isCompleted ? 'Task reopened successfully.' : 'Task completed successfully.');
       } catch (error) {
         if (!isCompleted && /billing details/i.test(error.message)) {
           const billingError = $('#drawer-billing-error');
@@ -2608,9 +2611,14 @@ async function openTaskDrawer(taskId) {
     };
     $('#btn-delete-task').onclick = async () => {
       if (!await confirmModal('Delete task?', 'Delete this task permanently?')) return;
-      await api(`/tasks/${taskId}`, { method: 'DELETE' });
-      closeDrawer();
-      renderTasks();
+      try {
+        await api(`/tasks/${taskId}`, { method: 'DELETE' });
+        closeDrawer();
+        await renderTasks();
+        showAppNotification('Task deleted successfully.');
+      } catch (error) {
+        showAppNotification(`Unable to delete task: ${error.message}`);
+      }
     };
     $('#btn-add-subtask').onclick = async () => {
       if (taskActionsLocked) return;
