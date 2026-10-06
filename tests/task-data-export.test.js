@@ -10,6 +10,8 @@ const storagePath = require.resolve('../telegram-storage');
 const originals = new Map([dbPath, authPath, auditPath, storagePath].map(modulePath => [modulePath, require.cache[modulePath]]));
 let projectQuery = '';
 const importedTaskRows = [];
+const importedHistoryRows = [];
+let taskDetailsFixture = null;
 let tenantContextCalls = 0;
 
 const mockDb = {
@@ -17,7 +19,13 @@ const mockDb = {
   prepare(sql) {
     if (sql.includes('FROM projects ORDER BY name, id')) projectQuery = sql;
     return {
-      get: async () => null,
+      get: async () => {
+        if (taskDetailsFixture && sql.includes('FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.id=?')) {
+          const { asana_assignee_name, ...task } = taskDetailsFixture;
+          return sql.includes('t.asana_assignee_name') ? { ...task, asana_assignee_name } : task;
+        }
+        return null;
+      },
       all: async () => {
         if (sql.includes('FROM projects ORDER BY name, id')) return [{ id: 10, name: 'Export project', created_by: 1, asana_gid: null, created_at: '2026-01-01' }];
         if (sql.includes('FROM project_members')) return [];
@@ -31,6 +39,7 @@ const mockDb = {
           importedTaskRows.push({ sql, args });
           return { lastInsertRowid: 50 + importedTaskRows.length, changes: 1 };
         }
+        if (sql.startsWith('INSERT INTO task_history')) importedHistoryRows.push({ sql, args });
         return { changes: 1 };
       }
     };
@@ -108,6 +117,7 @@ test('admin project CSV export quotes fields and neutralizes spreadsheet formula
 
 test('admin Asana import accepts month-keyed JSON and keeps completed tasks completed', async () => {
   importedTaskRows.length = 0;
+  importedHistoryRows.length = 0;
   const contextCallsBefore = tenantContextCalls;
   const source = {
     project: { gid: '1200', name: 'Monthly Asana project', created_at: '2026-10-01T00:00:00.000Z', members: [] },
@@ -117,7 +127,13 @@ test('admin Asana import accepts month-keyed JSON and keeps completed tasks comp
         created_at: '2026-10-02T00:00:00.000Z', modified_at: '2026-10-03T00:00:00.000Z',
         completed_at: '2026-10-03T00:00:00.000Z', due_on: '2026-10-04', memberships: [], custom_fields: []
       },
-      stories: [], subtasks: [], attachments: []
+      stories: [[{
+        created_by: { gid: 'actor-1', name: 'Asana-only person' },
+        created_at: '2026-10-02T01:00:00.000Z',
+        resource_subtype: 'due_date_changed',
+        text: 'Changed the due date to Oct 4'
+      }]],
+      subtasks: [], attachments: []
     }]
   };
   const form = new FormData();
@@ -134,4 +150,25 @@ test('admin Asana import accepts month-keyed JSON and keeps completed tasks comp
   assert.equal(importedTaskRows.length, 1);
   assert.equal(importedTaskRows[0].args[1], 'Completed October task');
   assert.equal(importedTaskRows[0].args[7], 'done');
+  assert.equal(importedHistoryRows.length, 1);
+  assert.equal(importedHistoryRows[0].args[2], 'Asana-only person');
+  assert.equal(importedHistoryRows[0].args[3], 'Asana: due_date_changed');
+  assert.equal(importedHistoryRows[0].args[5], 'Changed the due date to Oct 4');
+});
+
+test('task details expose the imported Asana assignee name', async () => {
+  taskDetailsFixture = {
+    id: 91,
+    project_id: 10,
+    title: 'Task assigned to an Asana-only person',
+    asana_assignee_name: 'Asana-only person',
+    assignee_name: 'Asana-only person'
+  };
+  const response = await fetch(`${baseUrl}/api/tasks/91`, { headers: { Cookie: cookie } });
+  const task = await response.json();
+  taskDetailsFixture = null;
+
+  assert.equal(response.status, 200);
+  assert.equal(task.asana_assignee_name, 'Asana-only person');
+  assert.equal(task.assignee_name, 'Asana-only person');
 });

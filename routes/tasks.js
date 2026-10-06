@@ -725,6 +725,7 @@ router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUpl
     return userId;
   };
   const stripHtml = value => String(value || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  const flattenRecords = records => Array.isArray(records) ? records.flat(Infinity) : [];
   const results = [];
 
   for (const file of files) {
@@ -755,8 +756,8 @@ router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUpl
         throw new Error('Expected an Asana project JSON with project metadata and a tasks array.');
       }
       const countImportUnits = bundle => 1
-        + (Array.isArray(bundle?.stories) ? bundle.stories.length : 0)
-        + (Array.isArray(bundle?.subtasks) ? bundle.subtasks.reduce((count, child) => count + countImportUnits(child), 0) : 0);
+        + flattenRecords(bundle?.stories).length
+        + flattenRecords(bundle?.subtasks).reduce((count, child) => count + countImportUnits(child), 0);
       const totalImportUnits = source.tasks.reduce((count, bundle) => count + countImportUnits(bundle), 0);
       currentProgress = { started_at: Date.now() };
       updateProgress(0, totalImportUnits, `Preparing ${sourceProject.name}...`);
@@ -775,8 +776,8 @@ router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUpl
       const indexTaskPeople = bundle => {
         const task = bundle?.task || {};
         [task.created_by, task.assignee, task.owner].forEach(indexPerson);
-        (bundle?.stories || []).forEach(story => indexPerson(story.created_by));
-        (bundle?.subtasks || []).forEach(indexTaskPeople);
+        flattenRecords(bundle?.stories).forEach(story => indexPerson(story?.created_by));
+        flattenRecords(bundle?.subtasks).forEach(indexTaskPeople);
       };
       source.tasks.forEach(indexTaskPeople);
       const duplicate = await db.prepare('SELECT id, name FROM projects WHERE asana_gid = ?').get(projectGid);
@@ -821,7 +822,7 @@ router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUpl
       const importTaskActivity = async (bundle, rootTaskId, pathNames = []) => {
         const taskData = bundle?.task || {};
         const currentPath = [...pathNames, String(taskData.name || 'Untitled task')];
-        const stories = Array.isArray(bundle?.stories) ? bundle.stories : [];
+        const stories = flattenRecords(bundle?.stories);
         for (const story of stories) {
           const actorId = mapPerson(story.created_by);
           const actorName = getPersonName(story.created_by) || null;
@@ -842,7 +843,7 @@ router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUpl
           completedImportUnits++;
           updateProgress(completedImportUnits, totalImportUnits, `Importing activity for ${currentPath[currentPath.length - 1]}...`);
         }
-        for (const childBundle of bundle?.subtasks || []) {
+        for (const childBundle of flattenRecords(bundle?.subtasks)) {
           const child = childBundle.task || {};
           const childPath = [...currentPath, String(child.name || 'Untitled subtask')];
           const subtaskTitle = pathNames.length ? childPath.slice(1).join(' / ') : String(child.name || 'Untitled subtask');
@@ -1534,7 +1535,7 @@ router.get('/tasks/:id', async (req, res) => {
     if (!(await canAccessTask(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You do not have access to this task' });
     const canViewPayments = await canViewPaymentHistory(req);
     const task = await db.prepare(`SELECT t.id, t.project_id, t.title, t.description, t.no_billing_required,
-      t.created_by, t.assignee_id, t.due_date, t.work_mode, t.status, t.position, t.asana_gid,
+      t.created_by, t.assignee_id, t.asana_assignee_name, t.due_date, t.work_mode, t.status, t.position, t.asana_gid,
       t.created_at, t.updated_at, t.completed_at,
       CASE WHEN ?=1 THEN t.invoice_type END AS invoice_type,
       CASE WHEN ?=1 THEN t.invoice_number END AS invoice_number,
