@@ -2122,7 +2122,7 @@ async function showNewTaskDrawer() {
   if (completeButton) { completeButton.textContent = 'Create task'; completeButton.className = 'btn btn-primary btn-block'; completeButton.style.display = ''; }
   if (deleteButton) deleteButton.style.display = 'none';
   $('#drawer-subtasks').innerHTML = '';
-  $('#drawer-comments').innerHTML = '<div class="hint">Comments will be available after the task is created.</div>';
+  $('#drawer-activity').innerHTML = '<div class="hint">Activity will be available after the task is created.</div>';
   drawer.classList.remove('hidden');
   $('#app').classList.add('drawer-open');
   title?.focus();
@@ -2181,7 +2181,7 @@ function showTaskDrawerLoading() {
   $('#drawer-desc').value = '';
   $('#drawer-desc').disabled = true;
   $('#drawer-subtasks').innerHTML = '<div class="drawer-loading-line"></div><div class="drawer-loading-line short"></div>';
-  $('#drawer-comments').innerHTML = '<div class="drawer-loading-line"></div><div class="drawer-loading-line"></div><div class="drawer-loading-line short"></div>';
+  $('#drawer-activity').innerHTML = '<div class="drawer-loading-line"></div><div class="drawer-loading-line"></div><div class="drawer-loading-line short"></div>';
   $('#btn-save-task').style.display = 'none';
   $('#btn-complete-task').style.display = 'none';
   $('#btn-delete-task').style.display = 'none';
@@ -2299,16 +2299,16 @@ async function openTaskDrawer(taskId) {
         openTaskDrawer(taskId);
       };
     });
-    const activityContainer = $('#drawer-comments');
-    const historyContainer = $('#drawer-history');
+    const activityContainer = $('#drawer-activity');
     const activityItems = [];
     let activityOffset = 0;
     let activityHasMore = false;
     let activityLoading = false;
+    let activityMode = 'all';
     const bindActivityActions = () => {
       $$('.task-difference-toggle').forEach(button => {
         button.onclick = () => {
-          const panel = historyContainer.querySelector(`[data-history-panel="${button.dataset.historyIndex}"]`);
+          const panel = activityContainer.querySelector(`[data-history-panel="${button.dataset.historyIndex}"]`);
           if (!panel) return;
           const expanded = panel.classList.toggle('hidden');
           button.textContent = expanded ? 'Show difference' : 'Hide difference';
@@ -2345,26 +2345,27 @@ async function openTaskDrawer(taskId) {
       });
     };
     const renderActivity = () => {
-      const renderGroups = (entries, renderEntry) => {
-        const groupedActivity = new Map();
-        entries.forEach(entry => {
-          const timestamp = fmtDateTime(entry.created_at);
-          if (!groupedActivity.has(timestamp)) groupedActivity.set(timestamp, []);
-          groupedActivity.get(timestamp).push(entry);
-        });
-        return Array.from(groupedActivity.entries()).reverse().map(([timestamp, groupEntries], groupIndex) => {
-          const contents = groupEntries.map((entry, entryIndex) => renderEntry(entry, entryIndex, timestamp, `${groupIndex}-${entryIndex}`)).join('');
-          return `<div class="task-activity-group">${contents}</div>`;
-        }).join('');
-      };
-      const commentsHtml = renderGroups(activityItems.filter(entry => entry.activity_type === 'comment'), (entry, entryIndex, timestamp) => `
-        <div class="activity-group-entry comment" data-comment-id="${entry.id}">
-          <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b>${entryIndex === 0 ? ` <span class="activity-inline-time">· ${escapeHtml(timestamp)}</span>` : ''}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
-          <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
-          ${renderCommentAttachment(entry)}
-        </div>`);
-      const historyHtml = renderGroups(activityItems.filter(entry => entry.activity_type !== 'comment'), (entry, entryIndex, timestamp, activityIndex) => {
-        const actor = escapeHtml(entry.actor_name || entry.author_name || (String(entry.field_name || '').startsWith('Asana:') ? 'Unknown Asana user' : 'Unknown user'));
+      const orderedItems = [...activityItems].sort((left, right) => {
+        const timeDifference = Date.parse(left.created_at) - Date.parse(right.created_at);
+        if (Number.isFinite(timeDifference) && timeDifference !== 0) return timeDifference;
+        if (left.activity_type !== right.activity_type) return left.activity_type === 'history' ? -1 : 1;
+        return Number(left.id) - Number(right.id);
+      });
+      const visibleItems = activityMode === 'comments'
+        ? orderedItems.filter(entry => entry.activity_type === 'comment')
+        : orderedItems;
+      const activityHtml = visibleItems.map((entry, index) => {
+        const timestamp = escapeHtml(fmtDateTime(entry.created_at));
+        if (entry.activity_type === 'comment') {
+          return `<div class="task-activity-group"><div class="activity-group-entry comment" data-comment-id="${entry.id}">
+            <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b> <span class="activity-inline-time">· ${timestamp}</span>${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
+            <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
+            ${renderCommentAttachment(entry)}
+          </div></div>`;
+        }
+        const isAsanaStory = String(entry.field_name || '').startsWith('Asana:');
+        const actorName = entry.author_name || entry.actor_name || '';
+        const actor = escapeHtml(actorName || (isAsanaStory ? 'Unknown Asana user' : 'Unknown user'));
         const oldValue = escapeHtml(entry.old_value || '(empty)');
         const newValue = escapeHtml(entry.new_value || '(empty)');
         let message = entry.field_name === 'Task created' ? 'created this task' : `changed the ${String(entry.field_name || 'activity').toLowerCase()}`;
@@ -2372,18 +2373,23 @@ async function openTaskDrawer(taskId) {
         if (entry.field_name === 'Due date') message = `changed the due date from ${oldValue} to ${newValue}`;
         if (entry.field_name === 'Task check-in') message = 'checked in to this task';
         if (entry.field_name === 'Task check-out') message = 'checked out of this task';
-        const difference = entry.field_name === 'Description' ? `<button type="button" class="link-btn task-difference-toggle" data-history-index="${activityIndex}">Show difference</button><div class="task-difference hidden" data-history-panel="${activityIndex}"><div class="task-history-old"><b>Old:</b> ${oldValue}</div><div class="task-history-new"><b>New:</b> ${newValue}</div></div>` : '';
-        return `<div class="activity-group-entry task-activity-change"><b>${actor}</b> ${message}${entryIndex === 0 ? ` <span class="activity-inline-time">· ${escapeHtml(timestamp)}</span>` : ''}${difference}</div>`;
-      });
-      activityContainer.innerHTML = commentsHtml || '<div class="hint">No comments yet.</div>';
-      historyContainer.innerHTML = `${activityHasMore ? '<button type="button" id="task-activity-load-more" class="link-btn">Load older activity</button>' : ''}${historyHtml || '<div class="hint">No task history yet.</div>'}<div id="task-activity-error" class="form-error"></div>`;
+        if (isAsanaStory) {
+          message = String(entry.new_value || '').trim();
+          if (actorName && message.toLocaleLowerCase().startsWith(actorName.toLocaleLowerCase())) message = message.slice(actorName.length).trim();
+          message = escapeHtml(message || 'updated this task');
+        }
+        const difference = entry.field_name === 'Description' ? `<button type="button" class="link-btn task-difference-toggle" data-history-index="${index}">Show difference</button><div class="task-difference hidden" data-history-panel="${index}"><div class="task-history-old"><b>Old:</b> ${oldValue}</div><div class="task-history-new"><b>New:</b> ${newValue}</div></div>` : '';
+        return `<div class="task-activity-group"><div class="activity-group-entry task-activity-change"><b>${actor}</b> ${message} <span class="activity-inline-time">· ${timestamp}</span>${difference}</div></div>`;
+      }).join('');
+      const emptyMessage = activityMode === 'comments' ? 'No comments yet.' : 'No activity yet.';
+      activityContainer.innerHTML = `${activityHasMore ? '<button type="button" id="task-activity-load-more" class="link-btn">Load more activity</button>' : ''}${activityHtml || `<div class="hint">${emptyMessage}</div>`}<div id="task-activity-error" class="form-error"></div>`;
       bindActivityActions();
       const loadOlderButton = $('#task-activity-load-more');
       if (loadOlderButton) loadOlderButton.onclick = async () => {
         if (activityLoading) return;
         activityLoading = true;
         loadOlderButton.disabled = true;
-        loadOlderButton.textContent = 'Loading older activity...';
+        loadOlderButton.textContent = 'Loading more activity...';
         try {
           const page = await api(`/tasks/${taskId}/activity?limit=15&offset=${activityOffset}`, { signal: controller.signal });
           if (activeTaskDrawerController !== controller) return;
@@ -2395,27 +2401,33 @@ async function openTaskDrawer(taskId) {
           const errorNode = $('#task-activity-error');
           if (errorNode) errorNode.textContent = error.message;
           loadOlderButton.disabled = false;
-          loadOlderButton.textContent = 'Retry loading older activity';
+          loadOlderButton.textContent = 'Retry loading activity';
         } finally {
           activityLoading = false;
         }
       };
     };
-    activityContainer.innerHTML = '<div class="hint">Loading comments...</div>';
-    historyContainer.innerHTML = '<div class="hint">Loading task history...</div>';
+    $$('.activity-filter-tab').forEach(button => {
+      button.onclick = () => {
+        activityMode = button.dataset.activityMode;
+        $$('.activity-filter-tab').forEach(tab => tab.setAttribute('aria-pressed', String(tab === button)));
+        renderActivity();
+      };
+    });
+    activityContainer.innerHTML = '<div class="hint">Loading activity...</div>';
     activityPagePromise.then(page => {
       if (activeTaskDrawerController !== controller) return;
       if (page.error) {
-        historyContainer.innerHTML = `<div class="form-error">Unable to load activity: ${escapeHtml(page.error.message)}</div><button type="button" id="task-activity-retry" class="link-btn">Retry</button>`;
+        activityContainer.innerHTML = `<div class="form-error">Unable to load activity: ${escapeHtml(page.error.message)}</div><button type="button" id="task-activity-retry" class="link-btn">Retry</button>`;
         $('#task-activity-retry').onclick = () => {
-          historyContainer.innerHTML = '<div class="hint">Loading task history...</div>';
+          activityContainer.innerHTML = '<div class="hint">Loading activity...</div>';
           api(`/tasks/${taskId}/activity?limit=15&offset=0`, { signal: controller.signal }).then(nextPage => {
             if (activeTaskDrawerController !== controller) return;
             activityItems.push(...nextPage.items);
             activityOffset = nextPage.next_offset;
             activityHasMore = nextPage.has_more;
             renderActivity();
-          }).catch(error => { historyContainer.innerHTML = `<div class="form-error">Unable to load activity: ${escapeHtml(error.message)}</div>`; });
+          }).catch(error => { activityContainer.innerHTML = `<div class="form-error">Unable to load activity: ${escapeHtml(error.message)}</div>`; });
         };
         return;
       }
@@ -2711,7 +2723,7 @@ async function openTaskDrawer(taskId) {
         ${escapeHtml(body).replace(/\n/g, '<br>')}
         ${attachmentPreviewUrl ? `<img class="comment-image comment-pending-attachment" src="${attachmentPreviewUrl}" alt="Uploading attachment">` : (attachment ? `<div class="hint comment-pending-attachment">${escapeHtml(attachment.name)}</div>` : '')}
         ${attachment ? '<div class="hint comment-pending-status">Uploading attachment...</div>' : '<div class="hint comment-pending-status">Sending...</div>'}`;
-      $('#drawer-comments').appendChild(commentEntry);
+      $('#drawer-activity').appendChild(commentEntry);
       commentEntry.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       const previousBody = body;
       const previousAttachment = attachment;
@@ -2757,7 +2769,7 @@ async function openTaskDrawer(taskId) {
     drawer.classList.remove('loading');
     $('#drawer-title').value = 'Unable to load task';
     const message = err.name === 'AbortError' ? 'Task loading timed out. Close and reopen the task to try again.' : err.message;
-    $('#drawer-comments').innerHTML = `<div class="form-error">${escapeHtml(message)}</div>`;
+    $('#drawer-activity').innerHTML = `<div class="form-error">${escapeHtml(message)}</div>`;
   }
 }
 

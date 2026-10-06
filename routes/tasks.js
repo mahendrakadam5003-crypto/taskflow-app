@@ -822,6 +822,15 @@ router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUpl
       const importTaskActivity = async (bundle, rootTaskId, pathNames = []) => {
         const taskData = bundle?.task || {};
         const currentPath = [...pathNames, String(taskData.name || 'Untitled task')];
+        if (!pathNames.length && taskData.created_by) {
+          const actorId = mapPerson(taskData.created_by);
+          const actorName = getPersonName(taskData.created_by) || null;
+          const title = String(taskData.name || 'Untitled task');
+          const createdAt = taskData.created_at || new Date().toISOString();
+          await historyBackfill.run(actorId, actorName, rootTaskId, 'Task created', '', title, createdAt, actorId);
+          await historyInsert.run(rootTaskId, actorId, actorName, 'Task created', '', title, createdAt,
+            rootTaskId, 'Task created', '', title, createdAt, actorId);
+        }
         const stories = flattenRecords(bundle?.stories);
         for (const story of stories) {
           const actorId = mapPerson(story.created_by);
@@ -833,7 +842,7 @@ router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUpl
             await commentBackfill.run(actorId, actorName, rootTaskId, commentBody, createdAt, actorId);
             await commentInsert.run(rootTaskId, actorId, actorName, commentBody, createdAt, rootTaskId, commentBody, createdAt, actorId);
             importedCommentCount++;
-          } else if (story.resource_subtype && story.resource_subtype !== 'added_to_project' && text.trim()) {
+          } else if (story.resource_subtype && text.trim()) {
             const fieldName = `Asana: ${story.resource_subtype}`;
             const createdAt = story.created_at || new Date().toISOString();
             await historyBackfill.run(actorId, actorName, rootTaskId, fieldName, '', text, createdAt, actorId);
@@ -1439,7 +1448,7 @@ router.get('/tasks/:id/activity', async (req, res) => {
         NULL AS user_name, u.name AS actor_name, h.field_name, h.old_value, h.new_value
       FROM task_history h LEFT JOIN users u ON u.id=h.actor_id WHERE h.task_id=?
     ) activity
-    ORDER BY created_at DESC, id DESC, activity_type DESC LIMIT ? OFFSET ?`)
+    ORDER BY created_at ASC, id ASC, activity_type ASC LIMIT ? OFFSET ?`)
       .all(req.params.id, req.params.id, limit + 1, offset);
     const hasMore = rows.length > limit;
     const page = rows.slice(0, limit);

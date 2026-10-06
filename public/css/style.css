@@ -389,6 +389,9 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .task-activity-change { padding: 9px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .task-activity-change b { color: var(--ink); }
 .task-activity-group { padding: 7px 0; border-bottom: 1px solid var(--line); }
+.activity-filter-tabs { display: flex; gap: 12px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.activity-filter-tab { padding: 7px 2px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+.activity-filter-tab[aria-pressed="true"] { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
 .activity-inline-time { color: var(--muted); font-size: 11px; font-weight: 400; white-space: nowrap; }
 .activity-group-entry.task-activity-change { padding: 3px 0; border: 0; }
 .activity-group-entry.comment { padding: 6px 0; border-bottom: 1px solid var(--line); }

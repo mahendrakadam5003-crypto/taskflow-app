@@ -336,9 +336,13 @@
       </div>
       </details>
       <details class="task-panel" open>
-        <summary>Comments</summary>
+        <summary>Activity</summary>
       <div class="field-block">
-        <div id="drawer-comments"></div>
+        <div class="activity-filter-tabs" role="group" aria-label="Activity filter">
+          <button type="button" class="activity-filter-tab" data-activity-mode="comments" aria-pressed="false">Comments</button>
+          <button type="button" class="activity-filter-tab" data-activity-mode="all" aria-pressed="true">All activity</button>
+        </div>
+        <div id="drawer-activity" class="task-history"></div>
         <div id="comment-image-preview" class="comment-image-preview hidden"></div>
         <div class="comment-input-row">
           <div class="comment-composer">
@@ -350,10 +354,6 @@
           <button class="btn btn-secondary" id="btn-add-comment">Post</button>
         </div>
       </div>
-      </details>
-      <details class="task-panel" open>
-        <summary>History</summary>
-        <div id="drawer-history" class="task-history"></div>
       </details>
       <div class="drawer-footer task-drawer-footer">
         <button class="btn btn-secondary" id="btn-save-task" style="display:none;">Save</button>

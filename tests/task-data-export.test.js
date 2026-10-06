@@ -125,14 +125,29 @@ test('admin Asana import accepts month-keyed JSON and keeps completed tasks comp
       task: {
         gid: '1201', name: 'Completed October task', notes: 'Imported notes', completed: true,
         created_at: '2026-10-02T00:00:00.000Z', modified_at: '2026-10-03T00:00:00.000Z',
-        completed_at: '2026-10-03T00:00:00.000Z', due_on: '2026-10-04', memberships: [], custom_fields: []
+        completed_at: '2026-10-03T00:00:00.000Z', due_on: '2026-10-04',
+        created_by: { gid: 'actor-1', name: 'Asana-only person' }, memberships: [], custom_fields: []
       },
-      stories: [[{
-        created_by: { gid: 'actor-1', name: 'Asana-only person' },
-        created_at: '2026-10-02T01:00:00.000Z',
-        resource_subtype: 'due_date_changed',
-        text: 'Changed the due date to Oct 4'
-      }]],
+      stories: [[
+        {
+          created_by: { gid: 'actor-1', name: 'Asana-only person' },
+          created_at: '2026-10-02T00:01:00.000Z',
+          resource_subtype: 'added_to_project',
+          text: 'Asana-only person added this task to SRS'
+        },
+        {
+          created_by: { gid: 'actor-1', name: 'Asana-only person' },
+          created_at: '2026-10-02T00:02:00.000Z',
+          resource_subtype: 'assigned',
+          text: 'Asana-only person assigned to Mahendra kadam'
+        },
+        {
+          created_by: { gid: 'actor-1', name: 'Asana-only person' },
+          created_at: '2026-10-02T01:00:00.000Z',
+          resource_subtype: 'due_date_changed',
+          text: 'Asana-only person changed the due date to Oct 4'
+        }
+      ]],
       subtasks: [], attachments: []
     }]
   };
@@ -150,10 +165,18 @@ test('admin Asana import accepts month-keyed JSON and keeps completed tasks comp
   assert.equal(importedTaskRows.length, 1);
   assert.equal(importedTaskRows[0].args[1], 'Completed October task');
   assert.equal(importedTaskRows[0].args[7], 'done');
-  assert.equal(importedHistoryRows.length, 1);
-  assert.equal(importedHistoryRows[0].args[2], 'Asana-only person');
-  assert.equal(importedHistoryRows[0].args[3], 'Asana: due_date_changed');
-  assert.equal(importedHistoryRows[0].args[5], 'Changed the due date to Oct 4');
+  assert.deepEqual(importedHistoryRows.map(({ args }) => args[3]), [
+    'Task created',
+    'Asana: added_to_project',
+    'Asana: assigned',
+    'Asana: due_date_changed'
+  ]);
+  assert.deepEqual(importedHistoryRows.map(({ args }) => args[5]), [
+    'Completed October task',
+    'Asana-only person added this task to SRS',
+    'Asana-only person assigned to Mahendra kadam',
+    'Asana-only person changed the due date to Oct 4'
+  ]);
 });
 
 test('task details expose the imported Asana assignee name', async () => {
