@@ -32,3 +32,9 @@ services:
         sync: false
       - key: TELEGRAM_CHANNEL_ID
         sync: false
+      - key: MAIL_PROVIDER
+        value: resend
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM
+        sync: false

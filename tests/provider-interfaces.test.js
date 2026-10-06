@@ -71,3 +71,69 @@ test('SMTP mailer sends configured messages without logging recipients or messag
     to: 'person@example.test', subject: 'Reset', text: 'token'
   }), /SMTP email delivery is not configured/);
 });
+
+test('Resend mailer sends through HTTPS without creating an SMTP transport', async () => {
+  const requests = [];
+  const mailer = createMailer({
+    environment: {
+      MAIL_PROVIDER: 'resend',
+      RESEND_API_KEY: 're_test_secret',
+      RESEND_FROM: 'TaskFlow <noreply@example.test>'
+    },
+    createTransport() {
+      assert.fail('Resend delivery must not initialize SMTP.');
+    },
+    async fetchImpl(url, options) {
+      requests.push({ url, options });
+      return { ok: true, status: 200 };
+    }
+  });
+
+  assert.equal(mailer.name, 'resend');
+  assert.equal(mailer.isConfigured(), true);
+  assert.deepEqual(await mailer.send({
+    to: 'person@example.test',
+    subject: 'Password reset',
+    text: 'reset_token=private'
+  }), { accepted: true, previewed: false });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'https://api.resend.com/emails');
+  assert.equal(requests[0].options.method, 'POST');
+  assert.equal(requests[0].options.headers.Authorization, 'Bearer re_test_secret');
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    from: 'TaskFlow <noreply@example.test>',
+    to: ['person@example.test'],
+    subject: 'Password reset',
+    text: 'reset_token=private'
+  });
+});
+
+test('Resend mailer reports API failures without logging message data or credentials', async () => {
+  const logs = [];
+  const mailer = createMailer({
+    environment: {
+      MAIL_PROVIDER: 'resend',
+      RESEND_API_KEY: 're_test_secret',
+      RESEND_FROM: 'noreply@example.test'
+    },
+    logger: entry => logs.push(entry),
+    async fetchImpl() { return { ok: false, status: 403 }; }
+  });
+
+  await assert.rejects(mailer.send({
+    to: 'person@example.test',
+    subject: 'Password reset',
+    text: 'reset_token=private'
+  }), /Resend email API returned HTTP 403/);
+  assert.equal(logs.length, 1);
+  assert.doesNotMatch(JSON.stringify(logs), /person@example\.test|reset_token|re_test_secret/);
+});
+
+test('Resend mailer requires an API key and verified sender configuration', () => {
+  assert.throws(() => createMailer({
+    environment: { MAIL_PROVIDER: 'resend', RESEND_API_KEY: 're_test_secret' }
+  }), /RESEND_API_KEY and RESEND_FROM are required/);
+  assert.throws(() => createMailer({
+    environment: { MAIL_PROVIDER: 'invalid' }
+  }), /MAIL_PROVIDER must be smtp or resend/);
+});

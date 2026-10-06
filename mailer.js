@@ -29,12 +29,32 @@ function smtpConfiguration(environment) {
   };
 }
 
-function createMailer({ environment = process.env, createTransport = nodemailer.createTransport, logger = console.warn } = {}) {
+function resendConfiguration(environment) {
+  const apiKey = String(environment.RESEND_API_KEY || '').trim();
+  const from = String(environment.RESEND_FROM || '').trim();
+  if (!apiKey || !from) {
+    throw new TypeError('RESEND_API_KEY and RESEND_FROM are required when MAIL_PROVIDER=resend.');
+  }
+  return { apiKey, from };
+}
+
+function createMailer({
+  environment = process.env,
+  createTransport = nodemailer.createTransport,
+  fetchImpl = globalThis.fetch,
+  logger = console.warn
+} = {}) {
   if (!environment || typeof environment !== 'object') throw new TypeError('Mailer environment must be an object.');
   if (typeof createTransport !== 'function') throw new TypeError('SMTP transport factory must be a function.');
+  if (typeof fetchImpl !== 'function') throw new TypeError('Email API fetch implementation must be a function.');
   if (typeof logger !== 'function') throw new TypeError('Mailer logger must be a function.');
-  const config = smtpConfiguration(environment);
-  const transport = config ? createTransport({
+  const requestedProvider = String(environment.MAIL_PROVIDER || '').trim().toLowerCase();
+  if (requestedProvider && !['smtp', 'resend'].includes(requestedProvider)) {
+    throw new TypeError('MAIL_PROVIDER must be smtp or resend.');
+  }
+  const provider = requestedProvider || (environment.RESEND_API_KEY ? 'resend' : 'smtp');
+  const config = provider === 'resend' ? resendConfiguration(environment) : smtpConfiguration(environment);
+  const transport = provider === 'smtp' && config ? createTransport({
     host: config.host,
     port: config.port,
     secure: config.secure,
@@ -44,7 +64,7 @@ function createMailer({ environment = process.env, createTransport = nodemailer.
   }) : null;
 
   return Object.freeze({
-    name: 'smtp',
+    name: provider,
     isConfigured: () => Boolean(config),
     async send(message) {
       const recipient = typeof message?.to === 'string' ? message.to.trim().slice(0, 254) : '';
@@ -54,21 +74,40 @@ function createMailer({ environment = process.env, createTransport = nodemailer.
         || (typeof message?.text !== 'string' && typeof message?.html !== 'string')) {
         throw new TypeError('Mail requires a valid recipient, subject, and text or HTML content.');
       }
-      if (!config || !transport) throw new Error('SMTP email delivery is not configured.');
+      if (!config || (provider === 'smtp' && !transport)) throw new Error('SMTP email delivery is not configured.');
       try {
-        const result = await transport.sendMail({
-          from: config.from,
-          to: recipient,
-          subject,
-          ...(typeof message.text === 'string' ? { text: message.text } : {}),
-          ...(typeof message.html === 'string' ? { html: message.html } : {})
-        });
-        if (!Array.isArray(result.accepted) || result.accepted.length === 0) {
-          throw new Error('SMTP server did not accept the message.');
+        if (provider === 'resend') {
+          const response = await fetchImpl('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${config.apiKey}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              from: config.from,
+              to: [recipient],
+              subject,
+              ...(typeof message.text === 'string' ? { text: message.text } : {}),
+              ...(typeof message.html === 'string' ? { html: message.html } : {})
+            }),
+            signal: AbortSignal.timeout(10000)
+          });
+          if (!response.ok) throw new Error(`Resend email API returned HTTP ${response.status}.`);
+        } else {
+          const result = await transport.sendMail({
+            from: config.from,
+            to: recipient,
+            subject,
+            ...(typeof message.text === 'string' ? { text: message.text } : {}),
+            ...(typeof message.html === 'string' ? { html: message.html } : {})
+          });
+          if (!Array.isArray(result.accepted) || result.accepted.length === 0) {
+            throw new Error('SMTP server did not accept the message.');
+          }
         }
         return { accepted: true, previewed: false };
       } catch (error) {
-        logger(JSON.stringify({ event: 'smtp_delivery_failed' }));
+        logger(JSON.stringify({ event: `${provider}_delivery_failed` }));
         throw error;
       }
     }
