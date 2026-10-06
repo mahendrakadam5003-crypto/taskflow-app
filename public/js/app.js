@@ -3489,7 +3489,13 @@ async function renderAdmin() {
       <div class="admin-block">
         <h3>Project and task permissions</h3>
         <p class="hint">Choose which project and task actions each user may perform. Admins always retain full access.</p>
+        <div class="admin-form-row permission-list-controls">
+          <input id="project-action-access-search" type="search" placeholder="Search by employee name or username" aria-label="Search permission users">
+          <label>Rows per page <select id="project-action-access-page-size" aria-label="Permission users per page"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
+          <span id="project-action-access-count" class="hint" aria-live="polite"></span>
+        </div>
         <div id="project-action-access-list"></div>
+        <div id="project-action-access-pagination" class="permission-pagination"></div>
       </div>
 
       <div class="admin-block">
@@ -4142,25 +4148,57 @@ async function renderAdmin() {
     });
     const projectActionList = $('#project-action-access-list');
     const projectActionLabels = { create_project: 'Create projects', edit_project: 'Rename/edit projects', delete_project: 'Delete projects', create_task: 'Add tasks', edit_task: 'Edit tasks', delete_task: 'Delete tasks', complete_task: 'Complete tasks' };
-    projectActionAccess.forEach((person) => {
-      const row = document.createElement('div');
-      row.className = 'admin-form-row';
-      const isAdmin = person.role === 'admin';
-      row.innerHTML = `<b style="min-width:180px;">${escapeHtml(person.name)}</b><div style="display:flex;flex-wrap:wrap;gap:10px;">${Object.entries(projectActionLabels).map(([action, label]) => `<label><input type="checkbox" data-project-action="${action}" data-project-user="${person.user_id}" ${Number(person[action]) === 1 ? 'checked' : ''} ${isAdmin ? 'disabled' : ''}> ${label}</label>`).join('')}</div><button class="btn btn-secondary btn-sm save-project-actions" data-project-user="${person.user_id}" ${isAdmin ? 'disabled' : ''}>Save</button>`;
-      projectActionList.appendChild(row);
-    });
-    $$('.save-project-actions').forEach((button) => {
-      button.onclick = async () => {
-        const userId = button.dataset.projectUser;
-        const row = button.closest('.admin-form-row');
-        const body = {};
-        row.querySelectorAll('[data-project-action]').forEach(input => { body[input.dataset.projectAction] = input.checked; });
-        try {
-          await api(`/project-action-access/${userId}`, { method: 'PUT', body });
-          showAppNotification('Project and task permissions updated.');
-        } catch (error) { showAppNotification(error.message); }
-      };
-    });
+    const projectActionSearch = $('#project-action-access-search');
+    const projectActionPageSize = $('#project-action-access-page-size');
+    const projectActionCount = $('#project-action-access-count');
+    const projectActionPagination = $('#project-action-access-pagination');
+    let projectActionPage = 0;
+    const renderProjectActionPage = () => {
+      const query = projectActionSearch.value.trim().toLocaleLowerCase();
+      const filtered = projectActionAccess.filter(person =>
+        `${person.name || ''} ${person.username || ''}`.toLocaleLowerCase().includes(query));
+      const pageSize = Number(projectActionPageSize.value) || 25;
+      const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+      projectActionPage = Math.min(projectActionPage, pageCount - 1);
+      const start = projectActionPage * pageSize;
+      const page = filtered.slice(start, start + pageSize);
+      projectActionList.innerHTML = '';
+      page.forEach(person => {
+        const row = document.createElement('div');
+        row.className = 'admin-form-row permission-user-row';
+        const isAdmin = person.role === 'admin';
+        row.innerHTML = `<div class="permission-user-name"><b>${escapeHtml(person.name)}</b><small>${escapeHtml(person.username || '')}</small></div><div class="permission-user-actions">${Object.entries(projectActionLabels).map(([action, label]) => `<label><input type="checkbox" data-project-action="${action}" data-project-user="${person.user_id}" ${Number(person[action]) === 1 ? 'checked' : ''} ${isAdmin ? 'disabled' : ''}> ${label}</label>`).join('')}</div><button class="btn btn-secondary btn-sm save-project-actions" data-project-user="${person.user_id}" ${isAdmin ? 'disabled' : ''}>Save</button>`;
+        projectActionList.appendChild(row);
+      });
+      projectActionCount.textContent = filtered.length
+        ? `Showing ${start + 1}-${Math.min(start + page.length, filtered.length)} of ${filtered.length} users`
+        : 'No matching users';
+      projectActionPagination.innerHTML = pageCount > 1
+        ? `<button type="button" class="btn btn-secondary btn-sm" data-permission-page="previous" ${projectActionPage === 0 ? 'disabled' : ''}>Previous</button><span>Page ${projectActionPage + 1} of ${pageCount}</span><button type="button" class="btn btn-secondary btn-sm" data-permission-page="next" ${projectActionPage >= pageCount - 1 ? 'disabled' : ''}>Next</button>`
+        : '';
+      projectActionPagination.querySelector('[data-permission-page="previous"]')?.addEventListener('click', () => { projectActionPage--; renderProjectActionPage(); });
+      projectActionPagination.querySelector('[data-permission-page="next"]')?.addEventListener('click', () => { projectActionPage++; renderProjectActionPage(); });
+      projectActionList.querySelectorAll('.save-project-actions').forEach(button => {
+        button.onclick = async () => {
+          const userId = button.dataset.projectUser;
+          const row = button.closest('.permission-user-row');
+          const body = {};
+          row.querySelectorAll('[data-project-action]').forEach(input => { body[input.dataset.projectAction] = input.checked; });
+          button.disabled = true;
+          try {
+            await api(`/project-action-access/${userId}`, { method: 'PUT', body });
+            showAppNotification('Project and task permissions updated.');
+          } catch (error) {
+            showAppNotification(error.message);
+          } finally {
+            button.disabled = false;
+          }
+        };
+      });
+    };
+    projectActionSearch.oninput = () => { projectActionPage = 0; renderProjectActionPage(); };
+    projectActionPageSize.onchange = () => { projectActionPage = 0; renderProjectActionPage(); };
+    renderProjectActionPage();
     const deviceAccessList = $('#attendance-device-access-list');
     deviceAccess.forEach((person) => {
       const row = document.createElement('div');
