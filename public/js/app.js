@@ -811,7 +811,15 @@ const mobileViewTitles = { dashboard: 'TaskFlow', projects: 'Projects', attendan
 const mobileBackButton = $('#btn-mobile-back');
 const dashboardLogoutButton = $('#dashboard-logout-btn');
 if (mobileBackButton) {
-  mobileBackButton.onclick = () => { closeDrawer(); showView('dashboard'); };
+  mobileBackButton.onclick = () => {
+    closeDrawer();
+    if (currentTaskFlowView === 'project') {
+      if (taskFlowViewHistory[taskFlowViewHistory.length - 1] === 'projects') taskFlowViewHistory.pop();
+      showView('projects', { fromBack: true });
+      return;
+    }
+    showView('dashboard');
+  };
 }
 if (dashboardLogoutButton) {
   dashboardLogoutButton.addEventListener('click', async () => {
@@ -1204,6 +1212,13 @@ function showView(view, { fromBack = false } = {}) {
   }
   if (view !== 'attendance') stopAttendanceClock();
   if (mobilePageTitle) mobilePageTitle.textContent = view === 'dashboard' ? 'TaskFlow' : (mobileViewTitles[view] || 'TaskFlow');
+  if (mobileBackButton) {
+    const backToProjects = view === 'project';
+    mobileBackButton.title = backToProjects ? 'Back to projects' : 'Back to dashboard';
+    mobileBackButton.setAttribute('aria-label', mobileBackButton.title);
+    mobileBackButton.classList.toggle('back-to-projects', backToProjects);
+    mobileBackButton.innerHTML = backToProjects ? '<span aria-hidden="true">‹</span><span class="mobile-back-label">Projects</span>' : '‹';
+  }
   const compactSidebarViews = new Set(['dashboard', 'attendance', 'reimbursements', 'mytasks', 'payment-history', 'notifications', 'admin', 'tracking']);
   const projectSidebarViews = new Set(['projects', 'project']);
   $('#app')?.classList.toggle('focused-view', compactSidebarViews.has(view));

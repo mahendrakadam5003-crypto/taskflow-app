@@ -226,6 +226,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .app.project-shell .mobile-menu-btn { display: none; }
 .app.project-shell .main { padding-top: 88px; }
 .mobile-back-btn { width: 36px; height: 36px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--navy); font-size: 25px; line-height: 1; }
+.mobile-back-btn.back-to-projects { width: auto; min-width: 36px; padding: 0 8px; gap: 5px; font-size: 13px; }
+.mobile-back-label { font-size: 12px; font-weight: 600; white-space: nowrap; }
 .logout-mini-btn {
   border: 1px solid var(--line); background: var(--surface); color: var(--ink);
   border-radius: 8px; padding: 7px 10px; font-size: 13px; font-weight: 600;
