@@ -3744,6 +3744,10 @@ async function renderAdmin() {
     if (planUsagePanel) {
       const plan = ME.plan || {};
       const usage = ME.usage || {};
+      const isTrial = ME.access?.reasons?.includes('trial_active') && usage.trialEndsAt;
+      const expiryDate = isTrial ? usage.trialEndsAt : plan.subscriptionEndsAt;
+      const expiryLabel = isTrial ? 'Trial ends' : (expiryDate ? 'Plan expires' : 'Trial ends');
+      const expiryText = expiryDate ? new Date(expiryDate).toLocaleDateString() : 'Not in trial';
       const limitText = (used, limit, formatter = value => Number(value || 0).toLocaleString()) =>
         `${formatter(used)} / ${limit == null ? 'Unlimited' : formatter(limit)}`;
       planUsagePanel.innerHTML = `
@@ -3751,7 +3755,7 @@ async function renderAdmin() {
           <div><dt>Plan</dt><dd>${escapeHtml(plan.name || 'No plan assigned')}</dd></div>
           <div><dt>Active users</dt><dd>${escapeHtml(limitText(usage.activeUsers, plan.maxUsers))}</dd></div>
           <div><dt>Storage</dt><dd>${escapeHtml(limitText(usage.storageBytes, plan.storageLimitBytes, value => formatStorageDisplay(0, value)))}</dd></div>
-          <div><dt>Trial ends</dt><dd>${escapeHtml(usage.trialEndsAt ? new Date(usage.trialEndsAt).toLocaleDateString() : 'Not in trial')}</dd></div>
+          <div><dt>${escapeHtml(expiryLabel)}</dt><dd>${escapeHtml(expiryText)}</dd></div>
         </dl>`;
     }
     const activateAdminTab = selected => {

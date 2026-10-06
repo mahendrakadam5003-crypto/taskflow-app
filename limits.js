@@ -61,6 +61,7 @@ function createPlanLimits({
           c.storage_limit_mb_override, p.id AS plan_id, p.name AS plan_name,
             p.max_users, p.storage_limit_mb, p.features_json,
             s.status AS subscription_status, s.seats AS subscription_seats,
+            s.current_period_end AS subscription_ends_at,
             ps.trial_max_users, ps.trial_storage_limit_mb
           FROM companies c LEFT JOIN plans p ON p.id = c.plan_id
           LEFT JOIN pricing_settings ps ON ps.id = 1
@@ -98,6 +99,7 @@ function createPlanLimits({
         companyCode: row.code,
         name: null,
         trialEndsAt: row.trial_ends_at || null,
+        subscriptionEndsAt: row.subscription_ends_at || null,
         maxUsers,
         storageLimitBytes: toBytes(storageLimitMb),
         features: ENABLED_FEATURES
@@ -109,6 +111,7 @@ function createPlanLimits({
       planId: Number(row.plan_id),
       name: row.plan_name,
       trialEndsAt: row.trial_ends_at || null,
+      subscriptionEndsAt: row.subscription_ends_at || null,
       maxUsers,
       storageLimitBytes: toBytes(storageLimitMb),
       features: parseFeatures(row.features_json)
@@ -152,6 +155,7 @@ function createPlanLimits({
       plan: plan ? {
         id: plan.planId ?? null,
         name: plan.name,
+        subscriptionEndsAt: plan.subscriptionEndsAt || null,
         maxUsers: plan.maxUsers,
         storageLimitBytes: plan.storageLimitBytes
       } : null,

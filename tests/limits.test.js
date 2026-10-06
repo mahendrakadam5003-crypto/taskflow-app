@@ -20,6 +20,7 @@ function createFixture({
   trialStorageLimitMb = 1024,
   subscriptionSeats = null,
   subscriptionStatus = null,
+  subscriptionEndsAt = null,
   features = { attendance: true, reimbursements: false, export: true }
 } = {}) {
   const fileUsage = new Map();
@@ -42,6 +43,7 @@ function createFixture({
           trial_storage_limit_mb: trialStorageLimitMb,
           subscription_seats: subscriptionSeats,
           subscription_status: subscriptionStatus,
+          subscription_ends_at: subscriptionEndsAt,
           features_json: JSON.stringify(features)
         }]
       };
@@ -93,7 +95,8 @@ test('company plan usage is per-tenant database plus tracked uploaded bytes', as
     id: 1,
     name: 'Test Plan',
     maxUsers: 2,
-    storageLimitBytes: 1024 * 1024
+    storageLimitBytes: 1024 * 1024,
+    subscriptionEndsAt: null
   });
   assert.deepEqual(result.features, { attendance: true, reimbursements: false, export: true });
   assert.equal(result.usage.activeUsers, 2);
@@ -130,6 +133,13 @@ test('new policy trials use configured trial seat and storage caps', async () =>
 test('paid subscription seats override the assigned plan seat default', async () => {
   const { limits, req } = createFixture({ maxUsers: 2, subscriptionSeats: 5, subscriptionStatus: 'active' });
   assert.equal((await limits.getPlan(req)).maxUsers, 5);
+});
+
+test('plan usage includes the paid subscription expiry date', async () => {
+  const subscriptionEndsAt = '2027-01-03T00:00:00.000Z';
+  const { limits, req } = createFixture({ subscriptionStatus: 'active', subscriptionEndsAt });
+  const result = await limits.getPlanUsage(req);
+  assert.equal(result.plan.subscriptionEndsAt, subscriptionEndsAt);
 });
 
 test('company storage usage activates the 80 percent warning before the 95 percent warning', async () => {
