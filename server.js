@@ -404,6 +404,10 @@ if (hasControlDatabaseConfiguration()) {
 app.use(session(sessionOptions));
 app.use(createCompanyContextMiddleware({ runWithTenant: db.runWithTenant }));
 app.use((req, res, next) => {
+  if (req.companyTenantId === undefined) return next();
+  return db.runWithTenant(req.companyTenantId, next);
+});
+app.use((req, res, next) => {
   res.locals.company_id = req.companyTenantId ?? null;
   res.locals.reportUserError = (event, statusCode, error) => reportUserError(req, event, statusCode, error);
   res.once('finish', () => {

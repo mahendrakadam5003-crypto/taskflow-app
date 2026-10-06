@@ -26,11 +26,15 @@ test('API route modules cannot open tenant database clients directly', () => {
 test('tenant context middleware is installed before every API router', () => {
   const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
   const contextPosition = server.indexOf('app.use(createCompanyContextMiddleware');
+  const tenantReentryPosition = server.indexOf('db.runWithTenant(req.companyTenantId, next)');
+  const authPosition = server.indexOf('return requireAuth(req, res, next)');
   const apiMounts = [...server.matchAll(/app\.use\(['"]\/api(?:\/[^'"]*)?['"]/g)];
 
   assert.notEqual(contextPosition, -1);
+  assert.ok(tenantReentryPosition > contextPosition);
+  assert.ok(authPosition > tenantReentryPosition);
   assert.ok(apiMounts.length > 0);
-  for (const mount of apiMounts) assert.ok(mount.index > contextPosition, `${mount[0]} must follow tenant context middleware`);
+  for (const mount of apiMounts) assert.ok(mount.index > tenantReentryPosition, `${mount[0]} must follow tenant context re-entry`);
   assert.match(server, /req\.path === '\/api\/public\/demo-requests'/);
 });
 
