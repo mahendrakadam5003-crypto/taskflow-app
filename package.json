@@ -21,6 +21,7 @@
     "@aparajita/capacitor-biometric-auth": "^9.1.2",
     "@capacitor/android": "^7.6.9",
     "@capacitor/core": "^7.6.9",
+    "@capacitor/geolocation": "^7.1.5",
     "@capacitor/ios": "^7.6.9",
     "@libsql/client": "^0.3.5",
     "@libsql/sqlite3": "^0.3.1",

@@ -2980,7 +2980,28 @@ async function renderMyTasks() {
 }
 
 // ================= FIELD ATTENDANCE GEO-TRACKING OPERATORS =================
-function getLiveCoords() {
+async function getLiveCoords() {
+  const nativeGeolocation = window.TaskFlowGeolocation;
+  if (window.Capacitor?.isNativePlatform?.()) {
+    if (!nativeGeolocation) throw new Error('Update the TaskFlow mobile app to enable location access.');
+    try {
+      let permission = await nativeGeolocation.checkPermissions();
+      if (permission.location !== 'granted') {
+        permission = await nativeGeolocation.requestPermissions({ permissions: ['location'] });
+      }
+      if (permission.location !== 'granted') {
+        throw new Error('Allow location permission for TaskFlow in phone settings, then try again.');
+      }
+      const position = await nativeGeolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 10000 });
+      return { lat: position.coords.latitude, lng: position.coords.longitude };
+    } catch (error) {
+      if (error.message?.startsWith('Allow location permission')) throw error;
+      if (/location services are disabled|location is disabled/i.test(error.message || '')) {
+        throw new Error('Turn on Location/GPS in phone settings, then try again.');
+      }
+      throw new Error('Unable to access location. Allow location for TaskFlow and turn on GPS, then try again.');
+    }
+  }
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) return reject(new Error('Location is not supported by this device browser.'));
     const requestLocation = () => navigator.geolocation.getCurrentPosition(
