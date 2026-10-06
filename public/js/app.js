@@ -3604,23 +3604,54 @@ async function renderAdmin() {
     if (importProjectsButton) importProjectsButton.onclick = async () => {
       const selectedJsonFiles = Array.from($('#asana-project-import-files')?.files || []);
       const directoryFiles = Array.from($('#asana-project-import-folder')?.files || []);
-      const candidateJsonFiles = [...selectedJsonFiles, ...directoryFiles.filter(file => file.name.toLowerCase() === 'project.json')];
+      const monthKeyPattern = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{2}$/i;
+      const candidateJsonFiles = [...selectedJsonFiles, ...directoryFiles.filter(file => /^(?:project(?:-\d+)?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{2}(?: \(\d+\))?)\.json$/i.test(file.name))];
       const projectsToImport = [];
-      const seenProjectGids = new Set();
+      const seenFiles = new Set();
       const selectionErrors = [];
       for (const file of candidateJsonFiles) {
         try {
           const source = JSON.parse((await file.text()).replace(/^\uFEFF/, ''));
           const projectGid = String(source.project?.gid || '');
+          const monthKeys = Object.keys(source).filter(key => monthKeyPattern.test(key) && Array.isArray(source[key]));
+          let uploadFile = file;
+          if (!Array.isArray(source.tasks) && monthKeys.length) {
+            source.tasks = monthKeys.flatMap(key => source[key]);
+            uploadFile = new File([JSON.stringify(source)], file.name, {
+              type: 'application/json',
+              lastModified: file.lastModified
+            });
+          }
           if (!projectGid || !Array.isArray(source.tasks)) throw new Error('Missing Asana project or tasks data.');
-          if (!seenProjectGids.has(projectGid)) {
-            projectsToImport.push({ file, source, projectGid });
-            seenProjectGids.add(projectGid);
+          const fileKey = `${file.name}|${file.size}|${file.lastModified}`;
+          if (!seenFiles.has(fileKey)) {
+            const monthLabel = monthKeys.sort((left, right) => {
+              const leftYear = Number(left.slice(-2));
+              const rightYear = Number(right.slice(-2));
+              if (leftYear !== rightYear) return rightYear - leftYear;
+              const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+              return monthNames.indexOf(right.slice(0, 3).toLowerCase()) - monthNames.indexOf(left.slice(0, 3).toLowerCase());
+            })[0] || '';
+            const monthParts = /\((\d+)\)\.json$/i.exec(file.name);
+            projectsToImport.push({
+              file: uploadFile,
+              source,
+              projectGid,
+              monthLabel,
+              monthOrder: monthLabel ? Number(monthLabel.slice(-2)) * 12
+                + ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(monthLabel.slice(0, 3).toLowerCase())
+                : Number.NEGATIVE_INFINITY,
+              partNumber: Number(monthParts?.[1] || 1)
+            });
+            seenFiles.add(fileKey);
           }
         } catch (error) {
           selectionErrors.push(`${file.name}: ${error.message}`);
         }
       }
+      projectsToImport.sort((left, right) => right.monthOrder - left.monthOrder
+        || left.partNumber - right.partNumber
+        || left.file.name.localeCompare(right.file.name));
       if (!projectsToImport.length) {
         renderDataToolIssues(selectionErrors);
         if (dataToolsStatus) dataToolsStatus.textContent = selectionErrors.length ? 'Some selected files could not be read.' : 'Choose Asana project JSON files or the exported Run folder.';
@@ -3628,14 +3659,13 @@ async function renderAdmin() {
       }
       const confirmed = await confirmModal(
         'Import Asana projects?',
-        `${projectsToImport.length} project file${projectsToImport.length === 1 ? '' : 's'} will be imported. Existing projects are reused. Users map by exact name; matching files from the selected export folder will be attached to their tasks.`,
+        `${projectsToImport.length} task file${projectsToImport.length === 1 ? '' : 's'} will be imported one at a time. Existing projects are reused, and a failed task file will not stop the rest. Users map by exact name; matching files from the selected export folder will be attached to their tasks.`,
         'Import projects',
         false
       );
       if (!confirmed) return;
       importProjectsButton.disabled = true;
-      let importedCount = 0;
-      const synchronizedProjects = [];
+      const synchronizedProjects = new Map();
       let attachmentCount = 0;
       let missingFileCount = 0;
       let unavailableFileCount = 0;
@@ -3644,14 +3674,14 @@ async function renderAdmin() {
       const warnings = [];
       renderDataToolIssues(failures);
       renderDataToolWarnings(warnings);
-      setDataToolsProgress(0, `Importing 0 of ${projectsToImport.length} project files...`);
+      setDataToolsProgress(0, `Importing 0 of ${projectsToImport.length} task files...`);
       try {
         const directoryFilesByName = new Map(directoryFiles.map(file => [file.name.toLocaleLowerCase(), file]));
         for (let index = 0; index < projectsToImport.length; index++) {
           const entry = projectsToImport[index];
           const projectProgress = (percent, phase = 'upload', serverProgress = null) => {
             if (phase === 'processing') {
-              setDataToolsProgress(100, `Uploaded project ${index + 1} of ${projectsToImport.length}; waiting for the server to import ${entry.source.project.name}...`, true, 'Upload 100%');
+              setDataToolsProgress(100, `Uploaded task file ${index + 1} of ${projectsToImport.length}; waiting for the server to import it into ${entry.source.project.name}...`, true, 'Upload 100%');
               return;
             }
             if (phase === 'server') {
@@ -3662,15 +3692,23 @@ async function renderAdmin() {
               setDataToolsProgress(percent, `${serverProgress?.message || `Importing ${entry.source.project.name}...`} · ${formatImportEta(serverProgress?.eta_seconds)}`, false, `${percent}% · ${formatImportEta(serverProgress?.eta_seconds)}`);
               return;
             }
-            setDataToolsProgress(percent, `Uploading project ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name} (${percent}%)...`, false, `File ${index + 1}/${projectsToImport.length}: ${percent}%`);
+            setDataToolsProgress(percent, `Uploading task file ${index + 1} of ${projectsToImport.length}: ${entry.source.project.name} (${percent}%)...`, false, `File ${index + 1}/${projectsToImport.length}: ${percent}%`);
           };
           projectProgress(0);
-          const projectForm = new FormData();
-          const preparedProject = await prepareProjectUpload(entry.file);
-          projectForm.append('projects', preparedProject.blob, preparedProject.filename);
-          const progressId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-          projectForm.append('progress_id', progressId);
-          const projectPayload = await postFormWithProgress('/api/admin/asana-import', projectForm, (percent, phase, serverProgress) => projectProgress(percent, phase, serverProgress), progressId);
+          let projectPayload;
+          try {
+            const projectForm = new FormData();
+            const preparedProject = await prepareProjectUpload(entry.file);
+            projectForm.append('projects', preparedProject.blob, preparedProject.filename);
+            const progressId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            projectForm.append('progress_id', progressId);
+            projectPayload = await postFormWithProgress('/api/admin/asana-import', projectForm, (percent, phase, serverProgress) => projectProgress(percent, phase, serverProgress), progressId);
+          } catch (error) {
+            failures.push(`${entry.file.name}: ${error.message}`);
+            renderDataToolIssues(failures);
+            setDataToolsProgress(((index + 1) / projectsToImport.length) * 100, `Skipped task file ${index + 1}; continuing with the next task.`);
+            continue;
+          }
           setDataToolsProgress(((index + 1) / projectsToImport.length) * 100, `Project ${index + 1} of ${projectsToImport.length} imported: ${entry.source.project.name}.`);
           const projectResult = projectPayload.results?.[0];
           if (!projectResult || projectResult.status === 'failed') {
@@ -3678,12 +3716,14 @@ async function renderAdmin() {
             renderDataToolIssues(failures);
             continue;
           }
-          if (projectResult.status === 'imported') importedCount++;
-          synchronizedProjects.push({
+          const projectKey = String(projectResult.project_id || entry.projectGid);
+          const synchronizedProject = synchronizedProjects.get(projectKey) || {
             id: Number(projectResult.project_id) || null,
             name: entry.source.project.name,
-            tasks: Number(projectResult.tasks || 0)
-          });
+            tasks: 0
+          };
+          synchronizedProject.tasks += Number(projectResult.tasks || 0);
+          synchronizedProjects.set(projectKey, synchronizedProject);
           if (projectResult.unmatched_users?.length) {
             warnings.push(`${entry.source.project.name}: no unique exact-name TaskFlow accounts matched ${projectResult.unmatched_users.join(', ')}. These people remain unassigned; their original Asana names stay visible on imported tasks and activity. Create matching TaskFlow accounts only if you want to assign them.`);
             renderDataToolWarnings(warnings);
@@ -3753,13 +3793,20 @@ async function renderAdmin() {
             const attachmentForm = new FormData();
             attachmentForm.append('mappings', JSON.stringify(mappings));
             batch.forEach(item => attachmentForm.append('attachments', item.file, item.file.name));
-            const attachmentPayload = await postFormWithProgress(`/api/admin/asana-import/${projectResult.project_id}/attachments`, attachmentForm, (percent, phase = 'upload') => {
-              if (phase === 'processing') {
-                setDataToolsProgress(100, `Uploaded attachment batch ${batchNumber} of ${batchCount}; waiting for the server...`, true, 'Upload 100%');
-                return;
-              }
-              setDataToolsProgress(percent, `Uploading attachments for ${entry.source.project.name}, batch ${batchNumber} of ${batchCount} (${percent}%)...`, false, `Batch ${batchNumber}/${batchCount}: ${percent}%`);
-            });
+            let attachmentPayload;
+            try {
+              attachmentPayload = await postFormWithProgress(`/api/admin/asana-import/${projectResult.project_id}/attachments`, attachmentForm, (percent, phase = 'upload') => {
+                if (phase === 'processing') {
+                  setDataToolsProgress(100, `Uploaded attachment batch ${batchNumber} of ${batchCount}; waiting for the server...`, true, 'Upload 100%');
+                  return;
+                }
+                setDataToolsProgress(percent, `Uploading attachments for ${entry.source.project.name}, batch ${batchNumber} of ${batchCount} (${percent}%)...`, false, `Batch ${batchNumber}/${batchCount}: ${percent}%`);
+              });
+            } catch (error) {
+              failures.push(`${entry.file.name}: attachment batch ${batchNumber} failed: ${error.message}`);
+              renderDataToolIssues(failures);
+              continue;
+            }
             for (const result of attachmentPayload.results || []) {
               if (result.status === 'imported') attachmentCount++;
               else if (result.status === 'failed') {
@@ -3770,8 +3817,9 @@ async function renderAdmin() {
           }
           setDataToolsProgress(((index + 1) / projectsToImport.length) * 100, `Project ${index + 1} of ${projectsToImport.length} processed: ${entry.source.project.name}.`);
         }
-        const projectSummary = synchronizedProjects.map(project => `${project.name}: ${project.tasks} tasks`).join('; ');
-        const summary = [`${importedCount} new project${importedCount === 1 ? '' : 's'} imported.`, `Synchronized ${synchronizedProjects.length} project${synchronizedProjects.length === 1 ? '' : 's'}${projectSummary ? ` (${projectSummary})` : ''}.`, `${attachmentCount} attachments copied.`];
+        const projectList = Array.from(synchronizedProjects.values());
+        const projectSummary = projectList.map(project => `${project.name}: ${project.tasks} tasks`).join('; ');
+        const summary = [`Processed ${projectsToImport.length} task file${projectsToImport.length === 1 ? '' : 's'}.`, `Synchronized ${projectList.length} project${projectList.length === 1 ? '' : 's'}${projectSummary ? ` (${projectSummary})` : ''}.`, `${attachmentCount} attachments copied.`];
         if (missingFileCount) failures.push(`${missingFileCount} attachment file(s) were not found in the selected folder.`);
         if (unavailableFileCount) failures.push(`${unavailableFileCount} Asana task attachment(s) had no downloaded file in the JSON export.`);
         if (unsupportedProjectAttachmentCount) failures.push(`${unsupportedProjectAttachmentCount} project-level attachment(s) are not supported yet.`);
@@ -3779,14 +3827,15 @@ async function renderAdmin() {
         renderDataToolIssues(failures);
         renderDataToolWarnings(warnings);
         finishDataToolsProgress();
-        if ((importedCount || attachmentCount) && failures.length === 0) {
+        if (projectList.length || attachmentCount) {
           await loadProjects();
-          const projectToOpen = synchronizedProjects.filter(project => project.id).sort((a, b) => b.tasks - a.tasks)[0];
+          const projectToOpen = projectList.filter(project => project.id).sort((a, b) => b.tasks - a.tasks)[0];
           if (projectToOpen) await openProject(projectToOpen.id);
-        } else if (failures.length) {
+        }
+        if (failures.length) {
           dataToolsStatus.textContent = `${summary.join(' ')} Review the listed issues before leaving this page.`;
         }
-        if (importedCount) showAppNotification(`${importedCount} Asana project${importedCount === 1 ? '' : 's'} imported.`);
+        if (projectList.length) showAppNotification(`${projectList.length} Asana project${projectList.length === 1 ? '' : 's'} synchronized.`);
       } catch (error) {
         failures.push(error.message);
         renderDataToolIssues(failures);

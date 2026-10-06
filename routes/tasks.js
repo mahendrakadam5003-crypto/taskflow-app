@@ -731,6 +731,17 @@ router.post('/admin/asana-import', requireAdmin, uploadRateLimit, handleAsanaUpl
       const source = JSON.parse(sourceBuffer.toString('utf8').replace(/^\uFEFF/, ''));
       const sourceProject = source.project;
       projectGid = String(sourceProject?.gid || '');
+      if (!Array.isArray(source.tasks)) {
+        const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+        const monthRank = label => {
+          const match = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{2})$/i.exec(label);
+          return match ? (2000 + Number(match[2])) * 12 + monthNames.indexOf(match[1].toLowerCase()) : Number.NEGATIVE_INFINITY;
+        };
+        const monthGroups = Object.entries(source)
+          .filter(([label, items]) => Array.isArray(items) && Number.isFinite(monthRank(label)))
+          .sort(([left], [right]) => monthRank(right) - monthRank(left));
+        if (monthGroups.length) source.tasks = monthGroups.flatMap(([, items]) => items);
+      }
       if (!projectGid || !sourceProject?.name || !Array.isArray(source.tasks)) {
         throw new Error('Expected an Asana project JSON with project metadata and a tasks array.');
       }

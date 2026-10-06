@@ -9,6 +9,7 @@ const auditPath = require.resolve('../audit');
 const storagePath = require.resolve('../telegram-storage');
 const originals = new Map([dbPath, authPath, auditPath, storagePath].map(modulePath => [modulePath, require.cache[modulePath]]));
 let projectQuery = '';
+const importedTaskRows = [];
 
 const mockDb = {
   prepare(sql) {
@@ -22,7 +23,14 @@ const mockDb = {
         if (sql.includes('FROM telegram_attachments WHERE task_id IN')) return [{ id: 7, file_id: 'telegram-file-reference', message_id: 8, original_name: 'evidence.pdf', mime_type: 'application/pdf', uploaded_by: 1, task_id: 50, created_at: '2026-01-01', deleted_at: null }];
         return [];
       },
-      run: async () => ({ changes: 0 })
+      run: async (...args) => {
+        if (sql.startsWith('INSERT INTO projects')) return { lastInsertRowid: 10, changes: 1 };
+        if (sql.startsWith('INSERT INTO tasks')) {
+          importedTaskRows.push({ sql, args });
+          return { lastInsertRowid: 50 + importedTaskRows.length, changes: 1 };
+        }
+        return { changes: 1 };
+      }
     };
   }
 };
@@ -93,4 +101,32 @@ test('admin project CSV export quotes fields and neutralizes spreadsheet formula
   assert.match(csv, /"project","task_id","title"/);
   assert.match(csv, /"'\=1\+1"/);
   assert.match(csv, /"evidence\.pdf"/);
+});
+
+test('admin Asana import accepts month-keyed JSON and keeps completed tasks completed', async () => {
+  importedTaskRows.length = 0;
+  const source = {
+    project: { gid: '1200', name: 'Monthly Asana project', created_at: '2026-10-01T00:00:00.000Z', members: [] },
+    'Oct 26': [{
+      task: {
+        gid: '1201', name: 'Completed October task', notes: 'Imported notes', completed: true,
+        created_at: '2026-10-02T00:00:00.000Z', modified_at: '2026-10-03T00:00:00.000Z',
+        completed_at: '2026-10-03T00:00:00.000Z', due_on: '2026-10-04', memberships: [], custom_fields: []
+      },
+      stories: [], subtasks: [], attachments: []
+    }]
+  };
+  const form = new FormData();
+  form.append('projects', new Blob([JSON.stringify(source)], { type: 'application/json' }), 'Oct 26.json');
+  const response = await fetch(`${baseUrl}/api/admin/asana-import`, {
+    method: 'POST', headers: { Cookie: cookie }, body: form
+  });
+
+  assert.equal(response.status, 200, await response.clone().text());
+  const result = await response.json();
+  assert.equal(result.results[0].project_name, 'Monthly Asana project');
+  assert.equal(result.results[0].tasks, 1);
+  assert.equal(importedTaskRows.length, 1);
+  assert.equal(importedTaskRows[0].args[1], 'Completed October task');
+  assert.equal(importedTaskRows[0].args[7], 'done');
 });
