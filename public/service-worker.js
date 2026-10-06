@@ -1,4 +1,4 @@
-const CACHE_NAME = 'taskflow-shell-v35';
+const CACHE_NAME = 'taskflow-shell-v36';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -36,16 +36,17 @@ self.addEventListener('fetch', event => {
 
   const refresh = fetch(request).then(async response => {
     if (response.ok) {
-      const cache = await caches.open(CACHE_NAME);
-      await cache.put(request, response.clone());
+      try {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(request, response.clone());
+      } catch { }
     }
     return response;
   });
-  event.waitUntil(refresh.then(() => undefined).catch(() => undefined));
-  event.respondWith(
-    caches.match(request, { ignoreSearch: true }).then(cached => cached || refresh.catch(() => {
-      if (request.mode === 'navigate') return caches.match('/index.html');
-      throw new Error('App shell asset is unavailable offline.');
-    }))
-  );
+  event.respondWith(refresh.catch(async () => {
+    const cached = await caches.match(request, { ignoreSearch: true });
+    if (cached) return cached;
+    if (request.mode === 'navigate') return caches.match('/index.html');
+    throw new Error('App shell asset is unavailable offline.');
+  }));
 });
