@@ -12,8 +12,8 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/taskflow.svg">
 <link rel="icon" href="/icons/taskflow.svg">
-<link rel="stylesheet" href="/css/style.css?v=20261007-13">
-<link rel="stylesheet" href="/css/theme.css?v=14">
+<link rel="stylesheet" href="/css/style.css?v=20261007-15">
+<link rel="stylesheet" href="/css/theme.css?v=16">
 <link rel="preload" href="/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
 </head>
 <body>
@@ -91,7 +91,7 @@
 </div>
 
 <!-- APP SHELL -->
-<div id="app" class="app hidden">
+<div id="app" class="app dashboard-view hidden">
   <aside class="sidebar">
     <div class="sidebar-top">
       <div class="brand"><svg class="icon" aria-hidden="true"><use href="#icon-flow"></use></svg>TaskFlow</div>
@@ -127,7 +127,6 @@
       <div class="mobile-topbar-actions">
         <button class="logout-mini-btn" id="dashboard-logout-btn" type="button">Logout</button>
         <button class="mobile-menu-btn" id="btn-mobile-nav" title="Open navigation" aria-label="Open navigation"><svg class="icon" aria-hidden="true"><use href="#icon-menu"></use></svg></button>
-        <button class="appearance-settings-button" id="btn-appearance-settings" type="button" aria-label="Appearance settings" title="Appearance settings">Aa</button>
       </div>
     </header>
     <div id="mobile-offline-banner" class="mobile-offline-banner hidden" role="status" aria-live="polite">
@@ -149,9 +148,12 @@
       <div class="dashboard-hero">
         <div class="dashboard-hero-row">
           <div><span class="eyebrow">Workspace</span><h1>Dashboard</h1><p>Choose where you want to work.</p></div>
-          <div class="dashboard-greeting">
-            <div id="dashboard-greeting-text">Good morning</div>
-            <div id="dashboard-date-text">Wednesday, September 23</div>
+          <div class="dashboard-hero-actions">
+            <div class="dashboard-greeting">
+              <div id="dashboard-greeting-text">Good morning</div>
+              <div id="dashboard-date-text">Wednesday, September 23</div>
+            </div>
+            <button class="appearance-settings-button" id="btn-appearance-settings" type="button" aria-label="Appearance settings" title="Appearance settings">Aa</button>
           </div>
         </div>
       </div>
@@ -287,7 +289,7 @@
   <!-- Task detail drawer -->
   <aside id="task-drawer" class="drawer hidden">
     <div class="drawer-header">
-      <input id="drawer-title" class="drawer-title-input" placeholder="Task title">
+      <input id="drawer-title" class="drawer-title-input" placeholder="Task title" aria-label="Task name">
       <span id="drawer-save-state" class="drawer-save-state"></span>
       <button class="icon-btn" id="drawer-close" title="Close task details" aria-label="Close task details"><svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
     </div>
@@ -411,6 +413,6 @@
 </div>
 
 <script src="/js/native-capacitor.js?v=43"></script>
-<script src="/js/app.js?v=46"></script>
+<script src="/js/app.js?v=47"></script>
 </body>
 </html>

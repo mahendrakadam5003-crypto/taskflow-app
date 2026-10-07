@@ -512,8 +512,7 @@ html.is-native textarea::placeholder { color: #7B8494; }
   html.is-native .app.project-shell .main { padding-top: calc(60px + env(safe-area-inset-top)); padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
   html.is-native .main { min-height: 0; padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
   html.is-native .mobile-back-btn,
-  html.is-native .mobile-menu-btn,
-  html.is-native .appearance-settings-button {
+  html.is-native .mobile-menu-btn {
     display: inline-flex;
     width: 44px;
     min-width: 44px;
@@ -527,7 +526,23 @@ html.is-native textarea::placeholder { color: #7B8494; }
     font: inherit;
     font-weight: 700;
   }
-  html.is-native .appearance-settings-button { display: inline-flex; }
+  html.is-native .app.dashboard-view .appearance-settings-button {
+    display: inline-flex;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-weight: 700;
+  }
+  html.is-native .app:not(.dashboard-view) .appearance-settings-button { display: none; }
+  html.is-native .dashboard-hero-actions { align-items: center; }
+  html.is-native .dashboard-greeting { padding-top: 0; text-align: right; }
   html.is-native .mobile-topbar-actions { gap: 6px; }
   html.is-native .logout-mini-btn { min-height: 44px; }
   html.is-native .mobile-offline-banner:not(.hidden) {
@@ -641,8 +656,8 @@ html.is-native textarea::placeholder { color: #7B8494; }
   }
 
   html.is-native .sidebar { height: 100dvh; }
-  html.is-native .app.focused-view .drawer,
-  html.is-native .app.project-shell .drawer { height: calc(100dvh - 52px - env(safe-area-inset-top)); }
+  html.is-native .app.focused-view:not(.drawer-open) .drawer,
+  html.is-native .app.project-shell:not(.drawer-open) .drawer { height: calc(100dvh - 52px - env(safe-area-inset-top)); }
   html.is-native .attendance-shift-action { padding: 14px 0; }
   html.is-native .attendance-shift-details span { font-size: 12px; }
   html.is-native .attendance-punch-action {

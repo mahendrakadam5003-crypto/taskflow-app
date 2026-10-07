@@ -1843,6 +1843,7 @@ function showView(view, { fromBack = false } = {}) {
   }
   const compactSidebarViews = new Set(['dashboard', 'attendance', 'reimbursements', 'mytasks', 'payment-history', 'notifications', 'admin', 'tracking']);
   const projectSidebarViews = new Set(['projects', 'project']);
+  $('#app')?.classList.toggle('dashboard-view', view === 'dashboard');
   $('#app')?.classList.toggle('focused-view', compactSidebarViews.has(view));
   $('#app')?.classList.toggle('project-shell', projectSidebarViews.has(view));
   if (mobileBackButton) mobileBackButton.style.display = view === 'dashboard' ? 'none' : '';
