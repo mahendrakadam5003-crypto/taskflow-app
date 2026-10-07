@@ -87,6 +87,7 @@ if (nativeApp) {
 let activeTaskDrawerController = null;
 let taskListRequestId = 0;
 let activeTaskListController = null;
+let taskListPagination = { key: '', afterId: 0, hasMore: false, tasks: [] };
 let dashboardSummaryRequestId = 0;
 let forcedPasswordModalOpen = false;
 let modalReturnFocus = null;
@@ -2724,7 +2725,7 @@ document.addEventListener('click', (event) => {
   if (!event.target.closest('.task-search-wrap')) hideTaskSearchSuggestions();
 });
 
-async function renderTasks() {
+async function renderTasks({ loadMore = false } = {}) {
   if (!CURRENT_PROJECT) return;
   const list = $('#task-list');
   if (!list) return;
@@ -2734,60 +2735,58 @@ async function renderTasks() {
   const controller = new AbortController();
   activeTaskListController = controller;
   const loadTimeout = setTimeout(() => controller.abort(), 30_000);
-  list.innerHTML = '<tr><td colspan="4"><div class="task-list-skeleton" role="status" aria-label="Loading tasks"><span></span><span></span><span></span></div></td></tr>';
-  let tasks = [];
+  const searchInput = $('#task-search');
+  const search = searchInput?.dataset.fullSearch === 'true' ? searchInput.value.trim() : '';
+  const query = new URLSearchParams({
+    status: search ? 'all' : ($('#task-filter-status')?.value || 'open'),
+    assignee_id: $('#task-filter-assignee')?.value || 'all',
+    created_by: $('#task-filter-created-by')?.value || 'all'
+  });
+  if (search) query.set('q', search);
+  [['due_date', 'task-filter-due'], ['created_on', 'task-filter-created-on'], ['modified_on', 'task-filter-modified-on'], ['completed_on', 'task-filter-completed-on']].forEach(([key, id]) => {
+    const value = $(`#${id}`)?.value;
+    if (value) query.set(key, value);
+  });
+  const paginationKey = `${projectId}?${query.toString()}`;
+  const appendPage = !search && loadMore && taskListPagination.key === paginationKey && taskListPagination.hasMore;
+  if (!appendPage) {
+    taskListPagination = { key: paginationKey, afterId: 0, hasMore: false, tasks: [] };
+    list.innerHTML = '<tr><td colspan="4"><div class="task-list-skeleton" role="status" aria-label="Loading tasks"><span></span><span></span><span></span></div></td></tr>';
+  } else {
+    list.querySelector('#task-list-more')?.remove();
+    list.querySelector('#task-list-retry')?.closest('tr')?.remove();
+    list.insertAdjacentHTML('beforeend', '<tr id="task-list-loading-more"><td colspan="4" class="hint">Loading more tasks...</td></tr>');
+  }
+  let tasks = appendPage ? taskListPagination.tasks.slice() : [];
   try {
-    const searchInput = $('#task-search');
-    const search = searchInput?.dataset.fullSearch === 'true' ? searchInput.value.trim() : '';
-    const query = new URLSearchParams({
-      status: search ? 'all' : ($('#task-filter-status')?.value || 'open'),
-      assignee_id: $('#task-filter-assignee')?.value || 'all',
-      created_by: $('#task-filter-created-by')?.value || 'all'
-    });
-    if (search) query.set('q', search);
-    [['due_date', 'task-filter-due'], ['created_on', 'task-filter-created-on'], ['modified_on', 'task-filter-modified-on'], ['completed_on', 'task-filter-completed-on']].forEach(([key, id]) => {
-      const value = $(`#${id}`)?.value;
-      if (value) query.set(key, value);
-    });
     if (search) {
       tasks = await api(`/tasks/search?q=${encodeURIComponent(search)}`, { signal: controller.signal });
       if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
     } else {
-      tasks = [];
-      let afterId = 0;
       const pageSize = 200;
-      while (true) {
-        const pageQuery = new URLSearchParams(query);
-        pageQuery.set('after_id', String(afterId));
-        pageQuery.set('limit', String(pageSize));
-        let page;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            page = await api(`/projects/${projectId}/tasks?${pageQuery.toString()}`, { signal: controller.signal });
-            break;
-          } catch (error) {
-            if (error.name === 'AbortError' || (error.status && error.status < 500) || attempt === 2) throw error;
-            await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
-          }
+      const afterId = appendPage ? taskListPagination.afterId : 0;
+      const pageQuery = new URLSearchParams(query);
+      pageQuery.set('after_id', String(afterId));
+      pageQuery.set('limit', String(pageSize));
+      let page;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          page = await api(`/projects/${projectId}/tasks?${pageQuery.toString()}`, { signal: controller.signal });
+          break;
+        } catch (error) {
+          if (error.name === 'AbortError' || (error.status && error.status < 500) || attempt === 2) throw error;
+          await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
         }
-        if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
-        tasks.push(...page);
-        if (afterId === 0 && page.length === pageSize) {
-          list.innerHTML = tasks.map(task => `
-            <tr class="task-row ${task.status === 'done' ? 'done' : ''}" data-task-id="${task.id}">
-              <td data-label="Complete"></td><td class="task-title-cell" data-label="Task"><span class="task-mobile-label">Task</span><b>${escapeHtml(task.title)}</b></td>
-              <td class="task-assignee-cell" data-label="Assignee"><span class="task-mobile-label">Assignee</span><span class="assignee-cell"><span class="avatar" aria-hidden="true">${escapeHtml(getInitials(task.assignee_name || ''))}</span>${escapeHtml(task.assignee_name || 'Unassigned')}</span></td>
-              <td class="task-due-cell" data-label="Due"><span class="task-mobile-label">Due</span><span class="chip ${getDueState(task.due_date).className}">${escapeHtml(getDueState(task.due_date).label)}</span></td>
-            </tr>`).join('') + '<tr id="task-list-loading-more"><td colspan="4" class="hint">Loading remaining tasks...</td></tr>';
-          $$('.task-row').forEach(row => {
-            row.onclick = () => openTaskDrawer(Number(row.dataset.taskId));
-          });
-        }
-        if (page.length < pageSize) break;
-        const nextAfterId = Number(page[page.length - 1].id);
-        if (!Number.isFinite(nextAfterId) || nextAfterId <= afterId) break;
-        afterId = nextAfterId;
       }
+      if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
+      tasks = appendPage ? tasks.concat(page) : page;
+      const nextAfterId = Number(page[page.length - 1]?.id);
+      taskListPagination = {
+        key: paginationKey,
+        afterId: Number.isFinite(nextAfterId) && nextAfterId > afterId ? nextAfterId : afterId,
+        hasMore: page.length === pageSize && Number.isFinite(nextAfterId) && nextAfterId > afterId,
+        tasks
+      };
     }
     if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
     const resultsHeading = $('#task-search-results-heading');
@@ -2810,6 +2809,10 @@ async function renderTasks() {
         <td class="task-due-cell" data-label="Due"><span class="task-mobile-label">Due</span><span class="chip ${due.className}">${escapeHtml(due.label)}</span></td>
       </tr>`;
     }).join('') : `<tr><td colspan="4"><div class="empty-state">${icon('check')}<b>${search ? 'No matching tasks' : 'No tasks yet'}</b><p>${search ? 'Try a different search or clear your filters.' : 'Add a task to get this project moving.'}</p>${PROJECT_ACTION_ACCESS.create_task ? '<button type="button" class="btn btn-primary" id="empty-add-task">Add task</button>' : ''}</div></td></tr>`;
+    if (!search && taskListPagination.hasMore) {
+      list.insertAdjacentHTML('beforeend', `<tr id="task-list-more"><td colspan="4" class="hint" style="text-align:center;padding:12px"><button type="button" class="link-btn" id="task-list-load-more">Load more tasks (${tasks.length} shown)</button></td></tr>`);
+      $('#task-list-load-more').onclick = () => renderTasks({ loadMore: true });
+    }
     $('#empty-add-task')?.addEventListener('click', () => $('#btn-new-task')?.click());
     $$('.row-complete').forEach(button => {
       button.onclick = async () => {
@@ -2841,13 +2844,13 @@ async function renderTasks() {
   } catch (err) {
     if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
     const message = err.name === 'AbortError'
-      ? 'Task loading timed out before all results arrived.'
+      ? 'Task loading timed out. Please try again.'
       : err.message;
     $('#task-list-loading-more')?.remove();
     const errorRow = `<tr><td colspan="4" class="form-error">${escapeHtml(message)} <button type="button" class="link-btn" id="task-list-retry">Retry</button></td></tr>`;
     if (tasks.length) list.insertAdjacentHTML('beforeend', errorRow);
     else list.innerHTML = errorRow;
-    $('#task-list-retry').onclick = () => renderTasks();
+    $('#task-list-retry').onclick = () => renderTasks({ loadMore: appendPage });
   } finally {
     clearTimeout(loadTimeout);
     if (activeTaskListController === controller) activeTaskListController = null;
