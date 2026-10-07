@@ -30,7 +30,10 @@ let trackingTimelinePoints = null;
 let trackingTimelineEvents = [];
 let officeSettingsReadCount = 0;
 let attendanceRecordForPunchOut = null;
+const attendanceRows = new Map();
+const punchSessions = new Map();
 const attendanceAccess = { allow_phone: 1, allow_mobile_browser: 1, allow_laptop: 1 };
+const attendanceKey = (userId, date) => `${userId}:${date}`;
 
 const mockDb = {
   ready: Promise.resolve(),
@@ -44,7 +47,17 @@ const mockDb = {
         }
         if (sql.includes('SELECT allow_phone, allow_mobile_browser, allow_laptop FROM attendance_device_access')) return attendanceAccess;
         if (sql.includes('SELECT id, active FROM users WHERE id=?')) return { id: userId, active: 1 };
-        if (sql.includes('SELECT * FROM attendance WHERE user_id = ? AND date = ?')) return attendanceRecordForPunchOut;
+        if (sql.includes('FROM attendance_punch_sessions')) {
+          const sessions = punchSessions.get(attendanceKey(args[0], args[1])) || [];
+          return sessions.find(session => !session.punch_out) || null;
+        }
+        if (sql.includes('SELECT * FROM attendance WHERE user_id = ? AND date = ?')) {
+          return attendanceRecordForPunchOut || attendanceRows.get(attendanceKey(args[0], args[1])) || null;
+        }
+        if (sql.includes('SELECT id FROM attendance WHERE user_id = ? AND date = ?')) {
+          const attendance = attendanceRows.get(attendanceKey(args[0], args[1])) || attendanceRecordForPunchOut;
+          return attendance ? { id: attendance.id } : null;
+        }
         if (sql.includes('SELECT id, punch_in, punch_out FROM attendance WHERE user_id = ? AND date = ?')) {
           return args[1] === activeShiftDate ? { id: 35, punch_in: activeShiftPunchIn, punch_out: null } : null;
         }
@@ -53,7 +66,12 @@ const mockDb = {
         if (sql.includes('SELECT latitude, longitude FROM attendance_locations')) return null;
         return null;
       },
-      all: async () => {
+      all: async (...args) => {
+        if (sql.includes('FROM attendance_punch_sessions')) {
+          const sessions = [...punchSessions.values()].flat();
+          if (sql.includes('WHERE attendance_id = ?')) return sessions.filter(session => session.attendance_id === args[0]);
+          return sessions;
+        }
         if (sql.includes('FROM settings') && sql.includes('office_radius_m')) {
           officeSettingsReadCount += 1;
           return [
@@ -87,7 +105,28 @@ const mockDb = {
       },
       run: async (...args) => {
         writes.push({ sql, args });
-        if (sql.includes('INSERT OR IGNORE INTO attendance')) return { changes: 1, lastInsertRowid: 35 };
+        if (sql.includes('INSERT OR IGNORE INTO attendance')) {
+          const key = attendanceKey(args[0], args[1]);
+          if (!attendanceRows.has(key)) attendanceRows.set(key, { id: 35, user_id: args[0], date: args[1] });
+          return { changes: 1, lastInsertRowid: 35 };
+        }
+        if (sql.includes('INSERT INTO attendance_punch_sessions')) {
+          const [attendanceId, sessionUserId, date, punchIn] = args;
+          const key = attendanceKey(sessionUserId, date);
+          const sessions = punchSessions.get(key) || [];
+          const session = { id: sessions.length + 1, attendance_id: attendanceId, user_id: sessionUserId, date, punch_in: punchIn, punch_out: null };
+          sessions.push(session);
+          punchSessions.set(key, sessions);
+          return { changes: 1, lastInsertRowid: session.id };
+        }
+        if (sql.includes('UPDATE attendance_punch_sessions SET punch_out')) {
+          const sessionId = args[args.length - 1];
+          for (const sessions of punchSessions.values()) {
+            const session = sessions.find(item => item.id === sessionId);
+            if (session) session.punch_out = args[0];
+          }
+          return { changes: 1, lastInsertRowid: 1 };
+        }
         if (sql.includes('INSERT INTO attendance_locations')) return { changes: 1, lastInsertRowid: 51 };
         return { changes: 1, lastInsertRowid: 1 };
       }
@@ -190,6 +229,11 @@ test('mobile-browser punching needs its own attendance permission', async () => 
 
 test('tracking status accepts bounded events during an active attendance shift', async () => {
   writes.length = 0;
+  attendanceRows.set(attendanceKey(userId, activeShiftDate), { id: 35, user_id: userId, date: activeShiftDate });
+  punchSessions.set(attendanceKey(userId, activeShiftDate), [{
+    id: 35, attendance_id: 35, user_id: userId, date: activeShiftDate,
+    punch_in: activeShiftPunchIn, punch_out: null
+  }]);
   const response = await fetch(`${baseUrl}/api/attendance/tracking-status`, {
     method: 'POST',
     headers: {
@@ -349,6 +393,18 @@ after(async () => {
 test('required attendance verification blocks unverified punches and accepts native phone verification', async () => {
   writes.length = 0;
   attendanceAccess.allow_laptop = 1;
+  attendanceRecordForPunchOut = {
+    id: 35,
+    date: activeShiftDate,
+    punch_in: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    punch_out: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    location_status: 'ðŸ“ In: Office'
+  };
+  punchSessions.set(attendanceKey(userId, activeShiftDate), [{
+    id: 34, attendance_id: 35, user_id: userId, date: activeShiftDate,
+    punch_in: attendanceRecordForPunchOut.punch_in,
+    punch_out: attendanceRecordForPunchOut.punch_out
+  }]);
   const request = verificationPassword => fetch(`${baseUrl}/api/attendance/punch-in`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: cookie },
@@ -400,7 +456,7 @@ test('required attendance verification blocks unverified punches and accepts nat
     })
   });
   assert.equal(verified.status, 200);
-  assert.ok(writes.some(write => write.sql.includes('INSERT OR IGNORE INTO attendance')));
+  assert.equal(punchSessions.get(attendanceKey(userId, activeShiftDate)).length, 2);
   const recordedActivity = writes.find(write => write.sql.includes('INSERT INTO attendance_locations'));
   assert.deepEqual(recordedActivity.args.slice(7, 9), ['in_vehicle', 93]);
   assert.equal(officeSettingsReadCount, 0, 'office radius must not block an off-site punch');
@@ -436,38 +492,6 @@ test('employees can punch out away from the configured office', async () => {
     assert.equal(officeSettingsReadCount, 0, 'office radius must not block an off-site punch-out');
     const punchOutUpdate = writes.find(write => write.sql.includes('UPDATE attendance SET punch_out'));
     assert.deepEqual(punchOutUpdate.args.slice(1, 3), [19.076, 72.8777]);
-  } finally {
-    attendanceRecordForPunchOut = null;
-  }
-});
-
-test('employees can start another attendance session after punching out', async () => {
-  writes.length = 0;
-  attendanceRecordForPunchOut = {
-    id: 35,
-    date: activeShiftDate,
-    punch_in: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    punch_out: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
-    location_status: 'ðŸ“ In: Office'
-  };
-  try {
-    const response = await fetch(`${baseUrl}/api/attendance/punch-in`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Cookie: appCookie,
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36 TaskFlowNative/1'
-      },
-      body: JSON.stringify({
-        device_id: deviceId,
-        lat: 19.076,
-        lng: 72.8777,
-        verification_method: 'native-device-credential'
-      })
-    });
-
-    assert.equal(response.status, 200);
-    assert.ok(writes.some(write => write.sql.includes('INSERT INTO attendance_punch_sessions')));
   } finally {
     attendanceRecordForPunchOut = null;
   }

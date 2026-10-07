@@ -855,6 +855,37 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
         WHERE key = 'attendance_location_retention_days' AND value = '60'`).run();
       await markSchemaVersion(11);
     }
+    if (schemaVersion < 12) {
+      await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS attendance_punch_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        attendance_id INTEGER NOT NULL REFERENCES attendance(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        date TEXT NOT NULL,
+        punch_in TEXT NOT NULL,
+        punch_out TEXT,
+        in_lat REAL,
+        in_lng REAL,
+        out_lat REAL,
+        out_lng REAL,
+        in_location_text TEXT,
+        out_location_text TEXT,
+        in_device_type TEXT,
+        in_device_info TEXT,
+        out_device_type TEXT,
+        out_device_info TEXT,
+        legacy_attendance_id INTEGER UNIQUE
+      )`);
+      await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS attendance_punch_sessions_user_date_idx ON attendance_punch_sessions(user_id, date, punch_in)');
+      await dbDriverInterface.exec(`CREATE UNIQUE INDEX IF NOT EXISTS attendance_punch_sessions_one_open_idx
+        ON attendance_punch_sessions(user_id, date) WHERE punch_out IS NULL`);
+      await dbDriverInterface.exec(`INSERT OR IGNORE INTO attendance_punch_sessions
+        (attendance_id, user_id, date, punch_in, punch_out, in_lat, in_lng, out_lat, out_lng,
+         in_location_text, out_location_text, in_device_type, in_device_info, out_device_type, out_device_info, legacy_attendance_id)
+        SELECT id, user_id, date, punch_in, punch_out, in_lat, in_lng, out_lat, out_lng,
+          in_location_text, out_location_text, in_device_type, in_device_info, out_device_type, out_device_info, id
+        FROM attendance WHERE punch_in IS NOT NULL`);
+      await markSchemaVersion(12);
+    }
     console.log('Database schema and default settings are ready.');
   } catch (err) {
     console.error(JSON.stringify({ event: 'tenant_database_initialization_failed', company_id: companyId ?? null }));

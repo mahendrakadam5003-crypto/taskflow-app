@@ -259,7 +259,17 @@ async function getLocationName(lat, lng, req) {
 // today's own attendance
 router.get('/today', async (req, res) => {
   const row = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(req.session.userId, todayStr());
-  res.json(row || null);
+  if (!row) return res.json(null);
+  const sessions = await db.prepare(`SELECT id, punch_in, punch_out, in_location_text, out_location_text
+    FROM attendance_punch_sessions WHERE attendance_id = ? ORDER BY punch_in`).all(row.id);
+  const now = Date.now();
+  const activeShift = (sessions || []).find(session => !session.punch_out) || null;
+  const workedMinutes = (sessions || []).reduce((total, session) => {
+    const start = Date.parse(session.punch_in);
+    const end = session.punch_out ? Date.parse(session.punch_out) : now;
+    return Number.isFinite(start) && Number.isFinite(end) ? total + Math.max(0, Math.floor((end - start) / 60_000)) : total;
+  }, 0);
+  res.json({ ...row, sessions, active_shift: activeShift, worked_minutes: workedMinutes });
 });
 
 router.get('/verification-required', async (req, res) => {
@@ -387,7 +397,9 @@ router.put('/verification-access/:userId', requireAdmin, async (req, res) => {
 async function savePunchIn(userId, date, lat, lng, device, { adminEnteredBy = false, req } = {}) {
   await db.ready;
   const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(userId, date);
-  if (existing?.punch_in) return null;
+  const activeSession = await db.prepare(`SELECT id FROM attendance_punch_sessions
+    WHERE user_id = ? AND date = ? AND punch_out IS NULL ORDER BY punch_in DESC LIMIT 1`).get(userId, date);
+  if (activeSession) return null;
 
   const locationName = adminEnteredBy ? 'Entered by admin' : await getLocationName(lat, lng, req);
   const storedLat = adminEnteredBy ? null : lat;
@@ -396,23 +408,29 @@ async function savePunchIn(userId, date, lat, lng, device, { adminEnteredBy = fa
   const storedDeviceInfo = adminEnteredBy ? 'Entered by admin' : device.info;
   const now = new Date().toISOString();
   const mapStr = adminEnteredBy ? 'Entered by admin' : `📍 In: ${locationName}`;
-  let attendanceId;
-  if (existing) {
-    const updated = await db.prepare(`UPDATE attendance SET punch_in = ?, in_lat = ?, in_lng = ?,
-      in_location_text = ?, in_device_type = ?, in_device_info = ?, location_status = ?
-      WHERE id = ? AND punch_in IS NULL`)
-      .run(now, storedLat, storedLng, locationName, storedDeviceType, storedDeviceInfo, mapStr, existing.id);
-    if (!updated.changes) return null;
-    attendanceId = existing.id;
-  } else {
-    const inserted = await db.prepare(`INSERT OR IGNORE INTO attendance
-      (user_id, date, punch_in, in_lat, in_lng, in_location_text, in_device_type, in_device_info, location_status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(userId, date, now, storedLat, storedLng, locationName, storedDeviceType, storedDeviceInfo, mapStr);
-    if (!inserted.changes) return null;
-    attendanceId = inserted.lastInsertRowid;
+  if (!existing) {
+    await db.prepare('INSERT OR IGNORE INTO attendance (user_id, date) VALUES (?, ?)').run(userId, date);
   }
-  return { attendanceId, locationName, now, mapStr };
+  const attendance = existing || await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(userId, date);
+  if (!attendance) return null;
+  let inserted;
+  try {
+    inserted = await db.prepare(`INSERT INTO attendance_punch_sessions
+      (attendance_id, user_id, date, punch_in, in_lat, in_lng, in_location_text, in_device_type, in_device_info)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(attendance.id, userId, date, now, storedLat, storedLng, locationName, storedDeviceType, storedDeviceInfo);
+  } catch (error) {
+    if (/attendance_punch_sessions_one_open_idx|UNIQUE constraint failed/i.test(error.message || '')) return null;
+    throw error;
+  }
+  const updated = await db.prepare(`UPDATE attendance SET punch_in = COALESCE(punch_in, ?),
+    punch_out = NULL, in_lat = COALESCE(in_lat, ?), in_lng = COALESCE(in_lng, ?),
+    in_location_text = COALESCE(in_location_text, ?), in_device_type = COALESCE(in_device_type, ?),
+    in_device_info = COALESCE(in_device_info, ?),
+    location_status = CASE WHEN location_status IS NULL OR location_status = '' THEN ? ELSE location_status END
+    WHERE id = ?`).run(now, storedLat, storedLng, locationName, storedDeviceType, storedDeviceInfo, mapStr, attendance.id);
+  if (!updated.changes) return null;
+  return { attendanceId: attendance.id, sessionId: inserted.lastInsertRowid, locationName, now, mapStr };
 }
 
 router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
@@ -426,7 +444,7 @@ router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
   
   const date = todayStr();
   const punchIn = await savePunchIn(req.session.userId, date, lat, lng, device, { req });
-  if (!punchIn) return res.status(400).json({ error: 'Already punched in today' });
+  if (!punchIn) return res.status(400).json({ error: 'You are already punched in. Punch out before starting another work interval.' });
   const { attendanceId, locationName, now, mapStr } = punchIn;
   const recordedAt = new Date().toISOString();
   const locationInfo = await recordLocationPoint(attendanceId, req.session.userId, lat, lng, recordedAt, 0, req.body);
@@ -442,10 +460,12 @@ router.post('/location-update', async (req, res) => {
   const coordinates = validateCoordinates(req.body.lat, req.body.lng);
   if (!coordinates) return res.status(400).json({ error: 'A valid latitude and longitude are required.' });
   const { lat, lng } = coordinates;
-  const attendance = await db.prepare('SELECT id, punch_in, punch_out FROM attendance WHERE user_id = ? AND date = ?').get(req.session.userId, todayStr());
-  if (!attendance?.punch_in || attendance.punch_out) return res.status(400).json({ error: 'Live tracking is only available during an active shift.' });
+  const attendance = await db.prepare('SELECT id FROM attendance WHERE user_id = ? AND date = ?').get(req.session.userId, todayStr());
+  const activeSession = await db.prepare(`SELECT punch_in FROM attendance_punch_sessions
+    WHERE user_id = ? AND date = ? AND punch_out IS NULL ORDER BY punch_in DESC LIMIT 1`).get(req.session.userId, todayStr());
+  if (!attendance || !activeSession) return res.status(400).json({ error: 'Live tracking is only available during an active shift.' });
   const recordedAt = req.body.recorded_at ? parseTrackingTimestamp(req.body.recorded_at) : new Date().toISOString();
-  if (!recordedAt || new Date(recordedAt) < new Date(attendance.punch_in)) {
+  if (!recordedAt || new Date(recordedAt) < new Date(activeSession.punch_in)) {
     return res.status(400).json({ error: 'Location timestamp is outside the active shift.' });
   }
   const locationInfo = await recordLocationPoint(attendance.id, req.session.userId, lat, lng, recordedAt, 30_000, req.body);
@@ -463,16 +483,18 @@ router.post('/location-updates', async (req, res) => {
   if (!isValidDateOnly(shiftDate) || !Array.isArray(points) || points.length < 1 || points.length > 100) {
     return res.status(400).json({ error: 'Provide a valid shift date and up to 100 queued location points.' });
   }
-  const attendance = await db.prepare('SELECT id, punch_in, punch_out FROM attendance WHERE user_id = ? AND date = ?')
+  const attendance = await db.prepare('SELECT id FROM attendance WHERE user_id = ? AND date = ?')
     .get(req.session.userId, shiftDate);
-  if (!attendance?.punch_in) return res.status(400).json({ error: 'The requested attendance shift does not exist.' });
+  const sessions = attendance ? await db.prepare(`SELECT punch_in, punch_out FROM attendance_punch_sessions
+    WHERE attendance_id = ? ORDER BY punch_in`).all(attendance.id) : [];
+  if (!attendance || !sessions.length) return res.status(400).json({ error: 'The requested attendance shift does not exist.' });
   const normalizedPoints = [];
   for (const point of points) {
     const recordedAt = parseTrackingTimestamp(point?.recorded_at);
     const coordinates = validateCoordinates(point?.lat, point?.lng);
-    if (!recordedAt || !coordinates
-      || new Date(recordedAt) < new Date(attendance.punch_in)
-      || (attendance.punch_out && new Date(recordedAt) > new Date(attendance.punch_out))
+    const belongsToSession = sessions.some(session => new Date(recordedAt) >= new Date(session.punch_in)
+      && (!session.punch_out || new Date(recordedAt) <= new Date(session.punch_out)));
+    if (!recordedAt || !coordinates || !belongsToSession
       || typeof point.client_point_id !== 'string'
       || !/^[a-zA-Z0-9-]{16,100}$/.test(point.client_point_id)) {
       return res.status(400).json({ error: 'A queued location point is invalid or outside the attendance shift.' });
@@ -518,18 +540,18 @@ router.post('/tracking-status', async (req, res) => {
     return res.status(400).json({ error: 'Provide a supported tracking status and valid timestamp.' });
   }
   const shiftDate = todayStr(new Date(recordedAt));
-  const attendance = await db.prepare('SELECT id, punch_in, punch_out FROM attendance WHERE user_id = ? AND date = ?')
+  const activeSession = await db.prepare(`SELECT id, attendance_id, punch_in FROM attendance_punch_sessions
+    WHERE user_id = ? AND date = ? AND punch_out IS NULL ORDER BY punch_in DESC LIMIT 1`)
     .get(req.session.userId, shiftDate);
-  if (!attendance?.punch_in || attendance.punch_out
-    || new Date(recordedAt) < new Date(attendance.punch_in)) {
+  if (!activeSession || new Date(recordedAt) < new Date(activeSession.punch_in)) {
     return res.status(400).json({ error: 'Tracking status can only be recorded during an active shift.' });
   }
   const recentEvent = await db.prepare(`SELECT id FROM attendance_tracking_events
     WHERE attendance_id = ? AND state = ? AND recorded_at >= ? LIMIT 1`)
-    .get(attendance.id, state, new Date(Date.parse(recordedAt) - 5 * 60_000).toISOString());
+    .get(activeSession.attendance_id, state, new Date(Date.parse(recordedAt) - 5 * 60_000).toISOString());
   if (!recentEvent) {
     await db.prepare(`INSERT INTO attendance_tracking_events (attendance_id, user_id, state, recorded_at)
-      VALUES (?, ?, ?, ?)`).run(attendance.id, req.session.userId, state, recordedAt);
+      VALUES (?, ?, ?, ?)`).run(activeSession.attendance_id, req.session.userId, state, recordedAt);
   }
   res.json({ ok: true, recorded: !recentEvent });
 });
@@ -546,8 +568,10 @@ router.post('/punch-out', attendanceVerificationLimiter, async (req, res) => {
   
   const date = todayStr();
   const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(req.session.userId, date);
-  if (!existing || !existing.punch_in) return res.status(400).json({ error: "You haven't punched in today" });
-  if (existing.punch_out) return res.status(400).json({ error: 'Already punched out today' });
+  const activeSession = await db.prepare(`SELECT * FROM attendance_punch_sessions
+    WHERE user_id = ? AND date = ? AND punch_out IS NULL ORDER BY punch_in DESC LIMIT 1`)
+    .get(req.session.userId, date);
+  if (!existing || !activeSession) return res.status(400).json({ error: "You haven't punched in today" });
   
   const now = new Date().toISOString();
   
@@ -555,7 +579,12 @@ router.post('/punch-out', attendanceVerificationLimiter, async (req, res) => {
   
   const finalLocationStatus = `${existing.location_status || '📍 In: Unknown'} | Out: ${outLocationName}`;
   
-  await db.prepare('UPDATE attendance SET punch_out = ?, out_lat = ?, out_lng = ?, out_location_text = ?, out_device_type = ?, out_device_info = ?, location_status = ? WHERE id = ?')
+  const sessionUpdate = await db.prepare(`UPDATE attendance_punch_sessions SET punch_out = ?, out_lat = ?, out_lng = ?,
+    out_location_text = ?, out_device_type = ?, out_device_info = ? WHERE id = ? AND punch_out IS NULL`)
+    .run(now, lat, lng, outLocationName, deviceType, device.info, activeSession.id);
+  if (!sessionUpdate.changes) return res.status(409).json({ error: 'This work interval was already closed. Refresh attendance and try again.' });
+  await db.prepare(`UPDATE attendance SET punch_out = ?, out_lat = ?, out_lng = ?, out_location_text = ?,
+    out_device_type = ?, out_device_info = ?, location_status = ? WHERE id = ?`)
     .run(now, lat, lng, outLocationName, deviceType, device.info, finalLocationStatus, existing.id);
   const activityId = await logActivity(req, 'Punched out', 'attendance', existing.id, `${date} - ${outLocationName}`, req.session.userId);
   await notifyAdmins(req, activityId);
@@ -582,11 +611,31 @@ router.get('/overview', requireAdmin, async (req, res) => {
   if (department) { sql += ' AND u.department = ?'; params.push(department); }
   sql += ' ORDER BY u.name';
   const rows = await db.prepare(sql).all(...params);
-  res.json(rows.map(r => ({
-    ...r,
-    in_map_url: makeMapLink(r.in_lat, r.in_lng),
-    out_map_url: makeMapLink(r.out_lat, r.out_lng)
-  })));
+  const sessionRows = rows.length ? await db.prepare(`SELECT attendance_id, punch_in, punch_out
+    FROM attendance_punch_sessions WHERE attendance_id IN (${rows.map(() => '?').join(',')}) ORDER BY punch_in`)
+    .all(...rows.map(row => row.id)) : [];
+  const sessionsByAttendance = new Map();
+  for (const session of sessionRows) {
+    const sessions = sessionsByAttendance.get(Number(session.attendance_id)) || [];
+    sessions.push(session);
+    sessionsByAttendance.set(Number(session.attendance_id), sessions);
+  }
+  const now = Date.now();
+  res.json(rows.map(r => {
+    const sessions = sessionsByAttendance.get(Number(r.id)) || [];
+    const workedMinutes = sessions.reduce((total, session) => {
+      const start = Date.parse(session.punch_in);
+      const end = session.punch_out ? Date.parse(session.punch_out) : now;
+      return Number.isFinite(start) && Number.isFinite(end) ? total + Math.max(0, Math.floor((end - start) / 60_000)) : total;
+    }, 0);
+    return {
+      ...r,
+      sessions,
+      worked_minutes: workedMinutes,
+      in_map_url: makeMapLink(r.in_lat, r.in_lng),
+      out_map_url: makeMapLink(r.out_lat, r.out_lng)
+    };
+  }));
 });
 
 // admin: punch on behalf of an employee from the monitoring screen
@@ -615,10 +664,13 @@ router.post('/admin-punch-out', requireAdmin, async (req, res) => {
   const device = getPunchDevice(req, req.body.device_model);
   if (!(await canPunchFromDevice(req.session.userId, device))) return res.status(403).json({ error: 'Punching from this device is not allowed for your admin account.' });
   const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(userId, todayStr());
-  if (!existing || !existing.punch_in) return res.status(400).json({ error: 'This employee has not punched in today.' });
-  if (existing.punch_out) return res.status(400).json({ error: 'This employee is already punched out today.' });
+  const activeSession = await db.prepare(`SELECT id FROM attendance_punch_sessions
+    WHERE user_id = ? AND date = ? AND punch_out IS NULL ORDER BY punch_in DESC LIMIT 1`).get(userId, todayStr());
+  if (!existing || !activeSession) return res.status(400).json({ error: 'This employee has not punched in today.' });
   const now = new Date().toISOString();
   const status = `${existing.location_status || '📍 In: Unknown'} | Out: Entered by admin`;
+  await db.prepare('UPDATE attendance_punch_sessions SET punch_out = ?, out_location_text = ?, out_device_info = ? WHERE id = ? AND punch_out IS NULL')
+    .run(now, 'Entered by admin', 'Entered by admin', activeSession.id);
   await db.prepare('UPDATE attendance SET punch_out = ?, out_lat = ?, out_lng = ?, out_location_text = ?, out_device_type = ?, out_device_info = ?, location_status = ? WHERE id = ?')
     .run(now, null, null, 'Entered by admin', null, 'Entered by admin', status, existing.id);
   const activityId = await logActivity(req, 'Admin entered punch-out', 'attendance', existing.id, `${existing.date} - ${employee.id}`, userId);
@@ -639,7 +691,25 @@ router.get('/mine', async (req, res) => {
   if (rangeDays > 365) return res.status(400).json({ error: 'Attendance history is limited to 366 days.' });
   const rows = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date DESC')
     .all(req.session.userId, fromQuery, toQuery);
-  const rowsByDate = new Map(rows.map(row => [row.date, row]));
+  const sessionRows = rows.length ? await db.prepare(`SELECT attendance_id, date, punch_in, punch_out, in_location_text, out_location_text
+    FROM attendance_punch_sessions WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date DESC, punch_in`)
+    .all(req.session.userId, fromQuery, toQuery) : [];
+  const sessionsByAttendance = new Map();
+  const now = Date.now();
+  for (const session of sessionRows) {
+    const sessions = sessionsByAttendance.get(Number(session.attendance_id)) || [];
+    sessions.push(session);
+    sessionsByAttendance.set(Number(session.attendance_id), sessions);
+  }
+  const rowsByDate = new Map(rows.map(row => {
+    const sessions = sessionsByAttendance.get(Number(row.id)) || [];
+    const workedMinutes = sessions.reduce((total, session) => {
+      const start = Date.parse(session.punch_in);
+      const end = session.punch_out ? Date.parse(session.punch_out) : now;
+      return Number.isFinite(start) && Number.isFinite(end) ? total + Math.max(0, Math.floor((end - start) / 60_000)) : total;
+    }, 0);
+    return [row.date, { ...row, sessions, worked_minutes: workedMinutes, active_shift: sessions.find(session => !session.punch_out) || null }];
+  }));
   const fromDate = new Date(`${fromQuery}T00:00:00Z`);
   const toDate = new Date(`${toQuery}T00:00:00Z`);
   const history = [];

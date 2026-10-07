@@ -75,7 +75,7 @@ test('tenant identity schema upgrade preserves existing users and is repeatable'
       [77, 'Legacy Employee', 'legacy.employee', 'existing-password-hash', null, 0, null, 'password']
     ]);
     const version = await client.execute('SELECT MAX(version) AS version FROM schema_version');
-    assert.equal(Number(version.rows[0].version), 11);
+    assert.equal(Number(version.rows[0].version), 12);
     const locationRetention = await client.execute({ sql: 'SELECT value FROM settings WHERE key = ?', args: ['attendance_location_retention_days'] });
     assert.equal(locationRetention.rows[0].value, '90');
     const loginAccess = await client.execute('SELECT web_access_enabled FROM users WHERE id IN (77, 78) ORDER BY id');
@@ -88,6 +88,8 @@ test('tenant identity schema upgrade preserves existing users and is repeatable'
     const trackingEvents = await client.execute('PRAGMA table_info(attendance_tracking_events)');
     assert.ok(trackingEvents.rows.some(row => row.name === 'attendance_id'));
     assert.ok(trackingEvents.rows.some(row => row.name === 'state'));
+    const attendanceSessions = await client.execute('PRAGMA table_info(attendance_punch_sessions)');
+    assert.ok(attendanceSessions.rows.some(row => row.name === 'punch_in'));
     const locationColumns = await client.execute('PRAGMA table_info(attendance_locations)');
     assert.ok(locationColumns.rows.some(row => row.name === 'client_point_id'));
     const tokenTable = await client.execute('PRAGMA table_info(email_auth_tokens)');
