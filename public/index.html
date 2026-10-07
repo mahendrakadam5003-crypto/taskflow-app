@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="/icons/taskflow.svg">
 <link rel="icon" href="/icons/taskflow.svg">
 <link rel="stylesheet" href="/css/style.css?v=20261007-13">
-<link rel="stylesheet" href="/css/theme.css?v=10">
+<link rel="stylesheet" href="/css/theme.css?v=11">
 <link rel="preload" href="/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
 </head>
 <body>
@@ -130,6 +130,10 @@
         <button class="appearance-settings-button" id="btn-appearance-settings" type="button" aria-label="Appearance settings" title="Appearance settings">Aa</button>
       </div>
     </header>
+    <div id="mobile-offline-banner" class="mobile-offline-banner hidden" role="status" aria-live="polite">
+      <span id="mobile-offline-message">No connection. Check your internet and try again.</span>
+      <button id="mobile-offline-retry" type="button">Retry</button>
+    </div>
     <div id="company-status-banner" class="company-status-banner hidden" role="status"></div>
     <div id="support-mode-banner" class="support-mode-banner hidden" role="alert">
       <span><strong>SUPPORT MODE</strong> <span id="support-mode-countdown"></span></span>

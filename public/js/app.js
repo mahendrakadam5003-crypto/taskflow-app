@@ -37,6 +37,53 @@ if (nativeApp) {
   });
 }
 
+if (nativeApp) {
+  const offlineBanner = $('#mobile-offline-banner');
+  const offlineMessage = $('#mobile-offline-message');
+  const retryButton = $('#mobile-offline-retry');
+  const updateConnectivity = () => {
+    if (!offlineBanner) return;
+    offlineBanner.classList.toggle('hidden', navigator.onLine);
+    if (!navigator.onLine && offlineMessage) offlineMessage.textContent = 'No connection. Check your internet and try again.';
+  };
+  updateConnectivity();
+  window.addEventListener('offline', updateConnectivity);
+  window.addEventListener('online', () => {
+    if (offlineMessage) offlineMessage.textContent = 'Connection restored. Tap retry to reconnect to TaskFlow.';
+    offlineBanner?.classList.remove('hidden');
+  });
+  retryButton?.addEventListener('click', async () => {
+    retryButton.disabled = true;
+    try {
+      const response = await fetch('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' });
+      if (response.ok || response.status === 401) {
+        window.location.reload();
+        return;
+      }
+      throw new Error(`Server returned ${response.status}.`);
+    } catch (error) {
+      if (offlineMessage) offlineMessage.textContent = 'TaskFlow is still unreachable. Check your connection and retry.';
+      retryButton.disabled = false;
+    }
+  });
+
+  const updateKeyboardViewport = () => {
+    const viewport = window.visualViewport;
+    const keyboardOpen = Boolean(viewport && window.innerHeight - viewport.height > 120);
+    htmlElement.classList.toggle('native-keyboard-open', keyboardOpen);
+  };
+  window.visualViewport?.addEventListener('resize', updateKeyboardViewport);
+  window.addEventListener('resize', updateKeyboardViewport);
+  document.addEventListener('focusin', event => {
+    if (!event.target.matches('input, select, textarea, [contenteditable="true"]')) return;
+    window.setTimeout(() => {
+      updateKeyboardViewport();
+      event.target.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    }, 250);
+  });
+  document.addEventListener('focusout', () => window.setTimeout(updateKeyboardViewport, 200));
+}
+
 let activeTaskDrawerController = null;
 let taskListRequestId = 0;
 let activeTaskListController = null;
@@ -68,12 +115,23 @@ function updateCompanyAccessBanner(state, message = '', reasons = []) {
 }
 
 async function api(path, opts = {}) {
-  const res = await fetch('/api' + path, {
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
-    ...opts,
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch('/api' + path, {
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      ...opts,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch (error) {
+    if (nativeApp) {
+      const banner = $('#mobile-offline-banner');
+      const message = $('#mobile-offline-message');
+      if (message) message.textContent = 'TaskFlow could not be reached. Check your connection and retry.';
+      banner?.classList.remove('hidden');
+    }
+    throw error;
+  }
   const accessState = res.headers.get('X-Company-Access-State');
   if (accessState) {
     let accessReasons = [];

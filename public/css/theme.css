@@ -489,6 +489,7 @@ html.is-native textarea::placeholder { color: #7B8494; }
 .native-appearance-settings label { margin-top: 4px; font-size: var(--fs-sm); font-weight: 600; }
 .native-appearance-settings select { width: 100%; min-height: 48px; padding: 10px 12px; font: inherit; }
 .native-appearance-settings .modal-actions { margin-top: 10px; }
+.mobile-offline-banner { display: none; }
 
 @media (max-width: 760px) {
   html.is-native {
@@ -528,6 +529,26 @@ html.is-native textarea::placeholder { color: #7B8494; }
   html.is-native .appearance-settings-button { display: inline-flex; }
   html.is-native .mobile-topbar-actions { gap: 6px; }
   html.is-native .logout-mini-btn { min-height: 44px; }
+  html.is-native .mobile-offline-banner:not(.hidden) {
+    position: fixed;
+    top: calc(52px + env(safe-area-inset-top) + 8px);
+    left: 12px;
+    right: 12px;
+    z-index: 70;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow-2);
+    font-size: var(--fs-sm);
+  }
+  html.is-native .mobile-offline-banner button { min-width: 64px; min-height: 44px; border: 0; border-radius: 8px; background: var(--brand); color: #fff; font: inherit; font-weight: 700; }
+  html.is-native .mobile-offline-banner button:disabled { opacity: .6; }
   html.is-native .mobile-bottom-nav {
     background: var(--surface);
     backdrop-filter: none;
@@ -538,6 +559,10 @@ html.is-native textarea::placeholder { color: #7B8494; }
     -webkit-backdrop-filter: blur(14px);
   }
   html.is-native .mobile-bottom-nav button { min-height: 56px; font-size: var(--fs-xs); font-weight: 600; }
+  html.is-native.native-keyboard-open .mobile-bottom-nav { display: none; }
+  html.is-native.native-keyboard-open .app .main,
+  html.is-native.native-keyboard-open .app.focused-view .main,
+  html.is-native.native-keyboard-open .app.project-shell .main { padding-bottom: 16px; }
   html.is-native .mobile-bottom-nav .icon { width: 22px; height: 22px; }
   html.is-native .btn { min-height: 48px; }
   html.is-native .btn-sm,

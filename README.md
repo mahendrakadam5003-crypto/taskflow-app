@@ -15,6 +15,8 @@ Native Android and iOS apps report their device model and a platform device iden
 
 The native app's **Aa** button opens personal appearance settings. Theme (System, Light, or Dark) and text size (Small, Default, or Large) are stored on the device; system theme follows the OS appearance setting.
 
+Native mobile views also show a retry banner when the device loses network access, move focused form controls into view when the keyboard opens, and hide the bottom navigation while typing. These presentation changes are served with the hosted UI and do not require installing an updated APK.
+
 Android and iOS can request motion access when an employee starts a shift. The recognized category (walking, running, bicycle, vehicle, still, or unknown) and confidence are saved with GPS points as indicative context, not proof of travel. The app does not request microphone permission.
 
 Foreground users receive activity-feed polling and local alerts; these are not remote background pushes. When the app is closed, server-initiated push delivery requires Firebase Cloud Messaging: create a Firebase project, register an Android app with package ID `com.taskflow.app`, enable Firebase Cloud Messaging, and add that project's `google-services.json` to `android/app/`. Set the Firebase service-account JSON as the private Render secret `FIREBASE_SERVICE_ACCOUNT_JSON`; grant the service account Firebase Cloud Messaging send permission. Never commit the service-account private key or paste it in chat. Without those Firebase settings, TaskFlow cannot send remote background pushes.
