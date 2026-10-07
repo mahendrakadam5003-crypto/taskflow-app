@@ -25,7 +25,11 @@ function safeErrorDiagnostics(error) {
     const message = typeof current.message === 'string'
       ? current.message.replace(/^(?:SQLITE_[A-Z_]+:\s*)+/i, '').trim()
       : '';
-    const safeSummary = [
+    const safeSummary = type === 'TypeError' && [
+      /^Cannot read properties of (?:undefined|null) \(reading '[A-Za-z_$][A-Za-z0-9_$]*'\)$/i,
+      /^[A-Za-z_$][A-Za-z0-9_$.]* is not a function$/i,
+      /^fetch failed$/i
+    ].some(pattern => pattern.test(message)) ? message.slice(0, 180) : [
       /^Unable to decrypt tenant database token; verify APP_ENCRYPTION_KEY\.?$/i,
       /^APP_ENCRYPTION_KEY must be a 32-byte key encoded as 64 hexadecimal characters or Base64\.?$/i,
       /^TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are required unless USE_LOCAL_DB=1\.?$/i,

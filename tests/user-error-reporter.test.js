@@ -68,6 +68,20 @@ test('error diagnostics expose safe configuration failures without leaking value
   assert.doesNotMatch(safeErrorDiagnostics(error), /private-token-value/);
 });
 
+test('error diagnostics expose bounded TypeError shapes without arbitrary messages', () => {
+  assert.deepEqual(JSON.parse(safeErrorDiagnostics(
+    new TypeError("Cannot read properties of undefined (reading 'get')")
+  )), [{
+    type: 'TypeError',
+    code: null,
+    summary: "Cannot read properties of undefined (reading 'get')"
+  }]);
+
+  assert.equal(safeErrorDiagnostics(
+    new TypeError('failed with token=private-secret-value')
+  ), '[{"type":"TypeError","code":null,"summary":null}]');
+});
+
 test('unknown errors expose only an application-relative source location and safe tenant context details', () => {
   const error = Object.assign(new Error('private query value: secret-123'), {
     stack: 'Error: private query value: secret-123\n    at handler (C:\\app\\routes\\tasks.js:123:45)'
