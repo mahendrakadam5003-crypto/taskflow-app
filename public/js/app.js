@@ -624,6 +624,7 @@ function startAttendancePolling() {
     if (document.hidden) return; 
     renderHistory();
     renderPunchCard();
+    if (nativeApp) void syncLiveTracking();
   }, 15000); 
 }
 
@@ -673,6 +674,7 @@ async function getTravelActivity(startUpdates = false) {
 
 function startLiveTracking() {
   if (liveTrackingTimer || !isPhoneDevice()) return;
+  if (nativeApp) return;
   getTravelActivity(true);
   liveTrackingTimer = setInterval(async () => {
     if (document.hidden || liveTrackingBusy) return;
@@ -691,11 +693,269 @@ function startLiveTracking() {
   }, 5 * 60 * 1000);
 }
 
+const trackingStatusQueueKey = 'taskflow.attendance.tracking-status.queue';
+const backgroundTrackingOptOutKey = 'taskflow.attendance.background-opt-out-date';
+let lastTrackingHealthState = null;
+let trackingStatusFlushPromise = null;
+
+function hasDeclinedBackgroundTracking(shiftDate = todayISO()) {
+  return localStorage.getItem(backgroundTrackingOptOutKey) === shiftDate;
+}
+
+function setBackgroundTrackingOptOut(shiftDate = todayISO()) {
+  localStorage.setItem(backgroundTrackingOptOutKey, shiftDate);
+}
+
+function setTrackingHealthBanner(message, visible) {
+  const banner = $('#attendance-tracking-health-banner');
+  const label = $('#attendance-tracking-health-message');
+  if (label && message) label.textContent = message;
+  banner?.classList.toggle('hidden', !visible);
+}
+
+async function stopNativeShiftTracking() {
+  if (!nativeApp) return { ok: true, flushed: true };
+  const plugin = window.TaskFlowBackgroundLocation;
+  if (!plugin?.stopTracking) {
+    console.warn('Background tracking could not be stopped because the native plugin is unavailable.');
+    return { ok: false, flushed: false };
+  }
+  return plugin.stopTracking();
+}
+
+async function reportTrackingHealthState(state) {
+  if (lastTrackingHealthState === state) return;
+  lastTrackingHealthState = state;
+  try {
+    const queued = JSON.parse(localStorage.getItem(trackingStatusQueueKey) || '[]');
+    queued.push({ state, at: new Date().toISOString() });
+    localStorage.setItem(trackingStatusQueueKey, JSON.stringify(queued.slice(-20)));
+  } catch (error) {
+    console.warn('Unable to queue attendance tracking status:', error.message);
+  }
+  await flushTrackingHealthEvents();
+}
+
+async function flushTrackingHealthEvents() {
+  if (trackingStatusFlushPromise || !navigator.onLine) return trackingStatusFlushPromise;
+  trackingStatusFlushPromise = (async () => {
+    let queued;
+    try {
+      queued = JSON.parse(localStorage.getItem(trackingStatusQueueKey) || '[]');
+    } catch (error) {
+      console.warn('Unable to read queued attendance tracking status:', error.message);
+      localStorage.removeItem(trackingStatusQueueKey);
+      return;
+    }
+    while (queued.length) {
+      try {
+        await api('/attendance/tracking-status', { method: 'POST', body: queued[0] });
+        queued.shift();
+        localStorage.setItem(trackingStatusQueueKey, JSON.stringify(queued));
+      } catch (error) {
+        if (error.status && error.status < 500) {
+          console.warn('Attendance tracking status was rejected:', error.message);
+          queued.shift();
+          localStorage.setItem(trackingStatusQueueKey, JSON.stringify(queued));
+          continue;
+        }
+        return;
+      }
+    }
+  })().finally(() => { trackingStatusFlushPromise = null; });
+  return trackingStatusFlushPromise;
+}
+
+async function requestNativeBackgroundTrackingPermission() {
+  const plugin = window.TaskFlowBackgroundLocation;
+  if (!nativeApp || !plugin) {
+    setTrackingHealthBanner('Update TaskFlow to enable background shift tracking. Punch-in still works, but location history may have gaps.', true);
+    return false;
+  }
+  try {
+    const current = await plugin.getPermissionStatus();
+    const consent = await confirmModal(
+      'Background location during your shift',
+      'TaskFlow records location only while you are punched in, including when the app is locked or in the background. Location is stored in TaskFlow, not sent to Telegram. You can still punch in without this permission, but your location history may have gaps.',
+      'Continue',
+      false
+    );
+    if (!consent) {
+      setBackgroundTrackingOptOut();
+      return false;
+    }
+    localStorage.removeItem(backgroundTrackingOptOutKey);
+    if (current.always) return true;
+    const permission = await plugin.requestBackgroundPermission();
+    if (!permission?.always) {
+      setBackgroundTrackingOptOut();
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn('Background location permission was not granted:', error.message);
+    setBackgroundTrackingOptOut();
+    return false;
+  }
+}
+
+async function requestTrackingNotificationPermission() {
+  if (!nativeApp || !/Android/i.test(navigator.userAgent)) return true;
+  const plugin = window.TaskFlowLocalNotifications;
+  if (!plugin?.checkPermissions || !plugin?.requestPermissions) return false;
+  try {
+    let permission = await plugin.checkPermissions();
+    if (permission.display === 'granted') return true;
+    const consent = await confirmModal(
+      'Show shift tracking notification',
+      'Android uses a visible ongoing notification while TaskFlow records your location during an active shift.',
+      'Allow notifications',
+      false
+    );
+    if (!consent) return false;
+    permission = await plugin.requestPermissions();
+    return permission.display === 'granted';
+  } catch (error) {
+    console.warn('Shift tracking notification permission is unavailable:', error.message);
+    return false;
+  }
+}
+
+async function startNativeShiftTracking(shiftDate = todayISO()) {
+  if (!nativeApp) return false;
+  if (hasDeclinedBackgroundTracking(shiftDate)) {
+    setTrackingHealthBanner('Background tracking was declined for this shift. Punch out and start a new shift if you want to enable it.', true);
+    return false;
+  }
+  const plugin = window.TaskFlowBackgroundLocation;
+  if (!plugin) {
+    setTrackingHealthBanner('Update TaskFlow to enable background shift tracking. Location may stop when the app is locked.', true);
+    return false;
+  }
+  const permission = await plugin.getPermissionStatus();
+  if (!permission?.always) {
+    setTrackingHealthBanner('Background location is off. Your location history may have gaps while the app is locked.', true);
+    await reportTrackingHealthState('background_location_off');
+    return false;
+  }
+  if (!permission.gps_enabled) {
+    setTrackingHealthBanner('Location/GPS is off. Turn it on to continue shift tracking.', true);
+    await reportTrackingHealthState('gps_off');
+    return false;
+  }
+  const devicePayload = await getPunchDevicePayload();
+  await plugin.startTracking({
+    server_url: location.origin,
+    device_id: devicePayload.device_id,
+    device_model: devicePayload.device_model || 'Mobile device',
+    shift_date: shiftDate
+  });
+  setTrackingHealthBanner('', false);
+  await reportTrackingHealthState('restored');
+  return true;
+}
+
+async function updateNativeTrackingHealth(active) {
+  const banner = $('#attendance-tracking-health-banner');
+  if (!nativeApp || !banner) return;
+  if (!active) {
+    setTrackingHealthBanner('', false);
+    lastTrackingHealthState = null;
+    return;
+  }
+  if (hasDeclinedBackgroundTracking()) {
+    setTrackingHealthBanner('Background tracking was declined for this shift. Punch out and start a new shift if you want to enable it.', true);
+    await reportTrackingHealthState('background_location_off');
+    return;
+  }
+  if (!navigator.onLine) {
+    try {
+      const status = await window.TaskFlowBackgroundLocation?.getPermissionStatus?.();
+      if (Number(status?.queued_points) >= 1000) {
+        setTrackingHealthBanner('The offline location queue is full. Reconnect to upload saved points; new samples are paused.', true);
+        await reportTrackingHealthState('offline_queue_full');
+      } else {
+        setTrackingHealthBanner('No connection. Location points are saved on this device and will upload when the connection returns.', true);
+        await reportTrackingHealthState('offline');
+      }
+    } catch (error) {
+      console.warn('Unable to check queued tracking points while offline:', error.message);
+      setTrackingHealthBanner('No connection. Location points are saved on this device and will upload when the connection returns.', true);
+      await reportTrackingHealthState('offline');
+    }
+    return;
+  }
+  try {
+    const plugin = window.TaskFlowBackgroundLocation;
+    if (!plugin?.getPermissionStatus) {
+      setTrackingHealthBanner('Update the TaskFlow app to enable background shift tracking. Location may stop when the app is locked.', true);
+      await reportTrackingHealthState('background_location_off');
+      return;
+    }
+    const status = await plugin.getPermissionStatus();
+    if (Number(status.queued_points) >= 1000) {
+      setTrackingHealthBanner('The offline location queue is full. Reconnect to upload saved points; new samples are paused.', true);
+      await reportTrackingHealthState('offline_queue_full');
+    } else if (!status.gps_enabled) {
+      setTrackingHealthBanner('Location/GPS is off. Turn it on to continue shift tracking.', true);
+      await reportTrackingHealthState('gps_off');
+    } else if (!status.always) {
+      setTrackingHealthBanner('Background location is off. Your location history may have gaps while the app is locked.', true);
+      await reportTrackingHealthState('background_location_off');
+    } else if (status.accuracy === 'approximate') {
+      setTrackingHealthBanner('Precise location is off. TaskFlow may record less accurate shift locations.', true);
+      await reportTrackingHealthState('approximate_location');
+    } else if (status.notifications_enabled === false) {
+      setTrackingHealthBanner('Notifications are off. Android may hide the ongoing shift-tracking notification; GPS tracking can continue.', true);
+      await reportTrackingHealthState('notification_off');
+    } else if (status.activity_enabled === false) {
+      setTrackingHealthBanner('Activity recognition is off. GPS tracking continues, but travel type will be unavailable.', true);
+      await reportTrackingHealthState('activity_off');
+    } else {
+      setTrackingHealthBanner('', false);
+      await reportTrackingHealthState('restored');
+    }
+  } catch (error) {
+    console.warn('Unable to check background tracking health:', error.message);
+    setTrackingHealthBanner('Unable to check location tracking. Open settings to review TaskFlow permissions.', true);
+  }
+}
+
+$('#attendance-tracking-health-settings')?.addEventListener('click', async () => {
+  try {
+    await window.TaskFlowBackgroundLocation?.openAppSettings?.();
+  } catch (error) {
+    console.warn('Unable to open location settings:', error.message);
+  }
+});
+
+window.addEventListener('online', () => { void flushTrackingHealthEvents(); });
+window.TaskFlowApp?.addListener('appStateChange', ({ isActive }) => {
+  if (isActive) void syncLiveTracking();
+});
+
 async function syncLiveTracking() {
   if (!isPhoneDevice()) return;
   try {
     const status = await api('/attendance/today');
-    if (status?.punch_in && !status.punch_out) startLiveTracking();
+    const active = Boolean(status?.punch_in && !status.punch_out);
+    if (nativeApp) {
+      if (!active) {
+        stopLiveTracking();
+        const trackingStatus = await window.TaskFlowBackgroundLocation?.getPermissionStatus?.();
+        if (trackingStatus?.active) await stopNativeShiftTracking();
+        await updateNativeTrackingHealth(false);
+        return;
+      }
+      await updateNativeTrackingHealth(true);
+      const permission = await window.TaskFlowBackgroundLocation?.getPermissionStatus?.();
+      if (!hasDeclinedBackgroundTracking(status.date || todayISO())
+          && permission?.always && permission.gps_enabled && !permission.active) {
+        await startNativeShiftTracking(status.date || todayISO());
+      }
+      return;
+    }
+    if (active) startLiveTracking();
     else stopLiveTracking();
   } catch (error) {
     console.warn('Live tracking status check failed:', error.message);
@@ -1047,6 +1307,7 @@ if (btnLogout) {
     ME = null;
     stopAttendancePolling();
     stopLiveTracking();
+    try { await stopNativeShiftTracking(); } catch (error) { console.warn('Unable to stop native shift tracking before logout:', error.message); }
     stopNotificationsPolling();
     stopTaskListPolling();
     await unregisterPushToken();
@@ -1086,6 +1347,7 @@ if (dashboardLogoutButton) {
     ME = null;
     stopAttendancePolling();
     stopLiveTracking();
+    try { await stopNativeShiftTracking(); } catch (error) { console.warn('Unable to stop native shift tracking before logout:', error.message); }
     stopNotificationsPolling();
     stopTaskListPolling();
     await unregisterPushToken();
@@ -1835,6 +2097,13 @@ async function renderReimbursements() {
       updateReceiptSelection();
     } catch (captureError) {
       error.textContent = captureError.message || 'Unable to capture receipt photo.';
+      const chooseGallery = await confirmModal(
+        'Camera unavailable',
+        'You can still attach the receipt by selecting an image or PDF from your device.',
+        'Choose from gallery',
+        false
+      );
+      if (chooseGallery) receiptInput?.click();
     } finally {
       button.disabled = false;
     }
@@ -3706,19 +3975,29 @@ async function renderPunchCard() {
       bindAttendancePunchAction($('#btn-punch-out'), async button => {
         button.disabled = true;
         setAttendancePunchProgress('');
+        let nativeTrackingStopped = false;
         try {
           const verificationMethod = await verifyAttendanceIfRequired('out');
           const coords = await getLiveCoords();
           const devicePayload = await getPunchDevicePayload();
           const activityPayload = await getTravelActivity();
+          if (nativeApp) {
+            await stopNativeShiftTracking();
+            nativeTrackingStopped = true;
+          }
           setAttendancePunchProgress('Connecting to TaskFlow...');
           await api('/attendance/punch-out', { method: 'POST', body: { ...coords, ...devicePayload, ...activityPayload, verification_method: verificationMethod } });
           stopLiveTracking();
+          await updateNativeTrackingHealth(false);
           if (!verificationMethod) await vibrateAttendance();
           showAppNotification('Punched out successfully.');
           await renderPunchCard();
           if (verificationMethod) setAttendanceBiometricFeedback('success', 'Punch out recorded.');
         } catch (error) {
+          if (nativeTrackingStopped) {
+            try { await startNativeShiftTracking(); }
+            catch (trackingError) { console.warn('Unable to resume shift tracking after a failed punch out:', trackingError.message); }
+          }
           setAttendancePunchProgress('');
           showAttendanceLocationHelp(actionRegion, error);
           showAppNotification(`Punch out failed: ${error.message}`);
@@ -3734,10 +4013,25 @@ async function renderPunchCard() {
         try {
           const verificationMethod = await verifyAttendanceIfRequired('in');
           const coords = await getLiveCoords();
+          const backgroundAllowed = nativeApp ? await requestNativeBackgroundTrackingPermission() : false;
+          const notificationAllowed = backgroundAllowed ? await requestTrackingNotificationPermission() : true;
           const devicePayload = await getPunchDevicePayload();
           const activityPayload = await getTravelActivity(true);
           setAttendancePunchProgress('Connecting to TaskFlow...');
           await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload, ...activityPayload, verification_method: verificationMethod } });
+          if (nativeApp) {
+            if (backgroundAllowed) {
+              try {
+                await startNativeShiftTracking();
+                if (!notificationAllowed) await reportTrackingHealthState('notification_off');
+              } catch (trackingError) {
+                console.warn('Punch-in succeeded but background tracking did not start:', trackingError.message);
+                setTrackingHealthBanner('Punch-in succeeded, but background location tracking did not start. Open settings to fix permissions.', true);
+              }
+            } else {
+              await updateNativeTrackingHealth(true);
+            }
+          }
           if (!verificationMethod) await vibrateAttendance();
           showAppNotification('Punched in successfully.');
           await renderPunchCard();
@@ -3826,11 +4120,23 @@ async function renderTracking() {
   };
   try {
     const people = await api(`/attendance/tracking/people?date=${encodeURIComponent(selectedDate)}`);
-    peoplePanel.innerHTML = people.length ? people.map(person => `
-      <button class="tracking-person" data-tracking-user-id="${person.user_id}">
+    peoplePanel.innerHTML = people.length ? people.map(person => {
+      const active = Boolean(person.punch_in && !person.punch_out);
+      const gapMinutes = person.tracking_gap_minutes;
+      const hasGap = active && (gapMinutes == null || Number(gapMinutes) > 15);
+      const stateAt = person.tracking_state_at ? Date.parse(person.tracking_state_at) : NaN;
+      const latestAt = person.latest_at ? Date.parse(person.latest_at) : NaN;
+      const hasIssue = active && person.tracking_state && person.tracking_state !== 'restored'
+        && (!Number.isFinite(stateAt) || !Number.isFinite(latestAt) || stateAt >= latestAt);
+      const label = !active ? 'Not active'
+        : hasGap ? `GPS gap${gapMinutes == null ? '' : ` · ${gapMinutes} min`}`
+          : hasIssue ? 'Tracking issue'
+            : Number.isFinite(latestAt) ? 'Tracking OK' : 'Tracking status unknown';
+      return `<button class="tracking-person" data-tracking-user-id="${person.user_id}">
         <b>${escapeHtml(person.user_name)}</b><small>${escapeHtml(person.department || 'Employee')}</small>
-        <span class="tracking-status ${person.punch_in && !person.punch_out ? 'active' : ''}">${person.punch_in && !person.punch_out ? 'Live now' : 'Not active'}</span>
-      </button>`).join('') : '<div class="hint">No employees found.</div>';
+        <span class="tracking-status ${active ? 'active' : ''} ${hasGap || hasIssue ? 'warning' : ''}">${escapeHtml(label)}</span>
+      </button>`;
+    }).join('') : '<div class="hint">No employees found.</div>';
     const selectedPerson = people.find(person => Number(person.user_id) === Number(selectedTrackingUserId)) || people[0];
     selectedTrackingUserId = selectedPerson ? Number(selectedPerson.user_id) : null;
     $$('.tracking-person').forEach(button => {
@@ -3877,10 +4183,11 @@ async function loadTrackingTimeline(userId, selectedButton, selectedDate = today
       const location = event.location || (hasLocation ? `${Number(event.latitude).toFixed(6)}, ${Number(event.longitude).toFixed(6)}` : 'Location unavailable');
       const details = event.type === 'task'
         ? `<b>${escapeHtml(event.customer_name || 'Customer not specified')}</b><span>${escapeHtml(event.task_title || 'Task')}${event.project_name ? ` · ${escapeHtml(event.project_name)}` : ''}</span>`
-        : `<span>${escapeHtml(location)}</span>`;
-      return `<article class="tracking-event ${event.type === 'task' ? 'tracking-event-task' : 'tracking-event-attendance'}">
+        : event.type === 'tracking' ? `<span>${event.state === 'gap' ? 'GPS sample gap' : `Tracking status · ${escapeHtml(event.state || 'unknown')}`}</span>`
+          : `<span>${escapeHtml(location)}</span>`;
+      return `<article class="tracking-event ${event.type === 'task' ? 'tracking-event-task' : event.type === 'tracking' ? 'tracking-event-health' : 'tracking-event-attendance'}">
         <div class="tracking-event-time">${escapeHtml(fmtTime(event.recorded_at))}<small>${escapeHtml(fmtDate(event.recorded_at))}</small></div>
-        <div class="tracking-event-marker" aria-hidden="true">${event.type === 'task' ? 'T' : 'A'}</div>
+        <div class="tracking-event-marker" aria-hidden="true">${event.type === 'task' ? 'T' : event.type === 'tracking' ? '!' : 'A'}</div>
         <div class="tracking-event-content"><b class="tracking-event-action">${escapeHtml(event.action)}</b>${details}
           ${event.type === 'task' ? `<span>${escapeHtml(location)}</span>` : ''}
           ${locationUrl ? `<a class="tracking-map-link" href="${locationUrl}" target="_blank" rel="noopener">View location on map</a>` : ''}
@@ -4108,7 +4415,7 @@ async function renderAdmin() {
         <p class="hint">Reimbursement receipts and comment attachments are never auto-deleted by default. Check retention requirements with your accountant before enabling deletion. GPS points and precise location/device details are cleared after the configured period; punch times remain.</p>
         <div class="admin-form-row">
           <label>Attachments (days; 0 = keep)<input id="attachment-retention-days" type="number" min="0" max="36500" step="1" value="${settings.attachment_retention_days ?? '0'}"></label>
-          <label>GPS/device details (days)<input id="attendance-retention-days" type="number" min="1" max="36500" step="1" value="${settings.attendance_location_retention_days ?? '60'}"></label>
+          <label>GPS/device details (days)<input id="attendance-retention-days" type="number" min="1" max="36500" step="1" value="${settings.attendance_location_retention_days ?? '90'}"></label>
           <button class="btn btn-primary" id="admin-retention-save" type="button">Save retention</button>
         </div>
       </div>
@@ -5196,6 +5503,7 @@ function showSelfPasswordModal(forced = false) {
     if (!forced) return closeModal();
     try {
       await unregisterPushToken();
+      try { await stopNativeShiftTracking(); } catch (error) { console.warn('Unable to stop native shift tracking before logout:', error.message); }
       await api('/auth/logout', { method: 'POST' });
       ME = null;
       location.reload();

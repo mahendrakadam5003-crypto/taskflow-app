@@ -23,7 +23,9 @@
 	<key>NSCameraUsageDescription</key>
 	<string>TaskFlow uses the camera when you choose to take a photo for a task or expense.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>TaskFlow uses your location for attendance punches, shift travel timelines, and task check-ins that you start.</string>
+	<string>TaskFlow uses your location for attendance punches and task check-ins that you start.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>TaskFlow records your route only during an active attendance shift, including when the screen is locked. Punch out to stop tracking.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>TaskFlow uses motion activity to label travel during an active attendance shift.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
@@ -36,6 +38,10 @@
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>armv7</string>

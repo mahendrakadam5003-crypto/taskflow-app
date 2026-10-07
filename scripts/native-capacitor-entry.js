@@ -10,6 +10,7 @@ import { PushNotifications } from '@capacitor/push-notifications';
 
 const ActivityRecognition = registerPlugin('ActivityRecognition');
 const AppDevice = registerPlugin('AppDevice');
+const BackgroundLocation = registerPlugin('BackgroundLocation');
 
 window.TaskFlowBiometricAuth = BiometricAuth;
 window.TaskFlowAndroidBiometryStrength = AndroidBiometryStrength;
@@ -24,4 +25,5 @@ window.TaskFlowBrowser = Browser;
 window.TaskFlowPushNotifications = PushNotifications;
 window.TaskFlowActivityRecognition = ActivityRecognition;
 window.TaskFlowAppDevice = AppDevice;
+window.TaskFlowBackgroundLocation = BackgroundLocation;
 window.Capacitor = Capacitor;

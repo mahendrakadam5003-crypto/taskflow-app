@@ -220,7 +220,7 @@ async function cleanupExpiredUploadsForCurrentTenant() {
   const settings = await db.prepare(`SELECT key, value FROM settings WHERE key IN ('attachment_retention_days', 'attendance_location_retention_days')`).all();
   const settingValues = Object.fromEntries((settings || []).map(row => [row.key || row.KEY, row.value ?? row.VALUE]));
   const attachmentDays = retentionDays(settingValues.attachment_retention_days, 0);
-  const locationDays = retentionDays(settingValues.attendance_location_retention_days, 60);
+  const locationDays = retentionDays(settingValues.attendance_location_retention_days, 90);
   let removed = 0;
 
   if (locationDays > 0) {
@@ -241,6 +241,8 @@ async function cleanupExpiredUploadsForCurrentTenant() {
       await db.prepare('DELETE FROM attendance_locations WHERE id = ?').run(location.id);
       removed++;
     }
+    await db.prepare(`DELETE FROM attendance_tracking_events
+      WHERE datetime(recorded_at) < datetime('now', ?)`).run(modifier);
     await db.prepare(`UPDATE attendance SET in_lat = NULL, in_lng = NULL, out_lat = NULL, out_lng = NULL,
       in_location_text = NULL, out_location_text = NULL, location_status = NULL,
       in_device_type = NULL, in_device_info = NULL, out_device_type = NULL, out_device_info = NULL

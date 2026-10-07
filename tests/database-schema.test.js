@@ -62,6 +62,8 @@ test('tenant identity schema upgrade preserves existing users and is repeatable'
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
     await client.execute('INSERT INTO attendance_device_access (user_id, allow_phone, allow_laptop) VALUES (77, 1, 0)');
+    await client.execute('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)');
+    await client.execute({ sql: 'INSERT INTO settings (key, value) VALUES (?, ?)', args: ['attendance_location_retention_days', '60'] });
     await client.execute('CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime(\'now\')))');
     await client.execute('INSERT INTO schema_version (version) VALUES (3)');
 
@@ -73,7 +75,9 @@ test('tenant identity schema upgrade preserves existing users and is repeatable'
       [77, 'Legacy Employee', 'legacy.employee', 'existing-password-hash', null, 0, null, 'password']
     ]);
     const version = await client.execute('SELECT MAX(version) AS version FROM schema_version');
-    assert.equal(Number(version.rows[0].version), 9);
+    assert.equal(Number(version.rows[0].version), 11);
+    const locationRetention = await client.execute({ sql: 'SELECT value FROM settings WHERE key = ?', args: ['attendance_location_retention_days'] });
+    assert.equal(locationRetention.rows[0].value, '90');
     const loginAccess = await client.execute('SELECT web_access_enabled FROM users WHERE id IN (77, 78) ORDER BY id');
     assert.deepEqual(loginAccess.rows.map(row => Number(row.web_access_enabled)), [0, 1]);
     const attendanceAccess = await client.execute('SELECT allow_phone, allow_mobile_browser, allow_laptop FROM attendance_device_access WHERE user_id = 77');
@@ -81,6 +85,11 @@ test('tenant identity schema upgrade preserves existing users and is repeatable'
     const appDevices = await client.execute('PRAGMA table_info(app_login_devices)');
     assert.ok(appDevices.rows.some(row => row.name === 'device_id_hash'));
     assert.ok(appDevices.rows.some(row => row.name === 'device_model'));
+    const trackingEvents = await client.execute('PRAGMA table_info(attendance_tracking_events)');
+    assert.ok(trackingEvents.rows.some(row => row.name === 'attendance_id'));
+    assert.ok(trackingEvents.rows.some(row => row.name === 'state'));
+    const locationColumns = await client.execute('PRAGMA table_info(attendance_locations)');
+    assert.ok(locationColumns.rows.some(row => row.name === 'client_point_id'));
     const tokenTable = await client.execute('PRAGMA table_info(email_auth_tokens)');
     assert.ok(tokenTable.rows.some(row => row.name === 'token_hash'));
     assert.ok(tokenTable.rows.some(row => row.name === 'expires_at'));

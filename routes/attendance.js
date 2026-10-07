@@ -7,7 +7,6 @@ const { csvValue } = require('../csv');
 const axios = require('axios'); // Added axios to make the free API call
 const { requireAuth, requireAdmin } = require('./auth');
 const { logActivity, notifyAdmins } = require('../audit');
-const { sendLocationToTelegram } = require('../telegram-storage');
 const { logRequestEvent, wrapAsyncRoutes } = require('../http-errors');
 const { requireFeature } = require('../limits');
 
@@ -29,7 +28,17 @@ async function canViewTracking(req) {
   if (req.session.role === 'admin') return true;
   return !!(await db.prepare('SELECT user_id FROM tracking_access WHERE user_id = ?').get(req.session.userId));
 }
-
+const trackingStateLabels = {
+  location_denied: 'Location permission unavailable',
+  background_location_off: 'Background location disabled',
+  offline_queue_full: 'Offline location queue full; new points are paused',
+  gps_off: 'Location services turned off',
+  offline: 'Network unavailable; points may be delayed',
+  notification_off: 'Tracking notification disabled',
+  activity_off: 'Activity recognition unavailable; GPS continues',
+  approximate_location: 'Approximate location enabled',
+  restored: 'Location tracking restored'
+};
 function todayStr(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Kolkata',
@@ -46,6 +55,15 @@ function isValidDateOnly(value) {
   const parsed = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
+
+function parseTrackingTimestamp(value) {
+  if (typeof value !== 'string' || value.length > 40) return null;
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds) || milliseconds > Date.now() + 120_000) return null;
+  return new Date(milliseconds).toISOString();
+}
+
+const attendanceTrackingGapMs = 15 * 60_000;
 
 function getPunchDevice(req, reportedModel) {
   const userAgent = String(req.get('user-agent') || '').slice(0, 500);
@@ -180,22 +198,31 @@ function getActivitySignal(body = {}) {
   };
 }
 
-async function recordLocationPoint(attendanceId, userId, lat, lng, recordedAt, minimumIntervalMs = 0, activity = {}) {
+async function recordLocationPoint(attendanceId, userId, lat, lng, recordedAt, minimumIntervalMs = 0, activity = {}, clientPointId = null) {
   const previous = await db.prepare(`SELECT latitude, longitude FROM attendance_locations
-    WHERE attendance_id = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
+    WHERE attendance_id = ? AND recorded_at < ? AND latitude IS NOT NULL AND longitude IS NOT NULL
     ORDER BY recorded_at DESC, id DESC LIMIT 1`).get(attendanceId);
   const distanceMeters = previous ? distanceBetweenPoints(Number(previous.latitude), Number(previous.longitude), Number(lat), Number(lng)) : 0;
   const placeChanged = distanceMeters >= 50 ? 1 : 0;
   const activitySignal = getActivitySignal(activity);
-  const info = minimumIntervalMs > 0
-    ? await db.prepare(`INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed, activity_type, activity_confidence)
+  let info;
+  if (clientPointId) {
+    info = await db.prepare(`INSERT OR IGNORE INTO attendance_locations
+      (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed, activity_type, activity_confidence, client_point_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged, activitySignal.type, activitySignal.confidence, clientPointId);
+  } else if (minimumIntervalMs > 0) {
+    info = await db.prepare(`INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed, activity_type, activity_confidence)
       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (
         SELECT 1 FROM attendance_locations WHERE attendance_id=? AND recorded_at >= ?
       )`).run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged, activitySignal.type, activitySignal.confidence,
-      attendanceId, new Date(Date.now() - minimumIntervalMs).toISOString())
-    : await db.prepare('INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed, activity_type, activity_confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      attendanceId, new Date(Date.now() - minimumIntervalMs).toISOString());
+  } else {
+    info = await db.prepare('INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed, activity_type, activity_confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged, activitySignal.type, activitySignal.confidence);
+  }
   if (minimumIntervalMs > 0 && !info.changes) return null;
+  if (clientPointId && !info.changes) return { id: null, duplicate: true, distanceMeters: 0, placeChanged: 0 };
   return { id: info.lastInsertRowid, distanceMeters, placeChanged };
 }
 
@@ -403,12 +430,6 @@ router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
   const { attendanceId, locationName, now, mapStr } = punchIn;
   const recordedAt = new Date().toISOString();
   const locationInfo = await recordLocationPoint(attendanceId, req.session.userId, lat, lng, recordedAt, 0, req.body);
-  try {
-    const telegramMessageId = await sendLocationToTelegram(lat, lng, `Live tracking started: ${req.session.userId}`);
-    await db.prepare('UPDATE attendance_locations SET telegram_message_id = ? WHERE id = ?').run(telegramMessageId, locationInfo.id);
-  } catch (error) {
-    logRequestEvent(req, 'attendance_punch_location_notification_failed', 'warn');
-  }
   const activityId = await logActivity(req, 'Punched in', 'attendance', attendanceId, `${date} - ${locationName}`, req.session.userId);
   await notifyAdmins(req, activityId);
   res.json({ ok: true, time: now, status: mapStr });
@@ -423,17 +444,94 @@ router.post('/location-update', async (req, res) => {
   const { lat, lng } = coordinates;
   const attendance = await db.prepare('SELECT id, punch_in, punch_out FROM attendance WHERE user_id = ? AND date = ?').get(req.session.userId, todayStr());
   if (!attendance?.punch_in || attendance.punch_out) return res.status(400).json({ error: 'Live tracking is only available during an active shift.' });
-  const recordedAt = new Date().toISOString();
+  const recordedAt = req.body.recorded_at ? parseTrackingTimestamp(req.body.recorded_at) : new Date().toISOString();
+  if (!recordedAt || new Date(recordedAt) < new Date(attendance.punch_in)) {
+    return res.status(400).json({ error: 'Location timestamp is outside the active shift.' });
+  }
   const locationInfo = await recordLocationPoint(attendance.id, req.session.userId, lat, lng, recordedAt, 30_000, req.body);
   if (!locationInfo) return res.json({ ok: true, ignored: true, recorded_at: recordedAt });
-  try {
-    const telegramMessageId = await sendLocationToTelegram(lat, lng, `Live tracking update: ${req.session.userId}`);
-    await db.prepare('UPDATE attendance_locations SET telegram_message_id = ? WHERE id = ?').run(telegramMessageId, locationInfo.id);
-    res.json({ ok: true, recorded_at: recordedAt });
-  } catch (error) {
-    logRequestEvent(req, 'attendance_live_location_notification_failed', 'warn');
-    res.json({ ok: true, recorded_at: recordedAt, telegram_warning: 'Location tracking notification is temporarily unavailable.' });
+  res.json({ ok: true, recorded_at: recordedAt });
+});
+
+router.post('/location-updates', async (req, res) => {
+  if (!(await checkRegisteredDevice(req, res))) return;
+  const device = getPunchDevice(req, req.body.device_model);
+  if (!device.isNativeApp) return res.status(403).json({ error: 'Background location uploads require the TaskFlow mobile app.' });
+  if (!(await canPunchFromDevice(req.session.userId, device))) return res.status(403).json({ error: 'Live tracking from this device is not allowed.' });
+  const shiftDate = String(req.body.shift_date || '');
+  const points = req.body.points;
+  if (!isValidDateOnly(shiftDate) || !Array.isArray(points) || points.length < 1 || points.length > 100) {
+    return res.status(400).json({ error: 'Provide a valid shift date and up to 100 queued location points.' });
   }
+  const attendance = await db.prepare('SELECT id, punch_in, punch_out FROM attendance WHERE user_id = ? AND date = ?')
+    .get(req.session.userId, shiftDate);
+  if (!attendance?.punch_in) return res.status(400).json({ error: 'The requested attendance shift does not exist.' });
+  const normalizedPoints = [];
+  for (const point of points) {
+    const recordedAt = parseTrackingTimestamp(point?.recorded_at);
+    const coordinates = validateCoordinates(point?.lat, point?.lng);
+    if (!recordedAt || !coordinates
+      || new Date(recordedAt) < new Date(attendance.punch_in)
+      || (attendance.punch_out && new Date(recordedAt) > new Date(attendance.punch_out))
+      || typeof point.client_point_id !== 'string'
+      || !/^[a-zA-Z0-9-]{16,100}$/.test(point.client_point_id)) {
+      return res.status(400).json({ error: 'A queued location point is invalid or outside the attendance shift.' });
+    }
+    normalizedPoints.push({ ...coordinates, recordedAt, point });
+  }
+  normalizedPoints.sort((first, second) => Date.parse(first.recordedAt) - Date.parse(second.recordedAt));
+  let accepted = 0;
+  let duplicates = 0;
+  for (const item of normalizedPoints) {
+    const result = await recordLocationPoint(
+      attendance.id,
+      req.session.userId,
+      item.lat,
+      item.lng,
+      item.recordedAt,
+      0,
+      item.point,
+      item.point.client_point_id
+    );
+    if (result?.duplicate) duplicates += 1;
+    else accepted += 1;
+  }
+  res.json({ ok: true, accepted, duplicates });
+});
+
+const trackingStates = new Set([
+  'location_denied',
+  'background_location_off',
+  'offline_queue_full',
+  'gps_off',
+  'offline',
+  'notification_off',
+  'activity_off',
+  'approximate_location',
+  'restored'
+]);
+
+router.post('/tracking-status', async (req, res) => {
+  const state = String(req.body.state || '');
+  const recordedAt = parseTrackingTimestamp(req.body.at);
+  if (!trackingStates.has(state) || !recordedAt) {
+    return res.status(400).json({ error: 'Provide a supported tracking status and valid timestamp.' });
+  }
+  const shiftDate = todayStr(new Date(recordedAt));
+  const attendance = await db.prepare('SELECT id, punch_in, punch_out FROM attendance WHERE user_id = ? AND date = ?')
+    .get(req.session.userId, shiftDate);
+  if (!attendance?.punch_in || attendance.punch_out
+    || new Date(recordedAt) < new Date(attendance.punch_in)) {
+    return res.status(400).json({ error: 'Tracking status can only be recorded during an active shift.' });
+  }
+  const recentEvent = await db.prepare(`SELECT id FROM attendance_tracking_events
+    WHERE attendance_id = ? AND state = ? AND recorded_at >= ? LIMIT 1`)
+    .get(attendance.id, state, new Date(Date.parse(recordedAt) - 5 * 60_000).toISOString());
+  if (!recentEvent) {
+    await db.prepare(`INSERT INTO attendance_tracking_events (attendance_id, user_id, state, recorded_at)
+      VALUES (?, ?, ?, ?)`).run(attendance.id, req.session.userId, state, recordedAt);
+  }
+  res.json({ ok: true, recorded: !recentEvent });
 });
 
 router.post('/punch-out', attendanceVerificationLimiter, async (req, res) => {
@@ -638,10 +736,22 @@ router.get('/tracking/people', async (req, res) => {
       a.punch_in, a.punch_out, a.in_lat, a.in_lng,
       (SELECT al.latitude FROM attendance_locations al WHERE al.attendance_id = a.id AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL ORDER BY al.recorded_at DESC LIMIT 1) AS latest_lat,
       (SELECT al.longitude FROM attendance_locations al WHERE al.attendance_id = a.id AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL ORDER BY al.recorded_at DESC LIMIT 1) AS latest_lng,
-      (SELECT al.recorded_at FROM attendance_locations al WHERE al.attendance_id = a.id AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL ORDER BY al.recorded_at DESC LIMIT 1) AS latest_at
+      (SELECT al.recorded_at FROM attendance_locations al WHERE al.attendance_id = a.id AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL ORDER BY al.recorded_at DESC LIMIT 1) AS latest_at,
+      (SELECT te.state FROM attendance_tracking_events te WHERE te.attendance_id = a.id ORDER BY te.recorded_at DESC LIMIT 1) AS tracking_state,
+      (SELECT te.recorded_at FROM attendance_tracking_events te WHERE te.attendance_id = a.id ORDER BY te.recorded_at DESC LIMIT 1) AS tracking_state_at
     FROM users u LEFT JOIN attendance a ON a.user_id = u.id AND a.date = ?
     WHERE u.active = 1 ORDER BY u.name`).all(selectedDate);
-  res.json(rows || []);
+  const now = Date.now();
+  res.json((rows || []).map(row => {
+    const active = Boolean(row.punch_in && !row.punch_out);
+    const latestAt = row.latest_at ? Date.parse(row.latest_at) : NaN;
+    return {
+      ...row,
+      tracking_gap_minutes: active
+        ? Number.isFinite(latestAt) ? Math.max(0, Math.floor((now - latestAt) / 60_000)) : null
+        : null
+    };
+  }));
 });
 
 router.get('/tracking/:userId/timeline', async (req, res) => {
@@ -654,10 +764,14 @@ router.get('/tracking/:userId/timeline', async (req, res) => {
     FROM attendance_locations al JOIN users u ON u.id = al.user_id JOIN attendance a ON a.id = al.attendance_id
     WHERE al.user_id = ? AND a.date = ? AND al.latitude IS NOT NULL AND al.longitude IS NOT NULL
     ORDER BY al.recorded_at ASC`).all(userId, selectedDate);
-  const attendance = await db.prepare(`SELECT a.punch_in, a.punch_out, a.in_lat, a.in_lng, a.out_lat, a.out_lng,
+  const attendance = await db.prepare(`SELECT a.id, a.punch_in, a.punch_out, a.in_lat, a.in_lng, a.out_lat, a.out_lng,
       a.in_location_text, a.out_location_text, u.name AS user_name
     FROM attendance a JOIN users u ON u.id = a.user_id
     WHERE a.user_id = ? AND a.date = ?`).get(userId, selectedDate);
+  const trackingRows = attendance
+    ? await db.prepare(`SELECT state, recorded_at FROM attendance_tracking_events
+        WHERE attendance_id = ? ORDER BY recorded_at ASC`).all(attendance.id)
+    : [];
   const previousUtcDate = new Date(`${selectedDate}T00:00:00Z`);
   previousUtcDate.setUTCDate(previousUtcDate.getUTCDate() - 1);
   const earliestUtcDate = previousUtcDate.toISOString().slice(0, 10);
@@ -740,6 +854,30 @@ router.get('/tracking/:userId/timeline', async (req, res) => {
         longitude: checkin.check_out_lng
       });
     }
+  }
+  for (const tracking of trackingRows || []) {
+    addEvent({
+      type: 'tracking',
+      state: tracking.state,
+      action: trackingStateLabels[tracking.state] || 'Tracking status changed',
+      recorded_at: tracking.recorded_at
+    });
+  }
+  const coveragePoints = points.map(point => ({ recorded_at: point.recorded_at }));
+  if (attendance?.punch_in) coveragePoints.push({ recorded_at: attendance.punch_in });
+  if (attendance?.punch_out) coveragePoints.push({ recorded_at: attendance.punch_out });
+  else if (attendance?.punch_in && selectedDate === todayStr()) coveragePoints.push({ recorded_at: new Date().toISOString() });
+  coveragePoints.sort((first, second) => Date.parse(first.recorded_at) - Date.parse(second.recorded_at));
+  for (let index = 1; index < coveragePoints.length; index += 1) {
+    const elapsed = Date.parse(coveragePoints[index].recorded_at) - Date.parse(coveragePoints[index - 1].recorded_at);
+    if (elapsed <= attendanceTrackingGapMs) continue;
+    const minutes = Math.floor(elapsed / 60_000);
+    addEvent({
+      type: 'tracking',
+      state: 'gap',
+      action: `Location gap: no GPS point for ${minutes} minutes`,
+      recorded_at: coveragePoints[index].recorded_at
+    });
   }
   events.sort((first, second) => new Date(first.recorded_at) - new Date(second.recorded_at));
   points.sort((first, second) => new Date(first.recorded_at) - new Date(second.recorded_at));

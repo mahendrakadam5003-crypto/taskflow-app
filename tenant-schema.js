@@ -337,6 +337,14 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       activity_type TEXT NOT NULL DEFAULT 'unknown',
       activity_confidence INTEGER NOT NULL DEFAULT 0
     );`);
+    await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS attendance_tracking_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      attendance_id INTEGER NOT NULL REFERENCES attendance(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      state TEXT NOT NULL,
+      recorded_at TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT ''
+    );`);
     if (needsSchemaUpgrade) {
     const locationColumns = await dbDriverInterface.prepare('PRAGMA table_info(attendance_locations)').all();
     const locationColumnNames = (locationColumns || []).map(row => row.name);
@@ -741,7 +749,7 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       office_radius_m: '150',
       attendance_verification_enabled: 'false',
       attachment_retention_days: '0',
-      attendance_location_retention_days: '60'
+      attendance_location_retention_days: '90'
     };
     await dbDriverInterface.batch(Object.entries(defaults).map(([key, value]) => ({
       sql: 'INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)',
@@ -831,6 +839,21 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS app_login_devices_hash_idx ON app_login_devices(device_id_hash)');
       await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS app_login_devices_registered_idx ON app_login_devices(registered_at)');
       await markSchemaVersion(9);
+    }
+    if (schemaVersion < 10) {
+      const attendanceLocationColumns = await dbDriverInterface.prepare('PRAGMA table_info(attendance_locations)').all();
+      if (!attendanceLocationColumns.some(column => column.name === 'client_point_id')) {
+        await dbDriverInterface.exec('ALTER TABLE attendance_locations ADD COLUMN client_point_id TEXT');
+      }
+      await dbDriverInterface.exec(`CREATE UNIQUE INDEX IF NOT EXISTS attendance_locations_client_point_idx
+        ON attendance_locations(attendance_id, client_point_id) WHERE client_point_id IS NOT NULL`);
+      await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS attendance_tracking_events_user_time_idx ON attendance_tracking_events(user_id, recorded_at)');
+      await markSchemaVersion(10);
+    }
+    if (schemaVersion < 11) {
+      await dbDriverInterface.prepare(`UPDATE settings SET value = '90'
+        WHERE key = 'attendance_location_retention_days' AND value = '60'`).run();
+      await markSchemaVersion(11);
     }
     console.log('Database schema and default settings are ready.');
   } catch (err) {

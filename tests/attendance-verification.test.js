@@ -16,11 +16,18 @@ const userId = 7;
 const deviceId = 'a'.repeat(48);
 const passwordHash = bcrypt.hashSync('AttendancePassword123', 4);
 const deviceHash = crypto.createHash('sha256').update(deviceId).digest('hex');
+const activeShiftDate = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+}).format(new Date());
+const activeShiftPunchIn = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 const writes = [];
 const auditEntries = [];
 let timelineQuery = '';
 let liveShiftQuery = '';
 let taskCheckinsQuery = '';
+let trackingTimelineAttendance = null;
+let trackingTimelinePoints = null;
+let trackingTimelineEvents = [];
 let officeSettingsReadCount = 0;
 let attendanceRecordForPunchOut = null;
 const attendanceAccess = { allow_phone: 1, allow_mobile_browser: 1, allow_laptop: 1 };
@@ -38,6 +45,11 @@ const mockDb = {
         if (sql.includes('SELECT allow_phone, allow_mobile_browser, allow_laptop FROM attendance_device_access')) return attendanceAccess;
         if (sql.includes('SELECT id, active FROM users WHERE id=?')) return { id: userId, active: 1 };
         if (sql.includes('SELECT * FROM attendance WHERE user_id = ? AND date = ?')) return attendanceRecordForPunchOut;
+        if (sql.includes('SELECT id, punch_in, punch_out FROM attendance WHERE user_id = ? AND date = ?')) {
+          return args[1] === activeShiftDate ? { id: 35, punch_in: activeShiftPunchIn, punch_out: null } : null;
+        }
+        if (sql.includes('SELECT a.id, a.punch_in, a.punch_out,')) return trackingTimelineAttendance;
+        if (sql.includes('SELECT id FROM attendance_tracking_events')) return null;
         if (sql.includes('SELECT latitude, longitude FROM attendance_locations')) return null;
         return null;
       },
@@ -52,11 +64,12 @@ const mockDb = {
         }
         if (sql.includes('FROM attendance_locations al JOIN users u')) {
           timelineQuery = sql;
-          return [
+          return trackingTimelinePoints || [
             { recorded_at: '2026-10-05T04:00:00.000Z', latitude: 18.52, longitude: 73.85, distance_meters: 0, place_changed: 0, activity_type: 'in_vehicle', activity_confidence: 93, user_name: 'Employee' },
             { recorded_at: '2026-10-05T04:05:00.000Z', latitude: 18.53, longitude: 73.86, distance_meters: 71.5, place_changed: 1, activity_type: 'walking', activity_confidence: 81, user_name: 'Employee' }
           ];
         }
+        if (sql.includes('SELECT state, recorded_at FROM attendance_tracking_events')) return trackingTimelineEvents;
         if (sql.includes('FROM attendance a JOIN users u')) {
           liveShiftQuery = sql;
           return [
@@ -173,6 +186,79 @@ test('mobile-browser punching needs its own attendance permission', async () => 
     body: JSON.stringify({ device_id: deviceId, lat: 18.52, lng: 73.85, verification_password: 'AttendancePassword123' })
   });
   assert.equal(allowed.status, 200);
+});
+
+test('tracking status accepts bounded events during an active attendance shift', async () => {
+  writes.length = 0;
+  const response = await fetch(`${baseUrl}/api/attendance/tracking-status`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: permissionCookie,
+      'User-Agent': 'Mozilla/5.0 TaskFlowNative/1'
+    },
+    body: JSON.stringify({ state: 'location_denied', at: new Date().toISOString() })
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true, recorded: true });
+  assert.ok(writes.some(write => write.sql.includes('INSERT INTO attendance_tracking_events')));
+
+  const backgroundOff = await fetch(`${baseUrl}/api/attendance/tracking-status`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: permissionCookie,
+      'User-Agent': 'Mozilla/5.0 TaskFlowNative/1'
+    },
+    body: JSON.stringify({ state: 'background_location_off', at: new Date().toISOString() })
+  });
+  assert.equal(backgroundOff.status, 200);
+
+  const queueFull = await fetch(`${baseUrl}/api/attendance/tracking-status`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: permissionCookie,
+      'User-Agent': 'Mozilla/5.0 TaskFlowNative/1'
+    },
+    body: JSON.stringify({ state: 'offline_queue_full', at: new Date().toISOString() })
+  });
+  assert.equal(queueFull.status, 200);
+});
+
+test('tracking status rejects unknown states and invalid timestamps', async () => {
+  const response = await fetch(`${baseUrl}/api/attendance/tracking-status`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: permissionCookie,
+      'User-Agent': 'Mozilla/5.0 TaskFlowNative/1'
+    },
+    body: JSON.stringify({ state: 'password', at: new Date().toISOString() })
+  });
+  assert.equal(response.status, 400);
+});
+
+test('queued native location points are accepted only inside a real active shift', async () => {
+  writes.length = 0;
+  const recordedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+  const response = await fetch(`${baseUrl}/api/attendance/location-updates`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: appCookie,
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 15) TaskFlowNative/1'
+    },
+    body: JSON.stringify({
+      device_id: deviceId,
+      device_model: 'Google Pixel 9',
+      shift_date: activeShiftDate,
+      points: [{ client_point_id: 'point-1234567890abcd', recorded_at: recordedAt, lat: 18.52, lng: 73.85 }]
+    })
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true, accepted: 1, duplicates: 0 });
+  assert.ok(writes.some(write => write.sql.includes('client_point_id')));
 });
 
 test('admins can independently save attendance access for all three client types', async () => {
@@ -410,4 +496,37 @@ test('employee timeline filters task events by India date across UTC midnight', 
   const result = await response.json();
   assert.deepEqual(result.events.map(event => event.action), ['Checked in to task']);
   assert.equal(result.events[0].recorded_at, '2026-10-04T19:00:00.000Z');
+});
+
+test('employee tracking timeline includes status changes and GPS gaps', async () => {
+  const now = Date.now();
+  trackingTimelineAttendance = {
+    id: 81,
+    punch_in: new Date(now - 60 * 60_000).toISOString(),
+    punch_out: null,
+    in_lat: null,
+    in_lng: null,
+    user_name: 'Employee'
+  };
+  trackingTimelinePoints = [];
+  trackingTimelineEvents = [
+    { state: 'offline_queue_full', recorded_at: new Date(now - 30 * 60_000).toISOString() },
+    { state: 'restored', recorded_at: new Date(now - 20 * 60_000).toISOString() }
+  ];
+
+  try {
+    const response = await fetch(`${baseUrl}/api/attendance/tracking/7/timeline?date=${activeShiftDate}`, {
+      headers: { Cookie: adminCookie }
+    });
+    assert.equal(response.status, 200);
+    const { events } = await response.json();
+    assert.ok(events.some(event => event.state === 'offline_queue_full'
+      && event.action === 'Offline location queue full; new points are paused'));
+    assert.ok(events.some(event => event.state === 'restored' && event.action === 'Location tracking restored'));
+    assert.ok(events.some(event => event.state === 'gap' && /Location gap: no GPS point for \d+ minutes/.test(event.action)));
+  } finally {
+    trackingTimelineAttendance = null;
+    trackingTimelinePoints = null;
+    trackingTimelineEvents = [];
+  }
 });
