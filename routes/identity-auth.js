@@ -7,7 +7,7 @@ const { rateLimit } = require('express-rate-limit');
 const { getControlDatabase } = require('../control-db');
 const { hasControlDatabaseConfiguration, LEGACY_TENANT_ID } = require('../tenant-manager');
 const { createMailer } = require('../mailer');
-const { authorizeLogin, getLoginDevice, isLoginSessionAllowed } = require('../lib/login-device');
+const { authorizeLogin, getLoginDevice, isLoginSessionAllowed, isMobileBrowserLoginEnabled } = require('../lib/login-device');
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const passwordMinimumBytes = 10;
@@ -533,13 +533,17 @@ function createIdentityAuthRouter(options = {}) {
     if (req.companyAccessState?.state === 'locked' && user.role !== 'admin') return 'google_billing_required';
     let loginAccess;
     if (Number(req.session?.userId) === Number(user.id)) {
-      if (!await isLoginSessionAllowed(database, user, req.session)) return 'login_access_revoked';
+      if (!await isLoginSessionAllowed(database, user, req.session, {
+        allowMobileBrowserLogin: isMobileBrowserLoginEnabled(environment)
+      })) return 'login_access_revoked';
       loginAccess = {
         loginClient: req.session.loginClient || 'web',
         loginDeviceHash: req.session.loginDeviceHash || null
       };
     } else {
-      const authorization = await authorizeLogin(database, user, loginDevice);
+      const authorization = await authorizeLogin(database, user, loginDevice, {
+        allowMobileBrowserLogin: isMobileBrowserLoginEnabled(environment)
+      });
       if (!authorization.ok) {
         return {
           WEB_LOGIN_NOT_ALLOWED: 'web_login_not_allowed',

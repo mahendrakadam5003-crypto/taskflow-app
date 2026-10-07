@@ -606,6 +606,26 @@ test('native app accounts bind one model while admins control browser access and
     assert.equal(deniedBrowserLogin.status, 403);
     assert.equal((await deniedBrowserLogin.json()).code, 'WEB_LOGIN_NOT_ALLOWED');
 
+    const previousMobileBrowserSetting = process.env.ALLOW_MOBILE_BROWSER_LOGIN;
+    let mobileBrowserSession;
+    try {
+      process.env.ALLOW_MOBILE_BROWSER_LOGIN = 'true';
+      const mobileBrowserLogin = await request('/login', {
+        method: 'POST',
+        userAgent: 'Mozilla/5.0 (Linux; Android 15; Pixel 9) Chrome/131.0 Mobile Safari/537.36',
+        body: { username: otherUser.username, password: 'registered-device-password' }
+      });
+      assert.equal(mobileBrowserLogin.status, 200);
+      mobileBrowserSession = mobileBrowserLogin.headers.get('set-cookie').split(';', 1)[0];
+      assert.equal((await request('/me', { cookie: mobileBrowserSession })).status, 200);
+
+      process.env.ALLOW_MOBILE_BROWSER_LOGIN = 'false';
+      assert.equal((await request('/me', { cookie: mobileBrowserSession })).status, 401);
+    } finally {
+      if (previousMobileBrowserSetting === undefined) delete process.env.ALLOW_MOBILE_BROWSER_LOGIN;
+      else process.env.ALLOW_MOBILE_BROWSER_LOGIN = previousMobileBrowserSetting;
+    }
+
     const enabled = await request(`/users/${otherUser.id}/web-access`, {
       method: 'PUT', cookie: adminCookie, body: { enabled: true }
     });

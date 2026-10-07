@@ -40,6 +40,8 @@ services:
         sync: false
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false
+      - key: ALLOW_MOBILE_BROWSER_LOGIN
+        value: true
       - key: MAIL_PROVIDER
         value: gmail
       - key: GMAIL_CLIENT_ID

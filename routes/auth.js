@@ -10,7 +10,7 @@ const { logActivity } = require('../audit');
 const { asyncHandler, logRequestEvent, sendInternalError, wrapAsyncRoutes } = require('../http-errors');
 const { getPlan, getPlanUsage } = require('../limits');
 const { isFirebasePushConfigured } = require('../lib/firebase-push');
-const { authorizeLogin, getLoginDevice, isLoginSessionAllowed } = require('../lib/login-device');
+const { authorizeLogin, getLoginDevice, isLoginSessionAllowed, isMobileBrowserLoginEnabled } = require('../lib/login-device');
 const { createIdentityAuthRouter, normalizeEmail, validEmail } = require('./identity-auth');
 
 const router = express.Router();
@@ -152,7 +152,9 @@ async function requireAuth(req, res, next) {
     return rejectInvalidSession(req, res);
   }
   if (req.authenticatedUser) {
-    if (!await isLoginSessionAllowed(db, req.authenticatedUser, req.session)) return rejectInvalidSession(req, res);
+    if (!await isLoginSessionAllowed(db, req.authenticatedUser, req.session, {
+      allowMobileBrowserLogin: isMobileBrowserLoginEnabled()
+    })) return rejectInvalidSession(req, res);
     if (req.companyStatus === 'suspended'
       && (req.authenticatedUser.role !== 'admin' || !['GET', 'HEAD'].includes(req.method))) {
       return res.status(403).json({
@@ -170,7 +172,9 @@ async function requireAuth(req, res, next) {
       email, email_verified, web_access_enabled FROM users WHERE id = ?`).get(req.session.userId);
     if (!user || Number(user.active) !== 1) return rejectInvalidSession(req, res);
     if (Number(req.session.tokenVersion) !== Number(user.token_version)) return rejectInvalidSession(req, res);
-    if (!await isLoginSessionAllowed(db, user, req.session)) return rejectInvalidSession(req, res);
+    if (!await isLoginSessionAllowed(db, user, req.session, {
+      allowMobileBrowserLogin: isMobileBrowserLoginEnabled()
+    })) return rejectInvalidSession(req, res);
     req.session.role = user.role;
     req.session.name = user.name;
     if (req.companyStatus === 'suspended'
@@ -233,7 +237,9 @@ router.post('/login', loginIpLimiter, loginUsernameLimiter, loginCompanyLimiter,
     }
 
     const loginDevice = getLoginDevice(req, req.body);
-    const loginAccess = await authorizeLogin(db, user, loginDevice);
+    const loginAccess = await authorizeLogin(db, user, loginDevice, {
+      allowMobileBrowserLogin: isMobileBrowserLoginEnabled()
+    });
     if (!loginAccess.ok) return res.status(loginAccess.status).json({ error: loginAccess.error, code: loginAccess.code });
     await setAuthenticatedSession(req, user, loginAccess);
     if (req.companyTenantId != null && String(req.companyTenantId) !== LEGACY_TENANT_ID) {
