@@ -1833,7 +1833,7 @@ function showView(view, { fromBack = false } = {}) {
     currentTaskFlowView = view;
   }
   if (view !== 'attendance') stopAttendanceClock();
-  if (mobilePageTitle) mobilePageTitle.textContent = view === 'dashboard' ? 'TaskFlow' : (mobileViewTitles[view] || 'TaskFlow');
+  if (mobilePageTitle) mobilePageTitle.textContent = view === 'project' ? '' : (view === 'dashboard' ? 'TaskFlow' : (mobileViewTitles[view] || 'TaskFlow'));
   if (mobileBackButton) {
     const backToProjects = view === 'project';
     mobileBackButton.title = backToProjects ? 'Back to projects' : 'Back to dashboard';
