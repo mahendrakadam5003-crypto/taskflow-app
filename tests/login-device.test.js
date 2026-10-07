@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { authorizeLogin, getLoginDevice, isLoginSessionAllowed } = require('../lib/login-device');
+const { authorizeLogin, getLoginDevice, isLoginSessionAllowed, isMobileBrowserLoginEnabled } = require('../lib/login-device');
 
 function createDatabase() {
   const devices = new Map();
@@ -32,6 +32,11 @@ function appDevice(deviceId, model = 'Pixel 9') {
     model
   });
 }
+
+test('temporary mobile-browser login defaults on and accepts an explicit off switch', () => {
+  assert.equal(isMobileBrowserLoginEnabled({}), true);
+  assert.equal(isMobileBrowserLoginEnabled({ ALLOW_MOBILE_BROWSER_LOGIN: 'false' }), false);
+});
 
 test('browser login requires explicit web access', async () => {
   const database = createDatabase();
