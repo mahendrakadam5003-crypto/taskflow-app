@@ -64,7 +64,13 @@ const mockDb = {
         }
         if (sql.includes('FROM users WHERE id')) {
           const found = users.get(Number(args.at(-1)));
-          return found ? { ...found } : null;
+          if (!found) return null;
+          const selectedColumns = sql.match(/SELECT\s+([\s\S]+?)\s+FROM users WHERE id\s*=/i)?.[1]
+            .split(',')
+            .map(column => column.trim());
+          return selectedColumns
+            ? Object.fromEntries(selectedColumns.filter(column => column in found).map(column => [column, found[column]]))
+            : { ...found };
         }
         return null;
       },
@@ -189,6 +195,19 @@ app.post('/test-session', (req, res) => {
   req.session.companyId = 'legacy';
   req.session.save(error => error ? res.status(500).end() : res.json({ ok: true }));
 });
+app.post('/test-app-session', (req, res) => {
+  const deviceIdHash = 'test-app-device-hash';
+  appLoginDevices.set(otherUser.id, { device_id_hash: deviceIdHash, device_model: 'Google Test Device' });
+  req.session.userId = otherUser.id;
+  req.session.role = otherUser.role;
+  req.session.name = otherUser.name;
+  req.session.tokenVersion = otherUser.token_version;
+  req.session.companyId = 'legacy';
+  req.session.loginClient = 'app';
+  req.session.loginDeviceHash = deviceIdHash;
+  req.session.save(error => error ? res.status(500).end() : res.json({ ok: true }));
+});
+app.get('/api/project-action-access/me', requireAuth, (req, res) => res.json({ userId: req.authenticatedUser.id }));
 app.get('/api/company-status-probe', (req, res, next) => {
   req.companyStatus = 'suspended';
   next();
@@ -319,6 +338,26 @@ test('password change invalidates the other browser session', async () => {
   });
   assert.equal(replacementLogin.status, 200);
   assert.equal((await replacementLogin.json()).username, 'employee');
+});
+
+test('native app sessions validate their device using the loaded user ID', async () => {
+  const response = await fetch(`${baseUrl}/test-app-session`, {
+    method: 'POST',
+    headers: { 'X-Forwarded-For': nextIp() }
+  });
+  assert.equal(response.status, 200);
+  const cookie = response.headers.get('set-cookie').split(';', 1)[0];
+
+  const currentUser = await request('/me', { cookie, userAgent: 'Mozilla/5.0 TaskFlowNative/1' });
+  const body = await currentUser.json();
+  assert.equal(currentUser.status, 200, JSON.stringify(body));
+  assert.equal(body.id, otherUser.id);
+
+  const projectAccess = await fetch(`${baseUrl}/api/project-action-access/me`, {
+    headers: { Cookie: cookie, 'User-Agent': 'Mozilla/5.0 TaskFlowNative/1', 'X-Forwarded-For': nextIp() }
+  });
+  assert.equal(projectAccess.status, 200);
+  assert.deepEqual(await projectAccess.json(), { userId: otherUser.id });
 });
 
 test('inactive company status blocks authenticated requests', async () => {

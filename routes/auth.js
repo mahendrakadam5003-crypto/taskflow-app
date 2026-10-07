@@ -168,7 +168,7 @@ async function requireAuth(req, res, next) {
     return next();
   }
   try {
-    const user = await db.prepare(`SELECT role, name, active, must_change_password, token_version,
+    const user = await db.prepare(`SELECT id, role, name, active, must_change_password, token_version,
       email, email_verified, web_access_enabled FROM users WHERE id = ?`).get(req.session.userId);
     if (!user || Number(user.active) !== 1) return rejectInvalidSession(req, res);
     if (Number(req.session.tokenVersion) !== Number(user.token_version)) return rejectInvalidSession(req, res);
