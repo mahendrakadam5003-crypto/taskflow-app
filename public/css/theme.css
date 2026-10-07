@@ -526,6 +526,16 @@ html.is-native textarea::placeholder { color: #7B8494; }
     font: inherit;
     font-weight: 700;
   }
+  html.is-native .app.project-shell .mobile-back-btn.back-to-projects {
+    width: auto;
+    min-width: 0;
+    height: 44px;
+    flex: 0 0 auto;
+    gap: 6px;
+    padding: 0 12px;
+    font-size: 14px;
+    white-space: nowrap;
+  }
   html.is-native .app.dashboard-view .appearance-settings-button {
     display: inline-flex;
     width: 44px;
