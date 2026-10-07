@@ -9,7 +9,7 @@ const { initTenantSchema } = require('./tenant-schema');
 
 const ARCHIVE_FORMAT = 'taskflow-company-backup';
 const ARCHIVE_VERSION = 2;
-const DEFAULT_PART_BYTES = 45 * 1024 * 1024;
+const DEFAULT_PART_BYTES = 19 * 1024 * 1024;
 const MAX_PART_BYTES = 19 * 1024 * 1024;
 
 function jsonSafe(value) {

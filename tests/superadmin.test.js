@@ -299,6 +299,7 @@ async function createApp({ provisionCompany, tenantDatabase, backupDirectory, ba
     sql: 'INSERT INTO usage_snapshots (company_id, user_count, db_bytes, files_bytes) VALUES (?, ?, ?, ?)',
     args: [Number(company.lastInsertRowid), 7, 4096, 2048]
   });
+  const resolvedBackupManager = typeof backupManager === 'function' ? backupManager(controlDb) : backupManager;
 
   const app = express();
   app.use(express.json());
@@ -314,7 +315,7 @@ async function createApp({ provisionCompany, tenantDatabase, backupDirectory, ba
     provisionCompany,
     tenantDatabase,
     backupDirectory,
-    backupManager
+    backupManager: resolvedBackupManager
   }));
   app.get(['/superadmin', '/superadmin.html'], createSuperAdminPageHandler(path.join(__dirname, '..', 'public', 'superadmin.html')));
   app.get('/support-state', (req, res) => res.json({
@@ -893,6 +894,23 @@ test('super-admin detail, plans, billing, reset, backup, support mode, and compa
   const tenantAdmin = { id: 9, name: 'Tenant Admin', username: 'tenant-admin', token_version: 4 };
   let tenantPasswordHash = 'old-password-hash';
   let mustChangePassword = 0;
+  const backupBuffer = Buffer.from(JSON.stringify({
+    format: 'taskflow-company-backup',
+    tables: { users: [{ username: tenantAdmin.username }] }
+  }));
+  const backupManager = controlDb => ({
+    async createCompanyBackup(companyId, { adminId }) {
+      await fs.writeFile(path.join(backupDirectory, 'test-backup.json'), backupBuffer);
+      await controlDb.execute({
+        sql: 'INSERT INTO super_admin_audit (super_admin_id, company_id, action, details) VALUES (?, ?, ?, ?)',
+        args: [adminId, companyId, 'Company backup created', 'Test backup created.']
+      });
+      return { id: 1, status: 'complete', type: 'tenant-json-v2' };
+    },
+    async getBackupArchive() {
+      return { buffer: backupBuffer };
+    }
+  });
   const tenantDatabase = {
     runWithTenant(companyId, callback) {
       assert.equal(companyId, 1);
@@ -926,7 +944,7 @@ test('super-admin detail, plans, billing, reset, backup, support mode, and compa
       };
     }
   };
-  const { controlDb, server, baseUrl, origin } = await createApp({ tenantDatabase, backupDirectory });
+  const { controlDb, server, baseUrl, origin } = await createApp({ tenantDatabase, backupDirectory, backupManager });
   try {
     const unauthorizedDetail = await fetch(`${baseUrl}/companies/1`);
     assert.equal(unauthorizedDetail.status, 401);

@@ -555,10 +555,10 @@ test('employee timeline filters task events by India date across UTC midnight', 
 });
 
 test('employee tracking timeline includes status changes and GPS gaps', async () => {
-  const now = Date.now();
+  const trackingAnchor = new Date(`${activeShiftDate}T12:00:00+05:30`).getTime();
   trackingTimelineAttendance = {
     id: 81,
-    punch_in: new Date(now - 60 * 60_000).toISOString(),
+    punch_in: new Date(trackingAnchor - 60 * 60_000).toISOString(),
     punch_out: null,
     in_lat: null,
     in_lng: null,
@@ -566,8 +566,8 @@ test('employee tracking timeline includes status changes and GPS gaps', async ()
   };
   trackingTimelinePoints = [];
   trackingTimelineEvents = [
-    { state: 'offline_queue_full', recorded_at: new Date(now - 30 * 60_000).toISOString() },
-    { state: 'restored', recorded_at: new Date(now - 20 * 60_000).toISOString() }
+    { state: 'offline_queue_full', recorded_at: new Date(trackingAnchor - 30 * 60_000).toISOString() },
+    { state: 'restored', recorded_at: new Date(trackingAnchor - 20 * 60_000).toISOString() }
   ];
 
   try {
