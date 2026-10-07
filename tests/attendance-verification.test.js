@@ -23,6 +23,7 @@ let liveShiftQuery = '';
 let taskCheckinsQuery = '';
 let officeSettingsReadCount = 0;
 let attendanceRecordForPunchOut = null;
+const attendanceAccess = { allow_phone: 1, allow_mobile_browser: 1, allow_laptop: 1 };
 
 const mockDb = {
   ready: Promise.resolve(),
@@ -34,7 +35,8 @@ const mockDb = {
         if (sql.includes('SELECT device_token_hash, device_name FROM attendance_registered_devices')) {
           return { device_token_hash: deviceHash, device_name: 'Test device' };
         }
-        if (sql.includes('SELECT allow_phone, allow_laptop FROM attendance_device_access')) return { allow_phone: 1, allow_laptop: 1 };
+        if (sql.includes('SELECT allow_phone, allow_mobile_browser, allow_laptop FROM attendance_device_access')) return attendanceAccess;
+        if (sql.includes('SELECT id, active FROM users WHERE id=?')) return { id: userId, active: 1 };
         if (sql.includes('SELECT * FROM attendance WHERE user_id = ? AND date = ?')) return attendanceRecordForPunchOut;
         if (sql.includes('SELECT latitude, longitude FROM attendance_locations')) return null;
         return null;
@@ -117,13 +119,72 @@ test('native TaskFlow attendance is identified as the app, not its embedded Chro
   const device = attendanceRouter.getPunchDevice({
     get: name => name.toLowerCase() === 'user-agent'
       ? 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/131.0 Mobile TaskFlowNative/1'
-      : ''
+      : '',
+    session: { loginClient: 'app' }
   }, 'Google Pixel 9');
 
   assert.deepEqual(device, {
     type: 'phone',
+    attendanceAccess: 'phone',
+    isNativeApp: true,
     info: 'Android · Google Pixel 9 · TaskFlow app · category indicative'
   });
+});
+
+test('mobile-browser punching needs its own attendance permission', async () => {
+  writes.length = 0;
+  attendanceAccess.allow_phone = 1;
+  attendanceAccess.allow_mobile_browser = 0;
+  attendanceAccess.allow_laptop = 0;
+  const denied = await fetch(`${baseUrl}/api/attendance/punch-in`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: permissionCookie,
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 15; Pixel 9) Chrome/131.0 Mobile Safari/537.36'
+    },
+    body: JSON.stringify({ device_id: deviceId, lat: 18.52, lng: 73.85, verification_password: 'AttendancePassword123' })
+  });
+  assert.equal(denied.status, 403);
+  assert.match((await denied.json()).error, /not allowed/i);
+  assert.equal(writes.length, 0);
+
+  const desktopDenied = await fetch(`${baseUrl}/api/attendance/punch-in`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: webCookie,
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0'
+    },
+    body: JSON.stringify({ device_id: deviceId, lat: 18.52, lng: 73.85, verification_password: 'AttendancePassword123' })
+  });
+  assert.equal(desktopDenied.status, 403);
+  assert.match((await desktopDenied.json()).error, /not allowed/i);
+  assert.equal(writes.length, 0);
+
+  attendanceAccess.allow_mobile_browser = 1;
+  const allowed = await fetch(`${baseUrl}/api/attendance/punch-in`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: permissionCookie,
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 15; Pixel 9) Chrome/131.0 Mobile Safari/537.36'
+    },
+    body: JSON.stringify({ device_id: deviceId, lat: 18.52, lng: 73.85, verification_password: 'AttendancePassword123' })
+  });
+  assert.equal(allowed.status, 200);
+});
+
+test('admins can independently save attendance access for all three client types', async () => {
+  writes.length = 0;
+  const response = await fetch(`${baseUrl}/api/attendance/device-access/7`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+    body: JSON.stringify({ allow_phone: false, allow_mobile_browser: true, allow_laptop: false })
+  });
+  assert.equal(response.status, 200);
+  const update = writes.find(write => write.sql.includes('INSERT INTO attendance_device_access'));
+  assert.deepEqual(update.args, [7, 0, 1, 0, 99]);
 });
 
 const app = express();
@@ -133,6 +194,28 @@ app.post('/test-session', (req, res) => {
   req.session.userId = userId;
   req.session.role = 'employee';
   req.session.tokenVersion = 1;
+  req.session.loginClient = 'mobile-web';
+  req.session.save(error => error ? res.status(500).end() : res.json({ ok: true }));
+});
+app.post('/test-permission-session', (req, res) => {
+  req.session.userId = userId + 1;
+  req.session.role = 'employee';
+  req.session.tokenVersion = 1;
+  req.session.loginClient = 'mobile-web';
+  req.session.save(error => error ? res.status(500).end() : res.json({ ok: true }));
+});
+app.post('/test-web-session', (req, res) => {
+  req.session.userId = userId + 1;
+  req.session.role = 'employee';
+  req.session.tokenVersion = 1;
+  req.session.loginClient = 'web';
+  req.session.save(error => error ? res.status(500).end() : res.json({ ok: true }));
+});
+app.post('/test-app-session', (req, res) => {
+  req.session.userId = userId;
+  req.session.role = 'employee';
+  req.session.tokenVersion = 1;
+  req.session.loginClient = 'app';
   req.session.save(error => error ? res.status(500).end() : res.json({ ok: true }));
 });
 app.post('/test-admin-session', (req, res) => {
@@ -147,6 +230,9 @@ app.use((error, req, res, next) => res.status(500).json({ error: 'Internal serve
 let server;
 let baseUrl;
 let cookie;
+let permissionCookie;
+let appCookie;
+let webCookie;
 let adminCookie;
 
 before(async () => {
@@ -155,6 +241,12 @@ before(async () => {
   baseUrl = `http://127.0.0.1:${server.address().port}`;
   const response = await fetch(`${baseUrl}/test-session`, { method: 'POST' });
   cookie = response.headers.get('set-cookie').split(';', 1)[0];
+  const permissionResponse = await fetch(`${baseUrl}/test-permission-session`, { method: 'POST' });
+  permissionCookie = permissionResponse.headers.get('set-cookie').split(';', 1)[0];
+  const appResponse = await fetch(`${baseUrl}/test-app-session`, { method: 'POST' });
+  appCookie = appResponse.headers.get('set-cookie').split(';', 1)[0];
+  const webResponse = await fetch(`${baseUrl}/test-web-session`, { method: 'POST' });
+  webCookie = webResponse.headers.get('set-cookie').split(';', 1)[0];
   const adminResponse = await fetch(`${baseUrl}/test-admin-session`, { method: 'POST' });
   adminCookie = adminResponse.headers.get('set-cookie').split(';', 1)[0];
 });
@@ -170,6 +262,7 @@ after(async () => {
 
 test('required attendance verification blocks unverified punches and accepts native phone verification', async () => {
   writes.length = 0;
+  attendanceAccess.allow_laptop = 1;
   const request = verificationPassword => fetch(`${baseUrl}/api/attendance/punch-in`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: cookie },
@@ -190,7 +283,7 @@ test('required attendance verification blocks unverified punches and accepts nat
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Cookie: cookie,
+      Cookie: appCookie,
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0'
     },
     body: JSON.stringify({
@@ -208,8 +301,8 @@ test('required attendance verification blocks unverified punches and accepts nat
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Cookie: cookie,
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36'
+      Cookie: appCookie,
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36 TaskFlowNative/1'
     },
     body: JSON.stringify({
       device_id: deviceId,
@@ -240,8 +333,8 @@ test('employees can punch out away from the configured office', async () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Cookie: cookie,
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36'
+        Cookie: appCookie,
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36 TaskFlowNative/1'
       },
       body: JSON.stringify({
         device_id: deviceId,

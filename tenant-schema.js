@@ -383,10 +383,15 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS attendance_device_access (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       allow_phone INTEGER NOT NULL DEFAULT 1,
+      allow_mobile_browser INTEGER NOT NULL DEFAULT 0,
       allow_laptop INTEGER NOT NULL DEFAULT 0,
       updated_by INTEGER REFERENCES users(id),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );`);
+    const attendanceDeviceAccessColumns = await dbDriverInterface.prepare('PRAGMA table_info(attendance_device_access)').all();
+    if (!attendanceDeviceAccessColumns.some(column => column.name === 'allow_mobile_browser')) {
+      await dbDriverInterface.exec('ALTER TABLE attendance_device_access ADD COLUMN allow_mobile_browser INTEGER NOT NULL DEFAULT 0');
+    }
 
     await dbDriverInterface.exec(`CREATE TABLE IF NOT EXISTS attendance_registered_devices (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

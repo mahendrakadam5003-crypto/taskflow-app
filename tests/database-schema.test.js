@@ -54,6 +54,14 @@ test('tenant identity schema upgrade preserves existing users and is repeatable'
       sql: 'INSERT INTO users (id, name, username, password_hash, role) VALUES (?, ?, ?, ?, ?)',
       args: [78, 'Legacy Admin', 'legacy.admin', 'admin-password-hash', 'admin']
     });
+    await client.execute(`CREATE TABLE attendance_device_access (
+      user_id INTEGER PRIMARY KEY,
+      allow_phone INTEGER NOT NULL DEFAULT 1,
+      allow_laptop INTEGER NOT NULL DEFAULT 0,
+      updated_by INTEGER,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    await client.execute('INSERT INTO attendance_device_access (user_id, allow_phone, allow_laptop) VALUES (77, 1, 0)');
     await client.execute('CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime(\'now\')))');
     await client.execute('INSERT INTO schema_version (version) VALUES (3)');
 
@@ -68,6 +76,8 @@ test('tenant identity schema upgrade preserves existing users and is repeatable'
     assert.equal(Number(version.rows[0].version), 9);
     const loginAccess = await client.execute('SELECT web_access_enabled FROM users WHERE id IN (77, 78) ORDER BY id');
     assert.deepEqual(loginAccess.rows.map(row => Number(row.web_access_enabled)), [0, 1]);
+    const attendanceAccess = await client.execute('SELECT allow_phone, allow_mobile_browser, allow_laptop FROM attendance_device_access WHERE user_id = 77');
+    assert.deepEqual(attendanceAccess.rows.map(row => [Number(row.allow_phone), Number(row.allow_mobile_browser), Number(row.allow_laptop)]), [[1, 0, 0]]);
     const appDevices = await client.execute('PRAGMA table_info(app_login_devices)');
     assert.ok(appDevices.rows.some(row => row.name === 'device_id_hash'));
     assert.ok(appDevices.rows.some(row => row.name === 'device_model'));

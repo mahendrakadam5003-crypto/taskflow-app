@@ -559,7 +559,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .attendance-registered-device b { color: var(--ink); }
 .attendance-device-edit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; }
 .attendance-device-edit input { flex: 1 1 180px; width: auto; margin: 0; }
-.attendance-device-access-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; align-items: center; gap: 8px 12px; margin: 0; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.attendance-device-access-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto auto; align-items: center; gap: 8px 12px; margin: 0; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .attendance-device-access-row > label { white-space: nowrap; }
 .attendance-device-admin-person { display: flex; min-width: 0; align-items: baseline; gap: 6px 10px; white-space: nowrap; }
 .attendance-device-admin-person b { flex: 0 0 175px; overflow: hidden; text-overflow: ellipsis; }

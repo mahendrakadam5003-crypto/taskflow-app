@@ -49,9 +49,9 @@ function isValidDateOnly(value) {
 
 function getPunchDevice(req, reportedModel) {
   const userAgent = String(req.get('user-agent') || '').slice(0, 500);
-  const isTaskFlowApp = /TaskFlowNative\/1(?:\s|$)/.test(userAgent);
+  const isTaskFlowApp = req.session?.loginClient === 'app' && /TaskFlowNative\/1(?:\s|$)/.test(userAgent);
   const clientHintModel = String(req.get('sec-ch-ua-model') || '').trim().replace(/^"|"$/g, '');
-  const isPhone = /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent);
+  const isPhone = isTaskFlowApp || /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent);
   const suppliedModel = String(reportedModel || '').trim().slice(0, 80);
   const androidModel = (isTaskFlowApp ? suppliedModel : clientHintModel || suppliedModel)
     || userAgent.match(/Android\s+[^;;)]+;\s*([^;)]+)/i)?.[1]?.replace(/\s+Build\/.*$/i, '').trim();
@@ -67,7 +67,13 @@ function getPunchDevice(req, reportedModel) {
   else if (!isTaskFlowApp && /Firefox\//i.test(userAgent)) browserName = 'Firefox';
   else if (!isTaskFlowApp && /Chrome\//i.test(userAgent)) browserName = 'Chrome';
   else if (!isTaskFlowApp && /Safari\//i.test(userAgent)) browserName = 'Safari';
-  return { type: isPhone ? 'phone' : 'laptop', info: `${deviceName} · ${browserName} · category indicative` };
+  const attendanceAccess = isTaskFlowApp ? 'phone' : isPhone ? 'mobile_browser' : 'laptop';
+  return {
+    type: isPhone ? 'phone' : 'laptop',
+    attendanceAccess,
+    isNativeApp: isTaskFlowApp,
+    info: `${deviceName} · ${browserName} · category indicative`
+  };
 }
 
 function getDeviceTokenHash(deviceId) {
@@ -81,7 +87,7 @@ function isValidDeviceId(deviceId) {
 async function checkRegisteredDevice(req, res) {
   const deviceId = req.body.device_id;
   if (!isValidDeviceId(deviceId)) {
-    res.status(400).json({ error: 'This browser has no device ID. Reload the page and register this device.', code: 'DEVICE_REGISTRATION_REQUIRED' });
+    res.status(400).json({ error: 'This device has no ID. Reload TaskFlow and register this device.', code: 'DEVICE_REGISTRATION_REQUIRED' });
     return false;
   }
   const registration = await db.prepare('SELECT device_token_hash, device_name FROM attendance_registered_devices WHERE user_id=?').get(req.session.userId);
@@ -114,16 +120,18 @@ async function checkRegisteredDevice(req, res) {
   return true;
 }
 
-async function canPunchFromDevice(userId, deviceType) {
-  const access = await db.prepare('SELECT allow_phone, allow_laptop FROM attendance_device_access WHERE user_id = ?').get(userId);
-  if (!access) return deviceType === 'phone';
-  return deviceType === 'laptop' ? Number(access.allow_laptop) === 1 : Number(access.allow_phone) === 1;
+async function canPunchFromDevice(userId, device) {
+  const access = await db.prepare('SELECT allow_phone, allow_mobile_browser, allow_laptop FROM attendance_device_access WHERE user_id = ?').get(userId);
+  if (!access) return device.attendanceAccess === 'phone';
+  if (device.attendanceAccess === 'mobile_browser') return Number(access.allow_mobile_browser) === 1;
+  if (device.attendanceAccess === 'laptop') return Number(access.allow_laptop) === 1;
+  return Number(access.allow_phone) === 1;
 }
 
 async function requireAttendanceVerification(req, res, device) {
   const access = await db.prepare('SELECT user_id FROM attendance_verification_access WHERE user_id=?').get(req.session.userId);
   if (!access) return true;
-  if (req.body.verification_method === 'native-device-credential' && device.type === 'phone') return true;
+  if (req.body.verification_method === 'native-device-credential' && device.isNativeApp) return true;
   const password = req.body.verification_password;
   if (typeof password !== 'string' || !password) {
     res.status(403).json({ error: 'Re-enter your TaskFlow password to verify this attendance punch.' });
@@ -233,13 +241,18 @@ router.get('/verification-required', async (req, res) => {
 });
 
 router.get('/device-access/me', async (req, res) => {
-  const row = await db.prepare('SELECT allow_phone, allow_laptop FROM attendance_device_access WHERE user_id = ?').get(req.session.userId);
-  res.json({ allow_phone: row ? Number(row.allow_phone) === 1 : true, allow_laptop: row ? Number(row.allow_laptop) === 1 : false });
+  const row = await db.prepare('SELECT allow_phone, allow_mobile_browser, allow_laptop FROM attendance_device_access WHERE user_id = ?').get(req.session.userId);
+  res.json({
+    allow_phone: row ? Number(row.allow_phone) === 1 : true,
+    allow_mobile_browser: row ? Number(row.allow_mobile_browser) === 1 : false,
+    allow_laptop: row ? Number(row.allow_laptop) === 1 : false
+  });
 });
 
 router.get('/device-access', requireAdmin, async (req, res) => {
   const rows = await db.prepare(`SELECT u.id, u.name, u.username,
     COALESCE(ada.allow_phone, 1) AS allow_phone,
+    COALESCE(ada.allow_mobile_browser, 0) AS allow_mobile_browser,
     COALESCE(ada.allow_laptop, 0) AS allow_laptop,
     rd.device_name AS registered_device_name, rd.device_info AS registered_device_info, rd.registered_at,
     CASE WHEN drp.user_id IS NULL THEN 0 ELSE 1 END AS device_rebind_pending
@@ -267,7 +280,7 @@ router.get('/device-registration/me', async (req, res) => {
 router.post('/device-registration/register', async (req, res) => {
   const deviceId = req.body.device_id;
   const deviceName = String(req.body.device_name || '').trim().slice(0, 60);
-  if (!isValidDeviceId(deviceId)) return res.status(400).json({ error: 'Invalid browser device ID. Reload TaskFlow and try again.' });
+  if (!isValidDeviceId(deviceId)) return res.status(400).json({ error: 'Invalid device ID. Reload TaskFlow and try again.' });
   if (!deviceName) return res.status(400).json({ error: 'Enter a name for this device.' });
   const tokenHash = getDeviceTokenHash(deviceId);
   const existing = await db.prepare('SELECT device_token_hash, device_name FROM attendance_registered_devices WHERE user_id=?').get(req.session.userId);
@@ -314,12 +327,13 @@ router.put('/device-access/:userId', requireAdmin, async (req, res) => {
   if (!target) return res.status(404).json({ error: 'User not found.' });
   if (Number(target.active) !== 1) return res.status(400).json({ error: 'Cannot update device access for an inactive user.' });
   const allowPhone = req.body.allow_phone ? 1 : 0;
+  const allowMobileBrowser = req.body.allow_mobile_browser ? 1 : 0;
   const allowLaptop = req.body.allow_laptop ? 1 : 0;
-  if (!allowPhone && !allowLaptop) return res.status(400).json({ error: 'Allow at least one device.' });
-  await db.prepare(`INSERT INTO attendance_device_access (user_id, allow_phone, allow_laptop, updated_by)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET allow_phone=excluded.allow_phone, allow_laptop=excluded.allow_laptop, updated_by=excluded.updated_by, updated_at=datetime('now')`)
-    .run(userId, allowPhone, allowLaptop, req.session.userId);
+  await db.prepare(`INSERT INTO attendance_device_access (user_id, allow_phone, allow_mobile_browser, allow_laptop, updated_by)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET allow_phone=excluded.allow_phone, allow_mobile_browser=excluded.allow_mobile_browser,
+      allow_laptop=excluded.allow_laptop, updated_by=excluded.updated_by, updated_at=datetime('now')`)
+    .run(userId, allowPhone, allowMobileBrowser, allowLaptop, req.session.userId);
   res.json({ ok: true });
 });
 
@@ -377,8 +391,7 @@ async function savePunchIn(userId, date, lat, lng, device, { adminEnteredBy = fa
 router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
   if (!(await checkRegisteredDevice(req, res))) return;
   const device = getPunchDevice(req, req.body.device_model);
-  const deviceType = device.type;
-  if (!(await canPunchFromDevice(req.session.userId, deviceType))) return res.status(403).json({ error: 'Punching from this device is not allowed. Ask an admin to enable it.' });
+  if (!(await canPunchFromDevice(req.session.userId, device))) return res.status(403).json({ error: 'Punching from this device is not allowed. Ask an admin to enable it.' });
   const coordinates = validateCoordinates(req.body.lat, req.body.lng);
   if (!coordinates) return res.status(400).json({ error: 'A valid latitude and longitude are required to punch in.' });
   const { lat, lng } = coordinates;
@@ -404,7 +417,7 @@ router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
 router.post('/location-update', async (req, res) => {
   if (!(await checkRegisteredDevice(req, res))) return;
   const device = getPunchDevice(req, req.body.device_model);
-  if (!(await canPunchFromDevice(req.session.userId, device.type))) return res.status(403).json({ error: 'Live tracking from this device is not allowed.' });
+  if (!(await canPunchFromDevice(req.session.userId, device))) return res.status(403).json({ error: 'Live tracking from this device is not allowed.' });
   const coordinates = validateCoordinates(req.body.lat, req.body.lng);
   if (!coordinates) return res.status(400).json({ error: 'A valid latitude and longitude are required.' });
   const { lat, lng } = coordinates;
@@ -427,7 +440,7 @@ router.post('/punch-out', attendanceVerificationLimiter, async (req, res) => {
   if (!(await checkRegisteredDevice(req, res))) return;
   const device = getPunchDevice(req, req.body.device_model);
   const deviceType = device.type;
-  if (!(await canPunchFromDevice(req.session.userId, deviceType))) return res.status(403).json({ error: 'Punching from this device is not allowed. Ask an admin to enable it.' });
+  if (!(await canPunchFromDevice(req.session.userId, device))) return res.status(403).json({ error: 'Punching from this device is not allowed. Ask an admin to enable it.' });
   const coordinates = validateCoordinates(req.body.lat, req.body.lng);
   if (!coordinates) return res.status(400).json({ error: 'A valid latitude and longitude are required to punch out.' });
   const { lat, lng } = coordinates;
@@ -486,7 +499,7 @@ router.post('/admin-punch-in', requireAdmin, async (req, res) => {
   if (!employee) return res.status(404).json({ error: 'Employee not found.' });
   if (Number(employee.active) !== 1) return res.status(400).json({ error: 'Cannot punch in an inactive employee.' });
   const device = getPunchDevice(req, req.body.device_model);
-  if (!(await canPunchFromDevice(req.session.userId, device.type))) return res.status(403).json({ error: 'Punching from this device is not allowed for your admin account.' });
+  if (!(await canPunchFromDevice(req.session.userId, device))) return res.status(403).json({ error: 'Punching from this device is not allowed for your admin account.' });
   const date = todayStr();
   const punchIn = await savePunchIn(userId, date, null, null, device, { adminEnteredBy: true, req });
   if (!punchIn) return res.status(400).json({ error: 'This employee is already punched in today.' });
@@ -502,7 +515,7 @@ router.post('/admin-punch-out', requireAdmin, async (req, res) => {
   if (!employee) return res.status(404).json({ error: 'Employee not found.' });
   if (Number(employee.active) !== 1) return res.status(400).json({ error: 'Cannot punch out an inactive employee.' });
   const device = getPunchDevice(req, req.body.device_model);
-  if (!(await canPunchFromDevice(req.session.userId, device.type))) return res.status(403).json({ error: 'Punching from this device is not allowed for your admin account.' });
+  if (!(await canPunchFromDevice(req.session.userId, device))) return res.status(403).json({ error: 'Punching from this device is not allowed for your admin account.' });
   const existing = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND date = ?').get(userId, todayStr());
   if (!existing || !existing.punch_in) return res.status(400).json({ error: 'This employee has not punched in today.' });
   if (existing.punch_out) return res.status(400).json({ error: 'This employee is already punched out today.' });

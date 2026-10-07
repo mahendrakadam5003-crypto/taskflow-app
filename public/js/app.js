@@ -3357,7 +3357,15 @@ function isPhoneDevice() {
 }
 
 function currentDeviceType() {
-  return window.Capacitor?.isNativePlatform?.() || isPhoneDevice() ? 'phone' : 'laptop';
+  if (window.Capacitor?.isNativePlatform?.()) return 'phone';
+  return isPhoneDevice() ? 'mobile_browser' : 'laptop';
+}
+
+function currentDeviceLabel() {
+  const deviceType = currentDeviceType();
+  return deviceType === 'phone'
+    ? 'TaskFlow app'
+    : deviceType === 'mobile_browser' ? 'mobile browser' : 'laptop browser';
 }
 
 function getBrowserAttendanceDeviceId() {
@@ -3411,7 +3419,7 @@ async function renderPunchCard() {
       api(`/attendance/device-registration/me?device_id=${encodeURIComponent(deviceId)}`)
     ]);
     if (!deviceAccess[`allow_${currentDeviceType()}`]) {
-      card.innerHTML = `<div class="admin-block attendance-phone-only"><b>Attendance is disabled on this device</b><p class="hint">Ask an administrator to allow punching from your ${currentDeviceType()}.</p></div>`;
+      card.innerHTML = `<div class="admin-block attendance-phone-only"><b>Attendance is disabled on this device</b><p class="hint">Ask an administrator to allow punching from the ${currentDeviceLabel()}.</p></div>`;
       return;
     }
     if (!registration.registered && !registration.rebind_pending) {
@@ -3759,8 +3767,9 @@ function renderAttendanceDeviceAccess(devices) {
       const deviceStatus = person.registered_device_name
         || (Number(person.device_rebind_pending) === 1 ? 'Reset; next punch will auto-bind' : 'No device registered');
       row.innerHTML = `<div class="attendance-device-admin-person"><b>${escapeHtml(person.name)}</b><span class="attendance-device-username">${escapeHtml(person.username || '')}</span><span class="attendance-device-status">${escapeHtml(deviceStatus)}</span>${person.registered_device_info ? `<small>${escapeHtml(person.registered_device_info)}</small>` : ''}</div>
-        <label><input type="checkbox" data-device-phone="${person.id}" ${Number(person.allow_phone) === 1 ? 'checked' : ''}> Phone</label>
-        <label><input type="checkbox" data-device-laptop="${person.id}" ${Number(person.allow_laptop) === 1 ? 'checked' : ''}> Laptop</label>
+        <label><input type="checkbox" data-device-phone="${person.id}" ${Number(person.allow_phone) === 1 ? 'checked' : ''}> TaskFlow app</label>
+        <label><input type="checkbox" data-device-mobile-browser="${person.id}" ${Number(person.allow_mobile_browser) === 1 ? 'checked' : ''}> Mobile browser</label>
+        <label><input type="checkbox" data-device-laptop="${person.id}" ${Number(person.allow_laptop) === 1 ? 'checked' : ''}> Laptop browser</label>
         <button class="btn btn-secondary btn-sm save-device-access" data-device-user="${person.id}">Save access</button>
         <button class="btn btn-danger btn-sm reset-attendance-device" data-device-user="${person.id}" type="button">Reset device</button>`;
       row.querySelector('.reset-attendance-device').dataset.deviceName = person.registered_device_name || '';
@@ -3776,24 +3785,16 @@ function renderAttendanceDeviceAccess(devices) {
     pagination.querySelector('[data-device-page="previous"]')?.addEventListener('click', () => { pageIndex--; renderPage(); });
     pagination.querySelector('[data-device-page="next"]')?.addEventListener('click', () => { pageIndex++; renderPage(); });
 
-    list.querySelectorAll('[data-device-phone], [data-device-laptop]').forEach(checkbox => {
-      checkbox.onchange = () => {
-        const row = checkbox.closest('.admin-form-row');
-        const userId = checkbox.dataset.devicePhone || checkbox.dataset.deviceLaptop;
-        const phone = row?.querySelector(`[data-device-phone="${userId}"]`);
-        const laptop = row?.querySelector(`[data-device-laptop="${userId}"]`);
-        if (phone && laptop && !phone.checked && !laptop.checked) checkbox.checked = true;
-      };
-    });
     list.querySelectorAll('.save-device-access').forEach(button => {
       button.onclick = async () => {
         const userId = button.dataset.deviceUser;
         const row = button.closest('.admin-form-row');
         const phone = row.querySelector(`[data-device-phone="${userId}"]`);
+        const mobileBrowser = row.querySelector(`[data-device-mobile-browser="${userId}"]`);
         const laptop = row.querySelector(`[data-device-laptop="${userId}"]`);
         button.disabled = true;
         try {
-          await api(`/attendance/device-access/${userId}`, { method: 'PUT', body: { allow_phone: phone.checked, allow_laptop: laptop.checked } });
+          await api(`/attendance/device-access/${userId}`, { method: 'PUT', body: { allow_phone: phone.checked, allow_mobile_browser: mobileBrowser.checked, allow_laptop: laptop.checked } });
           showAppNotification('Attendance device access updated.');
         } catch (error) {
           showAppNotification(error.message);
@@ -3805,7 +3806,7 @@ function renderAttendanceDeviceAccess(devices) {
     list.querySelectorAll('.reset-attendance-device').forEach(button => {
       button.onclick = async () => {
         const deviceName = button.dataset.deviceName;
-        const confirmed = await confirmModal('Reset attendance device?', `${deviceName ? `Clear ${deviceName}'s device binding` : "Clear this employee's device binding"}? The employee's next punch will automatically bind that browser.`, 'Reset device', true);
+        const confirmed = await confirmModal('Reset attendance device?', `${deviceName ? `Clear ${deviceName}'s device binding` : "Clear this employee's device binding"}? The employee's next punch will automatically bind the app or browser used.`, 'Reset device', true);
         if (!confirmed) return;
         try {
           await api(`/attendance/device-registration/${button.dataset.deviceUser}`, { method: 'DELETE' });
@@ -3919,7 +3920,7 @@ async function renderAdmin() {
 
       <div class="admin-block">
         <h3>Attendance device access</h3>
-        <p class="hint">Choose whether each person may punch in and out from a phone, laptop, or both. Laptop punching still requires browser location permission.</p>
+        <p class="hint">Choose separately whether each person may punch from the TaskFlow app, a mobile browser, or a laptop browser. Allowing browser login only permits sign-in; it does not grant attendance access. Laptop punching still requires browser location permission.</p>
         <div class="admin-form-row permission-list-controls">
           <input id="attendance-device-access-search" type="search" placeholder="Search by employee, username, or device" aria-label="Search attendance device users">
           <label>Rows per page <select id="attendance-device-access-page-size" aria-label="Attendance device users per page"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
