@@ -28,8 +28,14 @@ async function notifyActivityRecipients(activityId, userIds) {
     args: [id, userId]
   })));
   try {
-    const activity = await db.prepare('SELECT action FROM activity_log WHERE id=?').get(id);
-    await sendPushToUsers(db, recipients, { activityId: id, action: activity?.action });
+    const activity = await db.prepare(`SELECT al.action, al.details, al.entity_type,
+        actor.name AS actor_name, subject.name AS subject_name, t.title AS task_title
+      FROM activity_log al
+      LEFT JOIN users actor ON actor.id = al.actor_id
+      LEFT JOIN users subject ON subject.id = al.subject_user_id
+      LEFT JOIN tasks t ON al.entity_type = 'task' AND t.id = al.entity_id
+      WHERE al.id = ?`).get(id);
+    await sendPushToUsers(db, recipients, { activityId: id, ...activity });
   } catch (error) {
     console.error(JSON.stringify({ event: 'activity_push_send_failed' }));
   }

@@ -203,7 +203,7 @@ async function getTaskCheckinStatus(taskId, userId, admin = false) {
     hasCheckedIn: !!checkin?.check_in_at
   };
 }
-async function notifyTaskRelatedPeople(req, taskId, action) {
+async function notifyTaskRelatedPeople(req, taskId, action, details = null) {
   try {
     const task = await db.prepare('SELECT id, title, project_id, created_by, assignee_id FROM tasks WHERE id=?').get(taskId);
     if (!task) return;
@@ -215,7 +215,7 @@ async function notifyTaskRelatedPeople(req, taskId, action) {
       ...(members || []).map(member => member.user_id)
     ].map(Number).filter(userId => Number.isSafeInteger(userId) && userId > 0
       && userId !== Number(req.session.userId)))];
-    const activityId = await logActivity(req, action, 'task', task.id, task.title, req.session.userId);
+    const activityId = await logActivity(req, action, 'task', task.id, details || task.title, req.session.userId);
     await notifyActivityRecipients(activityId, recipients);
     await notifyAdmins(req, activityId);
   } catch (error) {
@@ -1440,6 +1440,11 @@ router.put('/tasks/:id', async (req, res) => {
     }
     const historyInsert = db.prepare('INSERT INTO task_history (task_id, actor_id, field_name, old_value, new_value) VALUES (?, ?, ?, ?, ?)');
     for (const row of historyRows) await historyInsert.run(...row);
+    const dueDateChange = historyRows.find(([, , fieldName]) => fieldName === 'Due date');
+    if (dueDateChange) {
+      await notifyTaskRelatedPeople(req, req.params.id, 'Task due date changed',
+        `${dueDateChange[3] || 'No due date'} -> ${dueDateChange[4] || 'No due date'}`);
+    }
     if (taskBefore && req.body.status !== undefined && taskBefore.status !== (req.body.status === 'done' ? 'done' : 'open')) {
       await logActivity(req, req.body.status === 'done' ? 'Task completed' : 'Task reopened', 'task', req.params.id, taskBefore.title, taskBefore.assignee_id || req.session.userId);
     }
