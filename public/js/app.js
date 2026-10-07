@@ -2745,6 +2745,7 @@ async function renderTasks({ loadMore = false } = {}) {
   });
   const paginationKey = `${projectId}?${query.toString()}`;
   const appendPage = !search && loadMore && taskListPagination.key === paginationKey && taskListPagination.hasMore;
+  const pageSize = 50;
   if (!appendPage) {
     taskListPagination = { key: paginationKey, afterId: 0, hasMore: false, tasks: [] };
     list.innerHTML = '<tr><td colspan="4"><div class="task-list-skeleton" role="status" aria-label="Loading tasks"><span></span><span></span><span></span></div></td></tr>';
@@ -2758,11 +2759,10 @@ async function renderTasks({ loadMore = false } = {}) {
     if (search) {
       query.set('q', search);
       query.set('after_id', '0');
-      query.set('limit', '200');
+      query.set('limit', String(pageSize));
       tasks = await api(`/projects/${projectId}/tasks?${query.toString()}`, { signal: controller.signal });
       if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
     } else {
-      const pageSize = 200;
       const afterId = appendPage ? taskListPagination.afterId : 0;
       const pageQuery = new URLSearchParams(query);
       pageQuery.set('after_id', String(afterId));
