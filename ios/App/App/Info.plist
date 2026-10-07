@@ -20,6 +20,16 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>TaskFlow uses the camera when you choose to take a photo for a task or expense.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>TaskFlow uses your location for attendance punches, shift travel timelines, and task check-ins that you start.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>TaskFlow uses motion activity to label travel during an active attendance shift.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>TaskFlow can save a photo when you explicitly choose that option.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>TaskFlow accesses photos only when you choose an image for a task or expense.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
