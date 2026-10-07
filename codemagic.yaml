@@ -1,9 +1,11 @@
 workflows:
-  taskflow-capacitor-unsigned-ipa:
-    name: TaskFlow Unsigned iOS Device Build
+  taskflow-capacitor-ios-release:
+    name: TaskFlow Capacitor iOS Production Release
     max_build_duration: 60
     instance_type: mac_mini_m2
     environment:
+      groups:
+        - apple_signing_credentials
       vars:
         XCODE_WORKSPACE: ios/App/App.xcworkspace
         XCODE_SCHEME: App
@@ -22,29 +24,17 @@ workflows:
         script: npm ci
       - name: Sync Capacitor iOS project and CocoaPods
         script: npx cap sync ios
-      - name: Build unsigned iOS device archive
+      - name: Fetch App Store signing files
         script: |
-          mkdir -p "$CM_BUILD_DIR/build/ios"
-          xcodebuild \
-            -workspace "$XCODE_WORKSPACE" \
-            -scheme "$XCODE_SCHEME" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -archivePath "$CM_BUILD_DIR/build/ios/App.xcarchive" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            PROVISIONING_PROFILE_REQUIRED=NO \
-            clean archive
-          APP_PATH="$CM_BUILD_DIR/build/ios/App.xcarchive/Products/Applications/App.app"
-          test -d "$APP_PATH"
-      - name: Package unsigned IPA container
+          app-store-connect fetch-signing-files com.taskflow.app --type IOS_APP_STORE --create
+      - name: Install signing certificate
         script: |
-          mkdir -p "$CM_BUILD_DIR/build/ios/Payload"
-          cp -R "$CM_BUILD_DIR/build/ios/App.xcarchive/Products/Applications/App.app" "$CM_BUILD_DIR/build/ios/Payload/"
-          cd "$CM_BUILD_DIR/build/ios"
-          /usr/bin/zip -qry TaskFlow-unsigned.ipa Payload
+          keychain initialize
+          keychain add-certificates
+      - name: Apply provisioning profiles
+        script: xcode-project use-profiles
+      - name: Build and sign App Store IPA
+        script: xcode-project build-ipa --workspace "$XCODE_WORKSPACE" --scheme "$XCODE_SCHEME"
     artifacts:
-      - build/ios/TaskFlow-unsigned.ipa
+      - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/**/*.log
