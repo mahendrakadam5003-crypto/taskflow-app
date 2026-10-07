@@ -922,10 +922,55 @@ async function updateNativeTrackingHealth(active) {
 }
 
 $('#attendance-tracking-health-settings')?.addEventListener('click', async () => {
+  const button = $('#attendance-tracking-health-settings');
+  if (!nativeApp || !window.TaskFlowBackgroundLocation) {
+    setTrackingHealthBanner('Update or reopen the TaskFlow app to manage background location settings.', true);
+    return;
+  }
+  if (button?.disabled) return;
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Checking...';
+  }
   try {
-    await window.TaskFlowBackgroundLocation?.openAppSettings?.();
+    const plugin = window.TaskFlowBackgroundLocation;
+    localStorage.removeItem(backgroundTrackingOptOutKey);
+    let permission = await plugin.getPermissionStatus();
+    if (!permission?.always) {
+      try {
+        permission = await plugin.requestBackgroundPermission();
+      } catch (error) {
+        console.warn('Background location permission request could not be shown:', error.message);
+      }
+    }
+    if (!permission?.always || !permission.gps_enabled) {
+      await plugin.openAppSettings();
+      setTrackingHealthBanner(
+        !permission?.always
+          ? 'In TaskFlow app settings, set Location to Allow all the time, then return to TaskFlow.'
+          : 'Turn on Location Services in your phone settings, then return to TaskFlow.',
+        true
+      );
+      return;
+    }
+
+    const shift = await api('/attendance/today');
+    const active = Boolean(shift?.punch_in && !shift.punch_out);
+    if (active && !permission.active) {
+      await startNativeShiftTracking(shift.date || todayISO());
+    }
+    await updateNativeTrackingHealth(active);
+    if (active && (permission.notifications_enabled === false || permission.activity_enabled === false)) {
+      await plugin.openAppSettings();
+    }
   } catch (error) {
     console.warn('Unable to open location settings:', error.message);
+    setTrackingHealthBanner(`Unable to fix background tracking settings: ${error.message}`, true);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Fix settings';
+    }
   }
 });
 
