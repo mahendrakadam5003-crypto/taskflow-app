@@ -123,6 +123,8 @@ The TaskFlow native app can collect attendance GPS points while backgrounded or 
 
 Points are held in app-private storage while offline and uploaded to TaskFlow when connectivity returns. The queue is capped at 1,000 points; at capacity, new samples pause and the app reports a recovery warning rather than silently deleting queued points. They are not sent to Telegram. Employees see a recovery banner for disabled permissions, GPS, or connectivity. Admin tracking timelines show status changes and flag GPS sample gaps longer than 15 minutes; this is an operational warning, not proof of misconduct or presence. Native permission/service changes require rebuilding and installing an updated APK/iOS app; hosted web changes alone are not enough.
 
+Native app sign-in is bound to the Android/iOS app device identity. Reinstalling with a differently signed APK can change Android's app-scoped device ID and make existing app bindings reject sign-in. A company admin can sign in through a browser and use **Admin → Team members & admin access → Reset all app sign-in devices**. This clears only native app-login bindings (not attendance-device permissions or attendance records); each user can then sign in once in the updated app to register its new identity.
+
 ## Data retention and privacy
 In Admin → **Data retention**, attachment retention defaults to `0` (no automatic deletion). Ask your accountant before setting a finite period. If enabled, comment files are aged from comment creation and reimbursement receipts from the expense date; after successful file deletion, the matching database paths and metadata are cleared.
 

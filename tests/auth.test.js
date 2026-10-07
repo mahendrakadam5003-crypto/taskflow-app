@@ -84,6 +84,11 @@ const mockDb = {
           return { changes: 1 };
         }
         if (sql.includes('DELETE FROM app_login_devices')) {
+          if (!sql.includes('WHERE')) {
+            const changes = appLoginDevices.size;
+            appLoginDevices.clear();
+            return { changes };
+          }
           return { changes: appLoginDevices.delete(Number(args[0])) ? 1 : 0 };
         }
         if (sql.includes('UPDATE users SET web_access_enabled')) {
@@ -403,6 +408,7 @@ test('employee sessions receive 403 from every admin-only auth route', async () 
   const employeeCookie = await login('replacement-password-456');
   const adminRoutes = [
     ['GET', '/users'],
+    ['POST', '/users/app-devices/reset', {}],
     ['POST', '/users', { name: 'Promoted', username: 'promoted', password: 'valid-password-123' }],
     ['PUT', '/users/1/reset-password', { password: 'valid-password-123' }],
     ['PUT', '/users/1', { role: 'admin' }],
@@ -609,7 +615,7 @@ test('admin email changes require reverification and remove the previous Google 
   }
 });
 
-test('native app accounts bind one model while admins control browser access and device reset', async () => {
+test('native app accounts bind one model while admins control browser access and app-device reset', async () => {
   const originalAdmin = { ...user };
   const originalEmployee = { ...otherUser };
   appLoginDevices.delete(otherUser.id);
@@ -686,6 +692,16 @@ test('native app accounts bind one model while admins control browser access and
     assert.equal(reset.status, 200);
     assert.equal(appLoginDevices.has(otherUser.id), false);
     assert.equal((await appRequest('android-id-galaxy-s25-1234', 'Galaxy S25')).status, 200);
+
+    appLoginDevices.set(user.id, { device_id_hash: 'old-admin-app-id', device_model: 'Google Pixel 9' });
+    appLoginDevices.set(otherUser.id, { device_id_hash: 'old-employee-app-id', device_model: 'Google Pixel 9' });
+    const resetAll = await request('/users/app-devices/reset', {
+      method: 'POST', cookie: adminCookie, body: {}
+    });
+    assert.equal(resetAll.status, 200);
+    assert.deepEqual(await resetAll.json(), { ok: true, reset_count: 2 });
+    assert.equal(appLoginDevices.size, 0);
+    assert.equal((await appRequest('android-id-new-install-employee', 'Pixel 9')).status, 200);
   } finally {
     Object.assign(user, originalAdmin);
     Object.assign(otherUser, originalEmployee);

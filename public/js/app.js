@@ -1298,7 +1298,7 @@ if (loginForm) {
     google_billing_required: 'This workspace is locked. Contact your administrator.',
     google_account_unavailable: 'No active TaskFlow account is linked to that verified Google email. Ask your administrator to add and verify your email first.',
     web_login_not_allowed: 'Web access is disabled for this account. Ask your company admin to enable it.',
-    app_device_mismatch: 'This account is registered to another mobile device. Ask your company admin to reset the registered app device.',
+    app_device_mismatch: 'This app installation has a different device identity. Ask an admin to use Reset all app sign-in devices under Team members & admin access. This is separate from attendance device access.',
     app_device_id_required: 'TaskFlow could not identify this app installation. Update the app and try again.',
     google_failed: 'Google sign-in could not be completed. Try again.'
   };
@@ -4553,6 +4553,10 @@ async function renderAdmin() {
       <div class="admin-block">
         <h3>Team members &amp; admin access</h3>
         <p class="hint">Create a username and temporary password so the new member can sign in without email delivery. Email verification and Google sign-in remain optional.</p>
+        <div class="admin-form-row">
+          <button class="btn btn-danger" id="reset-app-login-devices" type="button">Reset all app sign-in devices</button>
+          <span class="hint">Use after reinstalling or changing the APK signing version if users cannot sign in. This is separate from attendance device access.</span>
+        </div>
         <div class="admin-form-row" style="margin-bottom: 20px;">
           <input id="u-name" placeholder="Full name">
           <input id="u-username" placeholder="Username" autocomplete="username" required>
@@ -5099,6 +5103,25 @@ async function renderAdmin() {
     });
 
     const tbody = $('#admin-employees-table-body');
+    $('#reset-app-login-devices')?.addEventListener('click', async event => {
+      const button = event.currentTarget;
+      const confirmed = await confirmModal(
+        'Reset all app sign-in devices?',
+        'This clears the mobile-app sign-in binding for every user in this company. Each person must sign in again once; their new app installation will then be registered. Attendance device-access settings and attendance records are not changed.',
+        'Reset app sign-ins',
+        true
+      );
+      if (!confirmed) return;
+      button.disabled = true;
+      try {
+        const result = await api('/auth/users/app-devices/reset', { method: 'POST', body: {} });
+        showAppNotification(`Cleared ${Number(result.reset_count) || 0} app sign-in device bindings. Users can now sign in again.`);
+      } catch (error) {
+        showAppNotification(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    });
     if (tbody && Array.isArray(users)) {
       users.forEach((u) => {
         const tr = document.createElement('tr');

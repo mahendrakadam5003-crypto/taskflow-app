@@ -408,6 +408,18 @@ router.put('/users/:id/web-access', requireAdmin, async (req, res) => {
   }
 });
 
+router.post('/users/app-devices/reset', requireAdmin, async (req, res) => {
+  try {
+    const result = await db.prepare('DELETE FROM app_login_devices').run();
+    const resetCount = Number(result?.changes ?? result?.rowsAffected ?? 0);
+    await logActivity(req, 'Registered app devices reset', 'user', req.session.userId,
+      `${resetCount} mobile app sign-in bindings cleared`, req.session.userId);
+    res.json({ ok: true, reset_count: resetCount });
+  } catch (error) {
+    sendInternalError(res, error, 'Registered app devices could not be reset');
+  }
+});
+
 router.delete('/users/:id/app-device', requireAdmin, async (req, res) => {
   const userId = Number(req.params.id);
   if (!Number.isSafeInteger(userId) || userId < 1) return res.status(400).json({ error: 'Invalid user id.' });
