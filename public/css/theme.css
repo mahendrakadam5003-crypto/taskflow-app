@@ -627,7 +627,12 @@ html.is-native textarea::placeholder { color: #7B8494; }
     border-radius: 50%;
     font-size: var(--fs-sm);
     box-shadow: var(--shadow-2);
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: transform .12s ease, filter .12s ease;
   }
+  html.is-native .attendance-punch-action.is-holding { transform: scale(.94); filter: brightness(.9); }
   html.is-native .attendance-punch-action .icon { width: 25px; height: 25px; }
   html.is-native .attendance-shift-action { justify-items: center; }
   html.is-native .attendance-shift-details { gap: 8px; }

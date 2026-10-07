@@ -3461,15 +3461,70 @@ function setAttendancePunchProgress(message) {
   progress.classList.toggle('hidden', !message);
 }
 
-function vibrateAttendance(pulses = 1) {
+async function vibrateAttendance(pulses = 1) {
   const haptics = window.TaskFlowHaptics;
-  if (haptics) {
-    const pulse = () => haptics.vibrate({ duration: 90 }).catch(() => {});
-    pulse();
-    if (pulses > 1) setTimeout(pulse, 180);
+  if (nativeApp && haptics?.impact) {
+    try {
+      for (let pulse = 0; pulse < pulses; pulse++) {
+        await haptics.impact({ style: 'MEDIUM' });
+        if (pulse + 1 < pulses) await new Promise(resolve => setTimeout(resolve, 160));
+      }
+      return;
+    } catch (error) {
+      console.warn('Native attendance haptics failed; using browser vibration fallback.', error);
+    }
+  }
+  if (typeof navigator.vibrate === 'function') {
+    try {
+      navigator.vibrate(pulses > 1 ? [90, 100, 90] : 90);
+    } catch (error) {
+      console.warn('Browser attendance vibration fallback failed.', error);
+    }
+  }
+}
+
+function bindAttendancePunchAction(button, action) {
+  if (!nativeApp) {
+    button.onclick = () => action(button);
     return;
   }
-  try { navigator.vibrate?.(pulses > 1 ? [90, 90, 90] : 90); } catch {}
+
+  let holdTimer = null;
+  let holdCompleted = false;
+  const cancelHold = () => {
+    if (holdTimer) clearTimeout(holdTimer);
+    holdTimer = null;
+    button.classList.remove('is-holding');
+    if (!holdCompleted) setAttendancePunchProgress('');
+  };
+
+  button.addEventListener('pointerdown', event => {
+    if (button.disabled || (event.button != null && event.button !== 0)) return;
+    holdCompleted = false;
+    button.classList.add('is-holding');
+    setAttendancePunchProgress('Keep holding to verify…');
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      holdCompleted = true;
+      button.classList.remove('is-holding');
+      setAttendancePunchProgress('');
+      void action(button);
+    }, 650);
+  });
+  button.addEventListener('pointerup', cancelHold);
+  button.addEventListener('pointercancel', cancelHold);
+  button.addEventListener('pointerleave', () => {
+    if (holdTimer) cancelHold();
+  });
+  button.addEventListener('click', event => {
+    if (holdCompleted) {
+      holdCompleted = false;
+      event.preventDefault();
+      return;
+    }
+    if (event.detail === 0 && !button.disabled) void action(button);
+    else event.preventDefault();
+  });
 }
 
 async function verifyAttendanceIfRequired(action) {
@@ -3478,7 +3533,7 @@ async function verifyAttendanceIfRequired(action) {
   const biometricAuth = window.TaskFlowBiometricAuth;
   if (!window.Capacitor?.isNativePlatform?.() || !biometricAuth) {
     setAttendanceBiometricFeedback('error', 'TaskFlow mobile verification is unavailable.');
-    vibrateAttendance(2);
+    await vibrateAttendance(2);
     throw new Error('Attendance verification requires the installed TaskFlow mobile app.');
   }
   setAttendanceBiometricFeedback('pending', 'Verify with fingerprint or phone screen lock.');
@@ -3497,11 +3552,11 @@ async function verifyAttendanceIfRequired(action) {
     setAttendanceBiometricFeedback('error', failureDetail
       ? `Verification failed (${failureDetail}). Use your phone screen lock and try again.`
       : 'Verification failed. Use your phone screen lock and try again.');
-    vibrateAttendance(2);
+    await vibrateAttendance(2);
     throw new Error('Phone verification failed. Use your phone screen lock and try again.');
   }
   setAttendanceBiometricFeedback('success', 'Phone verification successful.');
-  vibrateAttendance(1);
+  await vibrateAttendance(1);
   return 'native-device-credential';
 }
 
@@ -3647,10 +3702,10 @@ async function renderPunchCard() {
     const actionRegion = $('#attendance-action-region');
     if (onShift) {
       startLiveTracking();
-      actionRegion.innerHTML = `${attendanceFeedbackMarkup()}<button class="btn btn-danger attendance-punch-action" id="btn-punch-out" type="button">${icon('clock')} Punch out</button>`;
-      $('#btn-punch-out').onclick = async () => {
-        const button = $('#btn-punch-out');
+      actionRegion.innerHTML = `${attendanceFeedbackMarkup()}<button class="btn btn-danger attendance-punch-action" id="btn-punch-out" type="button">${icon('clock')} Hold to punch out</button>`;
+      bindAttendancePunchAction($('#btn-punch-out'), async button => {
         button.disabled = true;
+        setAttendancePunchProgress('');
         try {
           const verificationMethod = await verifyAttendanceIfRequired('out');
           const coords = await getLiveCoords();
@@ -3659,7 +3714,7 @@ async function renderPunchCard() {
           setAttendancePunchProgress('Connecting to TaskFlow...');
           await api('/attendance/punch-out', { method: 'POST', body: { ...coords, ...devicePayload, ...activityPayload, verification_method: verificationMethod } });
           stopLiveTracking();
-          if (!verificationMethod) vibrateAttendance();
+          if (!verificationMethod) await vibrateAttendance();
           showAppNotification('Punched out successfully.');
           await renderPunchCard();
           if (verificationMethod) setAttendanceBiometricFeedback('success', 'Punch out recorded.');
@@ -3669,13 +3724,13 @@ async function renderPunchCard() {
           showAppNotification(`Punch out failed: ${error.message}`);
           button.disabled = false;
         }
-      };
+      });
     } else if (!shiftComplete) {
       stopLiveTracking();
-      actionRegion.innerHTML = `${attendanceFeedbackMarkup()}<button class="btn btn-primary attendance-punch-action" id="btn-punch-in" type="button">${icon('clock')} Punch in</button>`;
-      $('#btn-punch-in').onclick = async () => {
-        const button = $('#btn-punch-in');
+      actionRegion.innerHTML = `${attendanceFeedbackMarkup()}<button class="btn btn-primary attendance-punch-action" id="btn-punch-in" type="button">${icon('clock')} Hold to punch in</button>`;
+      bindAttendancePunchAction($('#btn-punch-in'), async button => {
         button.disabled = true;
+        setAttendancePunchProgress('');
         try {
           const verificationMethod = await verifyAttendanceIfRequired('in');
           const coords = await getLiveCoords();
@@ -3683,7 +3738,7 @@ async function renderPunchCard() {
           const activityPayload = await getTravelActivity(true);
           setAttendancePunchProgress('Connecting to TaskFlow...');
           await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload, ...activityPayload, verification_method: verificationMethod } });
-          if (!verificationMethod) vibrateAttendance();
+          if (!verificationMethod) await vibrateAttendance();
           showAppNotification('Punched in successfully.');
           await renderPunchCard();
           if (verificationMethod) setAttendanceBiometricFeedback('success', 'Punch in recorded.');
@@ -3693,7 +3748,7 @@ async function renderPunchCard() {
           showAppNotification(`Punch in failed: ${error.message}`);
           button.disabled = false;
         }
-      };
+      });
     } else {
       stopLiveTracking();
       actionRegion.innerHTML = `${attendanceFeedbackMarkup()}<div class="attendance-complete-note">${icon('check')} Shift complete · ${escapeHtml(startTime)} – ${escapeHtml(endTime)}</div>`;
@@ -4688,7 +4743,7 @@ async function renderAdmin() {
           <td style="padding:10px;">${escapeHtml(u.department || u.DEPARTMENT || 'No department')}</td>
           <td style="padding:10px;">${escapeHtml(u.role || u.ROLE)}</td>
           <td style="padding:10px;"><span class="badge" style="background:${Number(u.active ?? u.ACTIVE) === 1 ? '#c8e6c9' : '#eeeeee'}; color:${Number(u.active ?? u.ACTIVE) === 1 ? '#25602a' : '#555'}; padding:4px 8px; border-radius:4px; font-size:12px;">${Number(u.active ?? u.ACTIVE) === 1 ? 'Active' : 'Disabled'}</span></td>
-          <td style="padding:10px;"><label><input type="checkbox" data-web-login-user="${u.id}" ${Number(u.web_access_enabled) === 1 ? 'checked' : ''}> Allow browser login</label><br><small>App device: ${escapeHtml(u.app_device_model || 'Not registered')}</small>${u.app_device_model ? `<br><button class="btn btn-danger btn-sm admin-reset-app-device" type="button" data-user-id="${u.id}">Reset app device</button>` : ''}</td>
+          <td style="padding:10px;"><label><input type="checkbox" data-web-login-user="${u.id}" ${Number(u.web_access_enabled) === 1 ? 'checked' : ''}> Allow browser login</label></td>
           <td style="padding:10px;"><label class="admin-biometric-toggle"><input type="checkbox" data-verification-user="${u.id}" ${verificationByUser.get(Number(u.id)) ? 'checked' : ''}><span>${verificationByUser.get(Number(u.id)) ? 'Required' : 'Off'}</span></label></td>
           <td style="padding:10px;">${actionsHtml}</td>
         `;
@@ -4709,20 +4764,6 @@ async function renderAdmin() {
             checkbox.disabled = false;
           }
         };
-        tr.querySelector('.admin-reset-app-device')?.addEventListener('click', async event => {
-          const button = event.currentTarget;
-          const confirmed = await confirmModal('Reset registered app device?', `Clear ${u.app_device_model}'s app registration? The user can register a different Android device on their next app sign-in.`, 'Reset device', true);
-          if (!confirmed) return;
-          button.disabled = true;
-          try {
-            await api(`/auth/users/${Number(u.id)}/app-device`, { method: 'DELETE' });
-            showAppNotification('Registered app device reset. The user can now sign in on another phone.');
-            await renderAdmin();
-          } catch (error) {
-            button.disabled = false;
-            showAppNotification(error.message);
-          }
-        });
         tr.querySelector('.admin-send-email-verification')?.addEventListener('click', async event => {
           const button = event.currentTarget;
           button.disabled = true;
