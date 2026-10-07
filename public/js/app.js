@@ -3595,8 +3595,12 @@ async function renderPunchCard() {
       return;
     }
     if (registration.registered && !registration.is_current_device) {
-      const currentDevice = window.Capacitor?.isNativePlatform?.() ? 'this TaskFlow app' : 'this browser';
-      card.innerHTML = `<div class="admin-block attendance-phone-only"><b>This account is registered to ${escapeHtml(registration.device_name || 'another device')}</b><p class="hint">Punching from ${currentDevice} is blocked. Ask an administrator to reset your registered device.</p></div>`;
+      const nativeApp = Boolean(window.Capacitor?.isNativePlatform?.());
+      const currentDevice = nativeApp ? 'this TaskFlow app' : 'this browser';
+      const resetInstructions = nativeApp
+        ? 'An administrator must open Admin → Attendance device access and select Reset device for your account. Resetting your app sign-in device alone does not clear attendance registration.'
+        : 'Ask an administrator to open Admin → Attendance device access and select Reset device for your account.';
+      card.innerHTML = `<div class="admin-block attendance-phone-only"><b>This account is registered to ${escapeHtml(registration.device_name || 'another device')}</b><p class="hint">Punching from ${currentDevice} is blocked. ${resetInstructions}</p></div>`;
       return;
     }
     const onShift = Boolean(status?.punch_in && !status.punch_out);

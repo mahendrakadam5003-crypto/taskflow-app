@@ -268,7 +268,7 @@ label { color: var(--ink-2); }
 .task-panel > .field-block { margin: 0; }
 .task-panel .field-row { gap: 14px; }
 .task-panel textarea { max-width: 100%; }
-.task-drawer-footer { gap: 8px; justify-content: flex-end; margin: 0 -16px -20px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); }
+.task-drawer-footer { gap: 8px; justify-content: flex-end; margin: 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); background: var(--surface); border-top: 1px solid var(--line); }
 .task-drawer-footer .btn { min-width: 92px; }
 .comment { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
 .comment-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-bottom: 5px; }
@@ -377,7 +377,7 @@ label { color: var(--ink-2); }
   .task-table .chip { white-space: normal; }
   .dashboard-project-section { margin-bottom: 28px; }
   .empty-state { padding: 28px 16px; }
-  .task-drawer-footer { flex-wrap: wrap; margin-bottom: calc(-20px - env(safe-area-inset-bottom)); }
+  .task-drawer-footer { flex-wrap: wrap; }
   .task-drawer-footer .btn { flex: 1 1 100px; }
   .task-panel .field-row { align-items: flex-start; flex-direction: column; gap: 5px; }
   .task-panel .field-row select, .task-panel .field-row input[type=date], .task-panel .field-row input[type=text], .task-panel .field-row input[type=number] { width: 100%; max-width: none; }
@@ -655,6 +655,16 @@ html.is-native textarea::placeholder { color: #7B8494; }
   }
   html.is-native[data-theme="dark"] .mobile-topbar { box-shadow: 0 2px 8px rgba(0, 0, 0, .28); }
   html.is-native[data-theme="dark"] .dashboard-metric.alert.has-alert { border-color: var(--red); }
+  html.is-native .admin-block {
+    background: var(--surface);
+    color: var(--ink);
+    border-color: var(--line);
+    box-shadow: var(--shadow-1);
+  }
+  html.is-native .payment-summary-section h2,
+  html.is-native .payment-summary-card.revenue b { color: var(--ink); }
+  html.is-native .payment-summary-card.cash-pending b { color: var(--brand); }
+  html.is-native .payment-summary-card.gst-pending b { color: var(--accent); }
 }
 
 @media (max-width: 360px) {
