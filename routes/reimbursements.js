@@ -192,9 +192,7 @@ async function canAccessClaim(req, claim) {
   if (!claim) return false;
   if (req.session.role === 'admin' || Number(claim.user_id) === Number(req.session.userId)) return true;
   const access = await getAccess(req);
-  if (Number(access.approval_level) <= 0) return false;
-  const department = claim.department ?? (await db.prepare('SELECT department FROM users WHERE id=?').get(claim.user_id))?.department;
-  return String(department || '') === String(access.department || '');
+  return Number(access.approval_level) > 0;
 }
 
 function getApprovalTransition(access, claim, approverId) {
@@ -219,15 +217,14 @@ async function getReimbursementRows(req, { paginate = false } = {}) {
   const params = [];
   const access = await getAccess(req);
   if (req.session.role !== 'admin' && !access.approval_level) { sql += ' AND r.user_id = ?'; params.push(req.session.userId); }
-  else if (req.session.role !== 'admin') { sql += ' AND u.department = ?'; params.push(access.department || ''); }
   if (status) { sql += ' AND r.status = ?'; params.push(status); }
   if (from) { sql += ' AND r.expense_date >= ?'; params.push(from); }
   if (to) { sql += ' AND r.expense_date <= ?'; params.push(to); }
   if (user_id && access.approval_level) { sql += ' AND r.user_id = ?'; params.push(user_id); }
-  sql += ' ORDER BY r.expense_date DESC, r.created_at DESC';
+  sql += ' ORDER BY r.created_at DESC, r.id DESC';
   if (!paginate) return db.prepare(sql).all(...params);
   const requestedLimit = Number.parseInt(req.query.limit, 10);
-  const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 50) : 50;
+  const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 50) : 10;
   const requestedOffset = Number.parseInt(req.query.offset, 10);
   const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
   const rows = await db.prepare(`${sql} LIMIT ? OFFSET ?`).all(...params, limit + 1, offset);
@@ -249,9 +246,6 @@ router.get('/summary', async (req, res) => {
     if (req.session.role !== 'admin' && !access.approval_level) {
       sql += ' AND r.user_id = ?';
       params.push(req.session.userId);
-    } else if (req.session.role !== 'admin') {
-      sql += ' AND u.department = ?';
-      params.push(access.department || '');
     }
     sql += ' GROUP BY r.currency ORDER BY r.currency';
     const currencyTotals = await db.prepare(sql).all(...params);
@@ -417,8 +411,7 @@ router.post('/', uploadRateLimit, handleReceiptUpload, async (req, res) => {
     try {
       const approvers = await db.prepare(`SELECT ra.user_id FROM reimbursement_access ra
         JOIN users approver ON approver.id=ra.user_id AND approver.active=1
-        JOIN users claimant ON claimant.id=? AND claimant.active=1
-        WHERE ra.approval_level > 0 AND approver.department=claimant.department`).all(req.session.userId);
+        WHERE ra.approval_level > 0`).all();
       await notifyActivityRecipients(activityId, (approvers || []).map(approver => approver.user_id));
       await notifyAdmins(req, activityId);
     } catch (notificationError) {

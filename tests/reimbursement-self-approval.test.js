@@ -338,16 +338,16 @@ test('rejections require reasons, level 1 cannot reject final approval, and late
   approvalLevel = 2;
 });
 
-test('approvers only list and act on claims in their own department', async () => {
+test('approvers list and act on claims across departments', async () => {
   const list = await fetch(`${baseUrl}/api/reimbursements`, { headers: { Cookie: secondApproverCookie } });
   assert.equal(list.status, 200);
-  assert.match(reimbursementListQuery, /u\.department = \?/);
+  assert.doesNotMatch(reimbursementListQuery, /u\.department = \?/);
 
   reimbursementWrites = 0;
-  const denied = await submitWithCookie(secondApproverCookie, `/${crossDepartmentClaim.id}/status`, { status: 'approved' });
-  assert.equal(denied.status, 403);
-  assert.deepEqual(await denied.json(), { error: 'You do not have access to this reimbursement.' });
-  assert.equal(reimbursementWrites, 0);
+  const approved = await submitWithCookie(secondApproverCookie, `/${crossDepartmentClaim.id}/status`, { status: 'approved' });
+  assert.equal(approved.status, 200);
+  assert.equal(reimbursementWrites, 1);
+  reimbursementWrites = 0;
 });
 
 test('receipt uploads reject unsupported MIME types and mismatched content as JSON', async () => {
@@ -436,6 +436,7 @@ test('reimbursement summaries keep currencies separate', async () => {
   const response = await fetch(`${baseUrl}/api/reimbursements/summary`, { headers: { Cookie: secondApproverCookie } });
   assert.equal(response.status, 200);
   assert.match(reimbursementSummaryQuery, /GROUP BY r\.currency/);
+  assert.doesNotMatch(reimbursementSummaryQuery, /u\.department\s*=/);
   assert.deepEqual(await response.json(), {
     claim_count: 3,
     currency_totals: [
@@ -534,6 +535,12 @@ test('reimbursement list returns bounded pages and a next offset', async () => {
   assert.equal(cappedPage.status, 200);
   assert.equal(reimbursementListArgs.at(-2), 51);
   assert.equal((await cappedPage.json()).items.length, 50);
+  const defaultPage = await fetch(`${baseUrl}/api/reimbursements`, { headers: { Cookie: secondApproverCookie } });
+  assert.equal(defaultPage.status, 200);
+  assert.equal(reimbursementListArgs.at(-2), 11);
+  assert.equal((await defaultPage.json()).items.length, 10);
+  assert.match(reimbursementListQuery, /ORDER BY r\.created_at DESC, r\.id DESC/);
+  assert.doesNotMatch(reimbursementListQuery, /u\.department\s*=/);
   const oversizedOffset = await fetch(`${baseUrl}/api/reimbursements?offset=1000001`, { headers: { Cookie: secondApproverCookie } });
   assert.equal(oversizedOffset.status, 400);
   reimbursementRowsForList = [];

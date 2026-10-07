@@ -2070,7 +2070,7 @@ async function renderReimbursements() {
     </div>`;
 
   const table = $('#reimbursements-table');
-  const reimbursementPageSize = 50;
+  const reimbursementPageSize = 10;
   let reimbursementOffset = 0;
   let reimbursementHasMore = false;
   let editingReimbursementId = null;
