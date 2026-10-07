@@ -1,6 +1,6 @@
 workflows:
-  capacitor-ios-build:
-    name: TaskFlow iOS Simulator Unsigned Build
+  taskflow-capacitor-unsigned-ipa:
+    name: TaskFlow Unsigned iOS Device Build
     max_build_duration: 60
     instance_type: mac_mini_m2
     environment:
@@ -9,6 +9,7 @@ workflows:
         XCODE_SCHEME: App
       xcode: latest
       node: 20.18.0
+      cocoapods: default
     triggering:
       events:
         - push
@@ -21,21 +22,29 @@ workflows:
         script: npm ci
       - name: Sync Capacitor iOS project and CocoaPods
         script: npx cap sync ios
-      - name: Build unsigned iOS Simulator app
+      - name: Build unsigned iOS device archive
         script: |
-          xcodebuild \
-            --workspace "$XCODE_WORKSPACE" \
-            --scheme "$XCODE_SCHEME" \
-            -configuration Release \
-            -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath "$CM_BUILD_DIR/build/ios/derived" \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-          APP_PATH="$CM_BUILD_DIR/build/ios/derived/Build/Products/Release-iphonesimulator/App.app"
-          test -d "$APP_PATH"
           mkdir -p "$CM_BUILD_DIR/build/ios"
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$CM_BUILD_DIR/build/ios/TaskFlow-iOS-Simulator.app.zip"
+          xcodebuild \
+            -workspace "$XCODE_WORKSPACE" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$CM_BUILD_DIR/build/ios/App.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_REQUIRED=NO \
+            clean archive
+          APP_PATH="$CM_BUILD_DIR/build/ios/App.xcarchive/Products/Applications/App.app"
+          test -d "$APP_PATH"
+      - name: Package unsigned IPA container
+        script: |
+          mkdir -p "$CM_BUILD_DIR/build/ios/Payload"
+          cp -R "$CM_BUILD_DIR/build/ios/App.xcarchive/Products/Applications/App.app" "$CM_BUILD_DIR/build/ios/Payload/"
+          cd "$CM_BUILD_DIR/build/ios"
+          /usr/bin/zip -qry TaskFlow-unsigned.ipa Payload
     artifacts:
-      - build/ios/TaskFlow-iOS-Simulator.app.zip
+      - build/ios/TaskFlow-unsigned.ipa
       - /tmp/xcodebuild_logs/**/*.log
