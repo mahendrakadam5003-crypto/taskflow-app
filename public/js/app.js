@@ -2615,15 +2615,13 @@ function readTaskFilterPreferences() {
 function saveTaskFilterPreferences() {
   const searchInput = $('#task-search');
   const preferences = {
-    status: $('#task-filter-status')?.value || 'open',
     assignee: $('#task-filter-assignee')?.value || 'all',
     createdBy: $('#task-filter-created-by')?.value || 'all',
     dueDate: $('#task-filter-due')?.value || '',
     createdOn: $('#task-filter-created-on')?.value || '',
     modifiedOn: $('#task-filter-modified-on')?.value || '',
     completedOn: $('#task-filter-completed-on')?.value || '',
-    sort: $('#task-sort')?.value || 'manual',
-    search: searchInput?.dataset.fullSearch === 'true' ? searchInput.value.trim() : ''
+    sort: $('#task-sort')?.value || 'manual'
   };
   try {
     localStorage.setItem(taskFilterPreferenceKey(), JSON.stringify(preferences));
@@ -2639,7 +2637,6 @@ function restoreTaskFilterPreferences() {
     if (allowedValues && !allowedValues.includes(normalizedValue)) return;
     if (Array.from(select.options).some(option => option.value === normalizedValue)) select.value = normalizedValue;
   };
-  setSelectValue('#task-filter-status', preferences.status, ['open', 'done', 'all']);
   setSelectValue('#task-filter-assignee', preferences.assignee);
   setSelectValue('#task-filter-created-by', preferences.createdBy);
   setSelectValue('#task-sort', preferences.sort, ['manual', 'title', 'assignee', 'due']);
@@ -2648,8 +2645,8 @@ function restoreTaskFilterPreferences() {
     .forEach(([selector, value]) => { const input = $(selector); if (input) input.value = String(value || ''); });
   const searchInput = $('#task-search');
   if (searchInput) {
-    searchInput.value = String(preferences.search || '');
-    searchInput.dataset.fullSearch = searchInput.value ? 'true' : 'false';
+    searchInput.value = '';
+    searchInput.dataset.fullSearch = 'false';
   }
 }
 
@@ -2708,7 +2705,6 @@ function setupTaskFilters() {
     if (event.key === 'Escape') hideSuggestions();
   };
   $('#btn-task-clear-filters').onclick = () => {
-    $('#task-filter-status').value = 'open';
     $('#task-filter-assignee').value = 'all';
     $('#task-filter-created-by').value = 'all';
     ['task-filter-due', 'task-filter-created-on', 'task-filter-modified-on', 'task-filter-completed-on'].forEach(id => { $(`#${id}`).value = ''; });
@@ -2738,7 +2734,7 @@ async function renderTasks({ loadMore = false } = {}) {
   const searchInput = $('#task-search');
   const search = searchInput?.dataset.fullSearch === 'true' ? searchInput.value.trim() : '';
   const query = new URLSearchParams({
-    status: search ? 'all' : ($('#task-filter-status')?.value || 'open'),
+    status: search ? 'all' : 'open',
     assignee_id: $('#task-filter-assignee')?.value || 'all',
     created_by: $('#task-filter-created-by')?.value || 'all'
   });
@@ -2760,7 +2756,10 @@ async function renderTasks({ loadMore = false } = {}) {
   let tasks = appendPage ? taskListPagination.tasks.slice() : [];
   try {
     if (search) {
-      tasks = await api(`/tasks/search?q=${encodeURIComponent(search)}`, { signal: controller.signal });
+      query.set('q', search);
+      query.set('after_id', '0');
+      query.set('limit', '200');
+      tasks = await api(`/projects/${projectId}/tasks?${query.toString()}`, { signal: controller.signal });
       if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
     } else {
       const pageSize = 200;
@@ -3276,10 +3275,9 @@ async function openTaskDrawer(taskId) {
     const syncTaskListRow = (draft, status = task.status) => {
       const row = document.querySelector(`.task-row[data-task-id="${CSS.escape(String(taskId))}"]`);
       if (!row) return;
-      const statusFilter = $('#task-filter-status')?.value || 'open';
       const assigneeFilter = $('#task-filter-assignee')?.value || 'all';
-      row.hidden = (statusFilter === 'open' && status === 'done')
-        || (statusFilter === 'done' && status !== 'done')
+      const isSearching = $('#task-search')?.dataset.fullSearch === 'true';
+      row.hidden = (!isSearching && status === 'done')
         || (assigneeFilter !== 'all' && String(draft.assignee_id || '') !== assigneeFilter);
       if (row.hidden) return;
       row.classList.toggle('done', status === 'done');
