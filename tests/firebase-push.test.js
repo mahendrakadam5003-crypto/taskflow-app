@@ -38,6 +38,28 @@ test('task due-date push identifies the actor, task, and date change', () => {
   });
 });
 
+test('punch-in push identifies the employee and local punch time', () => {
+  assert.deepEqual(formatActivityNotification({
+    action: 'Punched in',
+    actor_name: 'Amit Prakash Waikar',
+    details: '12:42 pm on 2026-10-08 - Pune'
+  }), {
+    title: 'Punch in recorded',
+    body: 'Amit Prakash Waikar punched in at 12:42 pm on 2026-10-08 - Pune.'
+  });
+});
+
+test('punch-out push identifies the employee and local punch time', () => {
+  assert.deepEqual(formatActivityNotification({
+    action: 'Punched out',
+    actor_name: 'Amit Prakash Waikar',
+    details: '6:15 pm on 2026-10-08 - Pune'
+  }), {
+    title: 'Punch out recorded',
+    body: 'Amit Prakash Waikar punched out at 6:15 pm on 2026-10-08 - Pune.'
+  });
+});
+
 test('expense approval push identifies the approver, claimant, and expense', () => {
   assert.deepEqual(formatActivityNotification({
     action: 'Reimbursement approved (level 1)',

@@ -50,6 +50,14 @@ function todayStr(date = new Date()) {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
+function formatPunchTime(value) {
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(new Date(value));
+}
+
 function isValidDateOnly(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00Z`);
@@ -464,7 +472,8 @@ router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
   const { attendanceId, locationName, now, mapStr } = punchIn;
   const recordedAt = new Date().toISOString();
   const locationInfo = await recordLocationPoint(attendanceId, req.session.userId, lat, lng, recordedAt, 0, req.body);
-  const activityId = await logActivity(req, 'Punched in', 'attendance', attendanceId, `${date} - ${locationName}`, req.session.userId);
+  const activityId = await logActivity(req, 'Punched in', 'attendance', attendanceId,
+    `${formatPunchTime(now)} on ${date} - ${locationName}`, req.session.userId);
   await notifyAdmins(req, activityId);
   res.json({ ok: true, time: now, status: mapStr });
 });
@@ -602,7 +611,8 @@ router.post('/punch-out', attendanceVerificationLimiter, async (req, res) => {
   await db.prepare(`UPDATE attendance SET punch_out = ?, out_lat = ?, out_lng = ?, out_location_text = ?,
     out_device_type = ?, out_device_info = ?, location_status = ? WHERE id = ?`)
     .run(now, lat, lng, outLocationName, deviceType, device.info, finalLocationStatus, existing.id);
-  const activityId = await logActivity(req, 'Punched out', 'attendance', existing.id, `${date} - ${outLocationName}`, req.session.userId);
+  const activityId = await logActivity(req, 'Punched out', 'attendance', existing.id,
+    `${formatPunchTime(now)} on ${date} - ${outLocationName}`, req.session.userId);
   await notifyAdmins(req, activityId);
   res.json({ ok: true, time: now, status: finalLocationStatus });
 });
