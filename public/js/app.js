@@ -4573,6 +4573,10 @@ async function renderAdmin() {
           <button class="btn btn-danger" id="reset-app-login-devices" type="button">Reset all app sign-in devices</button>
           <span class="hint">Use after reinstalling or changing the APK signing version if users cannot sign in. This is separate from attendance device access.</span>
         </div>
+        <div class="admin-form-row">
+          <button class="btn btn-danger" id="reset-attendance-devices" type="button">Reset all attendance devices</button>
+          <span class="hint">Employees must register an attendance device again before punching. App sign-in devices, access permissions, and attendance records are unchanged.</span>
+        </div>
         <div class="admin-form-row" style="margin-bottom: 20px;">
           <input id="u-name" placeholder="Full name">
           <input id="u-username" placeholder="Username" autocomplete="username" required>
@@ -5132,6 +5136,25 @@ async function renderAdmin() {
       try {
         const result = await api('/auth/users/app-devices/reset', { method: 'POST', body: {} });
         showAppNotification(`Cleared ${Number(result.reset_count) || 0} app sign-in device bindings. Users can now sign in again.`);
+      } catch (error) {
+        showAppNotification(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    $('#reset-attendance-devices')?.addEventListener('click', async event => {
+      const button = event.currentTarget;
+      const confirmed = await confirmModal(
+        'Reset all attendance devices?',
+        'Clear attendance-device registrations for everyone? Each employee must register a device again before their next punch. This does not reset app sign-in devices, device access permissions, or attendance records.',
+        'Reset attendance devices',
+        true
+      );
+      if (!confirmed) return;
+      button.disabled = true;
+      try {
+        const result = await api('/attendance/device-registration/reset-all', { method: 'POST', body: {} });
+        showAppNotification(`Cleared ${Number(result.reset_count) || 0} attendance device registrations.`);
       } catch (error) {
         showAppNotification(error.message);
       } finally {

@@ -356,6 +356,22 @@ router.delete('/device-registration/:userId', requireAdmin, async (req, res) => 
   await logActivity(req, 'Attendance device reset by admin', 'user', userId, target.name, userId);
   res.json({ ok: true });
 });
+router.post('/device-registration/reset-all', requireAdmin, async (req, res) => {
+  const registrations = await db.prepare(`SELECT user_id FROM attendance_registered_devices`).all();
+  if (registrations.length) {
+    await db.batch([
+      {
+        sql: `INSERT OR REPLACE INTO attendance_device_rebind_pending (user_id, reset_by)
+          SELECT user_id, ? FROM attendance_registered_devices`,
+        args: [req.session.userId]
+      },
+      { sql: 'DELETE FROM attendance_registered_devices' }
+    ]);
+    await logActivity(req, 'All attendance devices reset by admin', 'attendance', null,
+      `Reset attendance-device registrations for ${registrations.length} users.`);
+  }
+  res.json({ ok: true, reset_count: registrations.length });
+});
 
 router.put('/device-access/:userId', requireAdmin, async (req, res) => {
   const userId = Number(req.params.userId);

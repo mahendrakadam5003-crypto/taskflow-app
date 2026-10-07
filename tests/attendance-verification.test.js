@@ -30,6 +30,7 @@ let trackingTimelinePoints = null;
 let trackingTimelineEvents = [];
 let officeSettingsReadCount = 0;
 let attendanceRecordForPunchOut = null;
+let attendanceDeviceRegistrations = [];
 const attendanceRows = new Map();
 const punchSessions = new Map();
 const attendanceAccess = { allow_phone: 1, allow_mobile_browser: 1, allow_laptop: 1 };
@@ -67,6 +68,7 @@ const mockDb = {
         return null;
       },
       all: async (...args) => {
+        if (sql.includes('FROM attendance_registered_devices')) return attendanceDeviceRegistrations;
         if (sql.includes('FROM attendance_punch_sessions')) {
           const sessions = [...punchSessions.values()].flat();
           if (sql.includes('WHERE attendance_id = ?')) return sessions.filter(session => session.attendance_id === args[0]);
@@ -131,6 +133,10 @@ const mockDb = {
         return { changes: 1, lastInsertRowid: 1 };
       }
     };
+  },
+  async batch(statements) {
+    writes.push(...statements.map(statement => ({ sql: statement.sql, args: statement.args || [] })));
+    return statements.map(() => ({ rowsAffected: 1 }));
   }
 };
 
@@ -584,5 +590,34 @@ test('employee tracking timeline includes status changes and GPS gaps', async ()
     trackingTimelineAttendance = null;
     trackingTimelinePoints = null;
     trackingTimelineEvents = [];
+  }
+});
+
+test('admins can reset all attendance devices without changing app sign-in bindings', async () => {
+  writes.length = 0;
+  auditEntries.length = 0;
+  attendanceDeviceRegistrations = [{ user_id: 7 }, { user_id: 8 }];
+  try {
+    const employeeResponse = await fetch(`${baseUrl}/api/attendance/device-registration/reset-all`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: appCookie },
+      body: JSON.stringify({})
+    });
+    assert.equal(employeeResponse.status, 403);
+    assert.equal(writes.length, 0);
+
+    const adminResponse = await fetch(`${baseUrl}/api/attendance/device-registration/reset-all`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+      body: JSON.stringify({})
+    });
+    assert.equal(adminResponse.status, 200);
+    assert.deepEqual(await adminResponse.json(), { ok: true, reset_count: 2 });
+    assert.ok(writes.some(write => write.sql.includes('INSERT OR REPLACE INTO attendance_device_rebind_pending')));
+    assert.ok(writes.some(write => write.sql === 'DELETE FROM attendance_registered_devices'));
+    assert.ok(writes.every(write => !write.sql.includes('app_login_devices')));
+    assert.ok(auditEntries.some(entry => entry[1] === 'All attendance devices reset by admin'));
+  } finally {
+    attendanceDeviceRegistrations = [];
   }
 });
