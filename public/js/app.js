@@ -3990,16 +3990,32 @@ async function renderPunchCard() {
       card.innerHTML = `<div class="admin-block attendance-phone-only"><b>This account is registered to ${escapeHtml(registration.device_name || 'another device')}</b><p class="hint">Punching from ${currentDevice} is blocked. ${resetInstructions}</p></div>`;
       return;
     }
-    const onShift = Boolean(status?.punch_in && !status.punch_out);
-    const shiftComplete = Boolean(status?.punch_in && status.punch_out);
-    const shiftLabel = onShift ? 'On shift' : shiftComplete ? 'Done for today' : 'Not started';
+    const sessions = Array.isArray(status?.sessions) ? status.sessions : [];
+    const latestSession = sessions[sessions.length - 1] || (status?.punch_in
+      ? { punch_in: status.punch_in, punch_out: status.punch_out }
+      : null);
+    const activeShift = status?.active_shift || sessions.find(session => !session.punch_out)
+      || (status?.punch_in && !status.punch_out ? { punch_in: status.punch_in, punch_out: null } : null);
+    const displayedSession = activeShift || latestSession;
+    const onShift = Boolean(activeShift);
+    const shiftComplete = Boolean(!onShift && latestSession?.punch_out);
+    const shiftLabel = onShift ? 'On shift' : shiftComplete ? 'Shift complete' : 'Not started';
     const shiftClass = onShift ? 'chip-success' : shiftComplete ? 'chip-neutral' : 'chip-warning';
     const deviceSummary = registration.registered
       ? `<div><span>Registered device</span><b>${escapeHtml(registration.device_name)}</b></div>`
       : '<div><span>Device</span><b>Will be registered when you punch in</b></div>';
     const todayLabel = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date());
-    const startTime = status?.punch_in ? fmtTime(status.punch_in) : '—';
-    const endTime = status?.punch_out ? fmtTime(status.punch_out) : '—';
+    const startTime = displayedSession?.punch_in ? fmtTime(displayedSession.punch_in) : '—';
+    const endTime = displayedSession?.punch_out ? fmtTime(displayedSession.punch_out) : '—';
+    const completedMinutes = sessions.reduce((total, session) => {
+      if (!session.punch_out) return total;
+      const start = Date.parse(session.punch_in);
+      const end = Date.parse(session.punch_out);
+      return Number.isFinite(start) && Number.isFinite(end)
+        ? total + Math.max(0, Math.floor((end - start) / 60000))
+        : total;
+    }, 0);
+    const workedMinutes = sessions.length ? completedMinutes : Number(status?.worked_minutes) || 0;
     card.innerHTML = `
       <section class="attendance-shift-card ${onShift ? 'is-on-shift' : ''}">
         <div class="attendance-shift-heading">
@@ -4007,13 +4023,13 @@ async function renderPunchCard() {
           <span class="chip ${shiftClass}"><span class="attendance-status-dot"></span>${shiftLabel}</span>
         </div>
         <div class="attendance-shift-action">
-          <p>${onShift ? 'Your shift is in progress.' : shiftComplete ? 'Your shift is complete for today.' : 'Ready when you are.'}</p>
+          <p>${onShift ? 'Your shift is in progress.' : shiftComplete ? 'Your shift is complete. Start another shift when you are ready.' : 'Ready when you are.'}</p>
           <div id="attendance-action-region"></div>
         </div>
         <div class="attendance-shift-details">
           <div><span>Shift started</span><b>${escapeHtml(startTime)}</b></div>
           <div><span>Shift ended</span><b>${escapeHtml(endTime)}</b></div>
-          <div><span>Time on shift</span><b id="attendance-shift-duration">${onShift ? 'Calculating…' : shiftComplete ? `${startTime} – ${endTime}` : '—'}</b></div>
+          <div><span>Time worked today</span><b id="attendance-shift-duration">${onShift ? 'Calculating…' : shiftComplete ? `${Math.floor(workedMinutes / 60)}h ${String(workedMinutes % 60).padStart(2, '0')}m` : '—'}</b></div>
           ${deviceSummary}
         </div>
         <p class="attendance-location-note">${icon('pin')} GPS location is an indicative reference only and can be spoofed; it does not prove physical presence.</p>
@@ -4023,9 +4039,10 @@ async function renderPunchCard() {
       if (clock) clock.textContent = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date());
       const duration = $('#attendance-shift-duration');
       if (duration && onShift) {
-        const startedAt = parseTaskFlowTimestamp(status.punch_in).getTime();
+        const startedAt = parseTaskFlowTimestamp(activeShift.punch_in).getTime();
         const elapsedMinutes = Number.isFinite(startedAt) ? Math.max(0, Math.floor((Date.now() - startedAt) / 60000)) : 0;
-        duration.textContent = `${Math.floor(elapsedMinutes / 60)}h ${String(elapsedMinutes % 60).padStart(2, '0')}m`;
+        const totalMinutes = workedMinutes + elapsedMinutes;
+        duration.textContent = `${Math.floor(totalMinutes / 60)}h ${String(totalMinutes % 60).padStart(2, '0')}m`;
       }
     };
     stopAttendanceClock();
@@ -4067,7 +4084,7 @@ async function renderPunchCard() {
           button.disabled = false;
         }
       });
-    } else if (!shiftComplete) {
+    } else {
       stopLiveTracking();
       actionRegion.innerHTML = `${attendanceFeedbackMarkup()}<button class="btn btn-primary attendance-punch-action" id="btn-punch-in" type="button">${icon('clock')} Hold to punch in</button>`;
       bindAttendancePunchAction($('#btn-punch-in'), async button => {
@@ -4106,9 +4123,6 @@ async function renderPunchCard() {
           button.disabled = false;
         }
       });
-    } else {
-      stopLiveTracking();
-      actionRegion.innerHTML = `${attendanceFeedbackMarkup()}<div class="attendance-complete-note">${icon('check')} Shift complete · ${escapeHtml(startTime)} – ${escapeHtml(endTime)}</div>`;
     }
   } catch (err) {
     stopAttendanceClock();

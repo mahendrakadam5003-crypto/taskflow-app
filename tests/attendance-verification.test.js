@@ -441,6 +441,38 @@ test('employees can punch out away from the configured office', async () => {
   }
 });
 
+test('employees can start another attendance session after punching out', async () => {
+  writes.length = 0;
+  attendanceRecordForPunchOut = {
+    id: 35,
+    date: activeShiftDate,
+    punch_in: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    punch_out: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    location_status: 'ðŸ“ In: Office'
+  };
+  try {
+    const response = await fetch(`${baseUrl}/api/attendance/punch-in`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: appCookie,
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36 TaskFlowNative/1'
+      },
+      body: JSON.stringify({
+        device_id: deviceId,
+        lat: 19.076,
+        lng: 72.8777,
+        verification_method: 'native-device-credential'
+      })
+    });
+
+    assert.equal(response.status, 200);
+    assert.ok(writes.some(write => write.sql.includes('INSERT INTO attendance_punch_sessions')));
+  } finally {
+    attendanceRecordForPunchOut = null;
+  }
+});
+
 test('admin live timeline returns stored distance and place-change totals', async () => {
   const response = await fetch(`${baseUrl}/api/attendance/live/7/timeline?date=2026-10-05`, {
     headers: { Cookie: adminCookie }
