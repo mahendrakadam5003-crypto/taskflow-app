@@ -368,11 +368,19 @@ label { color: var(--ink-2); }
   .task-toolbar .task-search-wrap { min-width: 100%; }
   .task-table { min-width: 0; }
   .task-table thead { display: none; }
-  .task-table tbody tr.task-row, .task-table tbody tr.my-task-row { position: relative; display: block; margin: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-1); }
-  .task-table tbody tr.task-row td, .task-table tbody tr.my-task-row td { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 4px; border: 0; text-align: left; }
-  .task-table tbody tr.task-row td:first-child, .task-table tbody tr.my-task-row td:first-child { position: absolute; top: 10px; right: 10px; width: auto; padding: 0; }
-  .task-mobile-label { display: inline-block; width: 68px; flex: 0 0 68px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-  .task-table tbody tr.task-row .task-title-cell, .task-table tbody tr.my-task-row td:nth-child(2) { padding-right: 38px; font-size: 15px !important; }
+  .task-table tbody tr.task-row, .task-table tbody tr.my-task-row { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto auto; align-items: center; column-gap: 8px; margin: 0; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; box-shadow: none; }
+  .task-table tbody tr.task-row td, .task-table tbody tr.my-task-row td { display: block; min-width: 0; width: auto; padding: 0; border: 0; text-align: left; }
+  .task-table tbody tr.task-row td:first-child, .task-table tbody tr.my-task-row td:first-child { position: static; grid-column: 1; grid-row: 1; width: 28px; padding: 0; }
+  .task-mobile-label { display: none; }
+  .task-table tbody tr.task-row .task-title-cell, .task-table tbody tr.my-task-row td:nth-child(2) { grid-column: 2; grid-row: 1; padding: 0; font-size: 14px !important; line-height: 1.2; }
+  .task-table tbody tr.task-row .task-title-cell b, .task-table tbody tr.my-task-row td:nth-child(2) b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task-table tbody tr.task-row .task-title-cell .task-status { display: none; }
+  .task-table tbody tr.task-row .task-assignee-cell { grid-column: 3; grid-row: 1; justify-self: center; font-size: 0 !important; }
+  .task-table tbody tr.task-row .assignee-cell { gap: 0; }
+  .task-table tbody tr.task-row .avatar { width: 26px; height: 26px; font-size: 10px; }
+  .task-table tbody tr.my-task-row td:nth-child(3) { grid-column: 3; grid-row: 1; overflow: hidden; font-size: 11px !important; text-overflow: ellipsis; white-space: nowrap; }
+  .task-table tbody tr.task-row .task-due-cell, .task-table tbody tr.my-task-row td:nth-child(4) { grid-column: 4; grid-row: 1; justify-self: end; max-width: 96px; font-size: 10px !important; }
+  .task-table tbody tr.task-row .chip, .task-table tbody tr.my-task-row .chip { overflow: hidden; max-width: 96px; padding: 2px 6px; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
   .task-table tbody tr.done .task-title-cell { color: var(--muted); }
   .task-table .chip { white-space: normal; }
   .dashboard-project-section { margin-bottom: 28px; }
