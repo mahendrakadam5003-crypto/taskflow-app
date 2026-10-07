@@ -49,10 +49,12 @@ function isValidDateOnly(value) {
 
 function getPunchDevice(req, reportedModel) {
   const userAgent = String(req.get('user-agent') || '').slice(0, 500);
+  const isTaskFlowApp = /TaskFlowNative\/1(?:\s|$)/.test(userAgent);
   const clientHintModel = String(req.get('sec-ch-ua-model') || '').trim().replace(/^"|"$/g, '');
   const isPhone = /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent);
   const suppliedModel = String(reportedModel || '').trim().slice(0, 80);
-  const androidModel = clientHintModel || suppliedModel || userAgent.match(/Android\s+[^;;)]+;\s*([^;)]+)/i)?.[1]?.replace(/\s+Build\/.*$/i, '').trim();
+  const androidModel = (isTaskFlowApp ? suppliedModel : clientHintModel || suppliedModel)
+    || userAgent.match(/Android\s+[^;;)]+;\s*([^;)]+)/i)?.[1]?.replace(/\s+Build\/.*$/i, '').trim();
   const iosVersion = userAgent.match(/OS\s+(\d+[._]\d+)/i)?.[1]?.replace('_', '.');
   let deviceName = 'Desktop browser';
   if (/iPhone/i.test(userAgent)) deviceName = `iPhone${iosVersion ? ` · iOS ${iosVersion}` : ''}`;
@@ -60,11 +62,11 @@ function getPunchDevice(req, reportedModel) {
   else if (/Android/i.test(userAgent)) deviceName = androidModel && !/^k$/i.test(androidModel) ? `Android · ${androidModel}` : 'Android device';
   else if (/Macintosh|Mac OS X/i.test(userAgent)) deviceName = 'Mac browser';
   else if (/Windows/i.test(userAgent)) deviceName = 'Windows browser';
-  let browserName = 'Browser';
-  if (/Edg\//i.test(userAgent)) browserName = 'Edge';
-  else if (/Firefox\//i.test(userAgent)) browserName = 'Firefox';
-  else if (/Chrome\//i.test(userAgent)) browserName = 'Chrome';
-  else if (/Safari\//i.test(userAgent)) browserName = 'Safari';
+  let browserName = isTaskFlowApp ? 'TaskFlow app' : 'Browser';
+  if (!isTaskFlowApp && /Edg\//i.test(userAgent)) browserName = 'Edge';
+  else if (!isTaskFlowApp && /Firefox\//i.test(userAgent)) browserName = 'Firefox';
+  else if (!isTaskFlowApp && /Chrome\//i.test(userAgent)) browserName = 'Chrome';
+  else if (!isTaskFlowApp && /Safari\//i.test(userAgent)) browserName = 'Safari';
   return { type: isPhone ? 'phone' : 'laptop', info: `${deviceName} · ${browserName} · category indicative` };
 }
 
@@ -894,3 +896,4 @@ router.put('/:id', requireAdmin, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.getPunchDevice = getPunchDevice;

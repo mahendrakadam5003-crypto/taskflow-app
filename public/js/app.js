@@ -3357,10 +3357,10 @@ function isPhoneDevice() {
 }
 
 function currentDeviceType() {
-  return isPhoneDevice() ? 'phone' : 'laptop';
+  return window.Capacitor?.isNativePlatform?.() || isPhoneDevice() ? 'phone' : 'laptop';
 }
 
-function getAttendanceDeviceId() {
+function getBrowserAttendanceDeviceId() {
   const storageKey = `taskflow-attendance-device:${ME.id}`;
   let deviceId = localStorage.getItem(storageKey);
   if (!deviceId) {
@@ -3372,8 +3372,24 @@ function getAttendanceDeviceId() {
   return deviceId;
 }
 
+async function getAttendanceDeviceId(nativeIdentity = null) {
+  if (!window.Capacitor?.isNativePlatform?.()) return getBrowserAttendanceDeviceId();
+  const identity = nativeIdentity || await getLoginDevicePayload();
+  const source = new TextEncoder().encode(`taskflow-attendance:${identity.device_id}`);
+  const digest = await window.crypto.subtle.digest('SHA-256', source);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
 async function getPunchDevicePayload() {
-  const payload = { device_type: currentDeviceType(), device_id: getAttendanceDeviceId() };
+  const nativeIdentity = window.Capacitor?.isNativePlatform?.() ? await getLoginDevicePayload() : null;
+  const payload = {
+    device_type: currentDeviceType(),
+    device_id: await getAttendanceDeviceId(nativeIdentity)
+  };
+  if (nativeIdentity) {
+    payload.device_model = `${nativeIdentity.manufacturer} ${nativeIdentity.model}`.trim().slice(0, 80);
+    return payload;
+  }
   try {
     const details = await navigator.userAgentData?.getHighEntropyValues?.(['model']);
     if (details?.model && !/^k$/i.test(details.model.trim())) payload.device_model = details.model.trim();
@@ -3387,7 +3403,8 @@ async function renderPunchCard() {
   const card = $('#punch-card-container');
   if (!card) return;
   try {
-    const deviceId = getAttendanceDeviceId();
+    const nativeIdentity = window.Capacitor?.isNativePlatform?.() ? await getLoginDevicePayload() : null;
+    const deviceId = await getAttendanceDeviceId(nativeIdentity);
     const [status, deviceAccess, registration] = await Promise.all([
       api('/attendance/today'),
       api('/attendance/device-access/me'),
@@ -3398,7 +3415,10 @@ async function renderPunchCard() {
       return;
     }
     if (!registration.registered && !registration.rebind_pending) {
-      card.innerHTML = `<div class="admin-block attendance-device-enrollment"><b>Register this device</b><p class="hint">Name the phone or computer you use for attendance. This account can punch only from this browser until an administrator resets the device.</p><label>Device name<input id="attendance-device-name" maxlength="60" placeholder="For example, Amit's Pixel"></label><button class="btn btn-primary" id="attendance-device-register" type="button">Register device</button><div class="form-error" id="attendance-device-error"></div></div>`;
+      const nativeApp = Boolean(window.Capacitor?.isNativePlatform?.());
+      const deviceLabel = nativeApp ? 'this TaskFlow app' : 'this browser';
+      const deviceExample = nativeApp ? "Amit's TaskFlow app" : "Amit's Pixel";
+      card.innerHTML = `<div class="admin-block attendance-device-enrollment"><b>Register this device</b><p class="hint">Name the ${nativeApp ? 'app installation' : 'phone or computer'} you use for attendance. This account can punch only from ${deviceLabel} until an administrator resets the device.</p><label>Device name<input id="attendance-device-name" maxlength="60" placeholder="For example, ${escapeHtml(deviceExample)}"></label><button class="btn btn-primary" id="attendance-device-register" type="button">Register device</button><div class="form-error" id="attendance-device-error"></div></div>`;
       $('#attendance-device-register').onclick = async (event) => {
         const button = event.currentTarget;
         const error = $('#attendance-device-error');
@@ -3414,7 +3434,8 @@ async function renderPunchCard() {
       return;
     }
     if (registration.registered && !registration.is_current_device) {
-      card.innerHTML = `<div class="admin-block attendance-phone-only"><b>This account is registered to ${escapeHtml(registration.device_name || 'another device')}</b><p class="hint">Punching from this browser is blocked. Ask an administrator to reset your registered device.</p></div>`;
+      const currentDevice = window.Capacitor?.isNativePlatform?.() ? 'this TaskFlow app' : 'this browser';
+      card.innerHTML = `<div class="admin-block attendance-phone-only"><b>This account is registered to ${escapeHtml(registration.device_name || 'another device')}</b><p class="hint">Punching from ${currentDevice} is blocked. Ask an administrator to reset your registered device.</p></div>`;
       return;
     }
     const onShift = Boolean(status?.punch_in && !status.punch_out);

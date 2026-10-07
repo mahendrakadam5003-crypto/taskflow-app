@@ -113,6 +113,19 @@ require.cache[axiosPath] = {
 };
 
 const attendanceRouter = require('../routes/attendance');
+test('native TaskFlow attendance is identified as the app, not its embedded Chrome browser', () => {
+  const device = attendanceRouter.getPunchDevice({
+    get: name => name.toLowerCase() === 'user-agent'
+      ? 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/131.0 Mobile TaskFlowNative/1'
+      : ''
+  }, 'Google Pixel 9');
+
+  assert.deepEqual(device, {
+    type: 'phone',
+    info: 'Android · Google Pixel 9 · TaskFlow app · category indicative'
+  });
+});
+
 const app = express();
 app.use(express.json());
 app.use(session({ name: 'attendance-verification.sid', secret: 'attendance-verification-session-secret-32', resave: false, saveUninitialized: false }));

@@ -25,22 +25,7 @@ function safeErrorDiagnostics(error) {
     const message = typeof current.message === 'string'
       ? current.message.replace(/^(?:SQLITE_[A-Z_]+:\s*)+/i, '').trim()
       : '';
-    const safeSummary = type === 'TypeError' && [
-      /^Cannot read properties of (?:undefined|null) \(reading '[A-Za-z_$][A-Za-z0-9_$]*'\)$/i,
-      /^[A-Za-z_$][A-Za-z0-9_$.]* is not a function$/i,
-      /^fetch failed$/i
-    ].some(pattern => pattern.test(message)) ? message.slice(0, 180) : [
-      /^Unable to decrypt tenant database token; verify APP_ENCRYPTION_KEY\.?$/i,
-      /^APP_ENCRYPTION_KEY must be a 32-byte key encoded as 64 hexadecimal characters or Base64\.?$/i,
-      /^TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are required unless USE_LOCAL_DB=1\.?$/i,
-      /^TURSO_DATABASE_URL must be a remote libsql:\/\/ or https:\/\/ URL; set USE_LOCAL_DB=1 for local SQLite\.?$/i,
-      /^The control database URL must be a remote libsql:\/\/ or https:\/\/ URL\.?$/i,
-      /^Set both CONTROL_DATABASE_URL and CONTROL_AUTH_TOKEN, or configure TURSO_DATABASE_URL and TURSO_AUTH_TOKEN to share the company database\.?$/i,
-      /^TURSO_DATABASE_URL must be a valid URL\.?$/i,
-      /^No tenant database is registered for company ID \d+\.?$/i,
-      /^Company \d+ has an invalid tenant database URL\.?$/i,
-      /^Company \d+ has no tenant database token\.?$/i
-    ].some(pattern => pattern.test(message)) ? message.slice(0, 180) : [
+    const safeSummary = [
       /^no such (?:table|column|index|function): [A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$/i,
       /^table [A-Za-z_][A-Za-z0-9_]* has no column named [A-Za-z_][A-Za-z0-9_]*$/i,
       /^(?:database is (?:locked|busy)|foreign key constraint failed|datatype mismatch|string or blob too big)$/i,
@@ -53,11 +38,6 @@ function safeErrorDiagnostics(error) {
       ETIMEDOUT: 'Connection timed out.',
       EAI_AGAIN: 'DNS resolution temporarily failed.',
       ENOTFOUND: 'DNS host not found.',
-      AUTHENTICATION_FAILED: 'Database authentication failed.',
-      PERMISSION_DENIED: 'Database authorization failed.',
-      URL_INVALID: 'Database URL is invalid.',
-      FAILED_TO_CONNECT: 'Database connection failed.',
-      SQLITE_AUTH: 'Database authorization failed.',
       SQLITE_BUSY: 'Database is busy or locked.',
       SQLITE_LOCKED: 'Database is locked.'
     })[code] || null;

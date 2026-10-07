@@ -19,7 +19,7 @@ const { hasControlDatabaseConfiguration } = require('./tenant-manager');
 const { collectUsageSnapshots } = require('./usage-snapshots');
 const { createBackupManager } = require('./backup-manager');
 const { logCompanyEvent } = require('./http-errors');
-const { createUserErrorReporter, safeErrorDiagnostics } = require('./user-error-reporter');
+const { createUserErrorReporter } = require('./user-error-reporter');
 const { createEntitlementMiddleware, createEntitlementService } = require('./entitlements');
 const { createEntitlementScheduler } = require('./entitlement-scheduler');
 const { createPublicRouter } = require('./routes/public');
@@ -454,15 +454,7 @@ app.use((error, req, res, next) => {
   const status = Number(error.statusCode || error.status);
   const clientError = status >= 400 && status < 500;
   const reportStatus = Number.isInteger(status) && status >= 500 && status <= 599 ? status : 500;
-  console.error(JSON.stringify({
-    event: 'http_request_failed',
-    company_id: req.companyTenantId ?? null,
-    request_id: req.requestId ?? null,
-    method: req.method,
-    route: `${req.baseUrl || ''}${req.route?.path || req.path || '/'}`.slice(0, 300),
-    status_code: reportStatus,
-    diagnostics: safeErrorDiagnostics(error)
-  }));
+  console.error(JSON.stringify({ event: 'http_request_failed', company_id: req.companyTenantId ?? null }));
   if (!clientError) reportUserError(req, 'unhandled_request_error', reportStatus, error);
   res.status(clientError ? status : 500).json({
     error: clientError ? 'Invalid request.' : 'Internal server error.'

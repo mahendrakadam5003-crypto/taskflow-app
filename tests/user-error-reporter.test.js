@@ -49,39 +49,6 @@ test('error diagnostics retain safe SQLite details and causes without persisting
   assert.doesNotMatch(JSON.stringify(statements[0]), /private token|abc123|SQLITE_ERROR:/);
 });
 
-test('error diagnostics expose safe configuration failures without leaking values', () => {
-  const error = new Error('Unable to decrypt tenant database token; verify APP_ENCRYPTION_KEY.');
-  error.cause = Object.assign(new Error('bad decrypt: private-token-value'), { code: 'AUTHENTICATION_FAILED' });
-
-  assert.deepEqual(JSON.parse(safeErrorDiagnostics(error)), [
-    {
-      type: 'Error',
-      code: null,
-      summary: 'Unable to decrypt tenant database token; verify APP_ENCRYPTION_KEY.'
-    },
-    {
-      type: 'Error',
-      code: 'AUTHENTICATION_FAILED',
-      summary: 'Database authentication failed.'
-    }
-  ]);
-  assert.doesNotMatch(safeErrorDiagnostics(error), /private-token-value/);
-});
-
-test('error diagnostics expose bounded TypeError shapes without arbitrary messages', () => {
-  assert.deepEqual(JSON.parse(safeErrorDiagnostics(
-    new TypeError("Cannot read properties of undefined (reading 'get')")
-  )), [{
-    type: 'TypeError',
-    code: null,
-    summary: "Cannot read properties of undefined (reading 'get')"
-  }]);
-
-  assert.equal(safeErrorDiagnostics(
-    new TypeError('failed with token=private-secret-value')
-  ), '[{"type":"TypeError","code":null,"summary":null}]');
-});
-
 test('unknown errors expose only an application-relative source location and safe tenant context details', () => {
   const error = Object.assign(new Error('private query value: secret-123'), {
     stack: 'Error: private query value: secret-123\n    at handler (C:\\app\\routes\\tasks.js:123:45)'
