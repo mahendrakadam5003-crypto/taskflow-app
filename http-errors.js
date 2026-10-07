@@ -1,3 +1,5 @@
+const { safeErrorDiagnostics } = require('./user-error-reporter');
+
 function asyncHandler(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 }
@@ -32,9 +34,14 @@ function logCompanyEvent(companyId, event, level = 'error') {
 }
 
 function sendInternalError(res, error, context) {
+  const req = res.req;
   console.error(JSON.stringify({
     event: String(context || 'request_failed').slice(0, 100),
-    company_id: res.locals?.company_id ?? null
+    company_id: res.locals?.company_id ?? null,
+    request_id: req?.requestId ?? null,
+    method: req?.method ?? null,
+    route: `${req?.baseUrl || ''}${req?.route?.path || req?.path || '/'}`.slice(0, 300),
+    diagnostics: safeErrorDiagnostics(error)
   }));
   Promise.resolve(res.locals?.reportUserError?.(context || 'request_failed', 500, error)).catch(() => {});
   if (res.headersSent) return;
