@@ -697,6 +697,14 @@ const trackingStatusQueueKey = 'taskflow.attendance.tracking-status.queue';
 const backgroundTrackingOptOutKey = 'taskflow.attendance.background-opt-out-date';
 let lastTrackingHealthState = null;
 let trackingStatusFlushPromise = null;
+let backgroundTrackingPluginUnavailable = false;
+
+function showBackgroundTrackingAppUpdateRequired() {
+  backgroundTrackingPluginUnavailable = true;
+  setTrackingHealthBanner('This installed TaskFlow app does not include background tracking. Install the latest APK; changing permissions cannot fix this version.', true);
+  const button = $('#attendance-tracking-health-settings');
+  if (button) button.textContent = 'Update app';
+}
 
 function hasDeclinedBackgroundTracking(shiftDate = todayISO()) {
   return localStorage.getItem(backgroundTrackingOptOutKey) === shiftDate;
@@ -923,6 +931,10 @@ async function updateNativeTrackingHealth(active) {
 
 $('#attendance-tracking-health-settings')?.addEventListener('click', async () => {
   const button = $('#attendance-tracking-health-settings');
+  if (backgroundTrackingPluginUnavailable) {
+    setTrackingHealthBanner('Install the latest TaskFlow APK to add background tracking support. Android permissions alone cannot add the missing feature.', true);
+    return;
+  }
   if (!nativeApp || !window.TaskFlowBackgroundLocation) {
     setTrackingHealthBanner('Update or reopen the TaskFlow app to manage background location settings.', true);
     return;
@@ -965,11 +977,15 @@ $('#attendance-tracking-health-settings')?.addEventListener('click', async () =>
     }
   } catch (error) {
     console.warn('Unable to open location settings:', error.message);
-    setTrackingHealthBanner(`Unable to fix background tracking settings: ${error.message}`, true);
+    if (/BackgroundLocation.*plugin is not implemented/i.test(error.message)) {
+      showBackgroundTrackingAppUpdateRequired();
+    } else {
+      setTrackingHealthBanner(`Unable to fix background tracking settings: ${error.message}`, true);
+    }
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = 'Fix settings';
+      button.textContent = backgroundTrackingPluginUnavailable ? 'Update app' : 'Fix settings';
     }
   }
 });
