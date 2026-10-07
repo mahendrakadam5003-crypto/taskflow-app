@@ -2,18 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>TaskFlow</title>
-<meta name="theme-color" content="#14213D">
+<meta name="theme-color" content="#F4F6F8">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="TaskFlow">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/taskflow.svg">
 <link rel="icon" href="/icons/taskflow.svg">
-<link rel="stylesheet" href="/css/style.css?v=20260930-12">
-<link rel="stylesheet" href="/css/theme.css?v=8">
+<link rel="stylesheet" href="/css/style.css?v=20261007-13">
+<link rel="stylesheet" href="/css/theme.css?v=9">
 <link rel="preload" href="/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
 </head>
 <body>
@@ -61,7 +61,10 @@
         <input type="text" id="login-username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
       </label>
       <label>Password
-        <input type="password" id="login-password" autocomplete="current-password" required>
+        <span class="login-password-field">
+          <input type="password" id="login-password" autocomplete="current-password" required>
+          <button class="login-password-toggle" id="login-password-toggle" type="button" aria-label="Show password" aria-pressed="false">Show</button>
+        </span>
       </label>
       <div id="login-error" class="form-error"></div>
       <button type="submit" class="btn btn-primary btn-block">Sign in</button>
@@ -124,6 +127,7 @@
       <div class="mobile-topbar-actions">
         <button class="logout-mini-btn" id="dashboard-logout-btn" type="button">Logout</button>
         <button class="mobile-menu-btn" id="btn-mobile-nav" title="Open navigation" aria-label="Open navigation"><svg class="icon" aria-hidden="true"><use href="#icon-menu"></use></svg></button>
+        <button class="appearance-settings-button" id="btn-appearance-settings" type="button" aria-label="Appearance settings" title="Appearance settings">Aa</button>
       </div>
     </header>
     <div id="company-status-banner" class="company-status-banner hidden" role="status"></div>
@@ -359,7 +363,7 @@
     </div>
   </aside>
   <nav class="mobile-bottom-nav" aria-label="Primary mobile navigation">
-    <button type="button" class="mobile-tab" data-feature="attendance" data-view="attendance" aria-label="Attendance"><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg><span>Attendance</span></button>
+    <button type="button" class="mobile-tab" data-feature="attendance" data-view="attendance" aria-label="Punch attendance"><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg><span>Attendance</span></button>
     <button type="button" class="mobile-tab" data-view="mytasks" aria-label="My tasks"><svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg><span>Tasks</span></button>
     <button type="button" class="mobile-tab" data-feature="reimbursements" data-view="reimbursements" aria-label="Reimbursements"><svg class="icon" aria-hidden="true"><use href="#icon-receipt"></use></svg><span>Expenses</span></button>
     <button type="button" class="mobile-tab" data-view="notifications" aria-label="Notifications"><svg class="icon" aria-hidden="true"><use href="#icon-bell"></use></svg><span>Alerts</span></button>

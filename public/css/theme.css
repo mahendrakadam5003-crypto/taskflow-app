@@ -409,10 +409,230 @@ label { color: var(--ink-2); }
   body { background: #fff; }
 }
 
-/* ---------- 16. Optional dark mode (opt-in: add class "theme-dark" on <html>) ---------- */
-:root.theme-dark {
-  --bg: #0B1220; --surface: #121B2E; --surface-2: #16213A;
-  --line: #22304D; --line-strong: #31415F;
-  --ink: #E8ECF3; --ink-2: #C3CBDA; --muted: #8E9AB3;
-  --green-bg: #12302A; --amber-bg: #3A2D12; --red-bg: #3A1B18;
+/* ---------- 16. Native mobile appearance ---------- */
+:root.is-native {
+  --muted: #5B6472;
+  --fs-xs: .75rem;
+  --fs-sm: .875rem;
+  --fs-base: 1rem;
+  --fs-lg: 1.125rem;
+  --fs-xl: 1.375rem;
+  --fs-2xl: 1.75rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root.is-native[data-theme="system"] {
+    --navy: #0B1220;
+    --navy-2: #16213A;
+    --bg: #0B1220;
+    --surface: #121B2E;
+    --surface-2: #16213A;
+    --line: #22304D;
+    --line-strong: #31415F;
+    --ink: #E8ECF3;
+    --ink-2: #C3CBDA;
+    --muted: #9AA6BD;
+    --brand: #4FB596;
+    --brand-hover: #63C4A7;
+    --brand-soft: #12302A;
+    --accent: #6B93E8;
+    --green: #4FB596;
+    --green-bg: #12302A;
+    --amber: #E7B85B;
+    --amber-bg: #3A2D12;
+    --red: #F17B70;
+    --red-bg: #3A1B18;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, .16);
+    --shadow-2: 0 4px 14px rgba(0, 0, 0, .2);
+    --shadow-3: 0 18px 48px rgba(0, 0, 0, .36);
+    color-scheme: dark;
+  }
+}
+
+:root.is-native[data-theme="dark"] {
+  --navy: #0B1220;
+  --navy-2: #16213A;
+  --bg: #0B1220;
+  --surface: #121B2E;
+  --surface-2: #16213A;
+  --line: #22304D;
+  --line-strong: #31415F;
+  --ink: #E8ECF3;
+  --ink-2: #C3CBDA;
+  --muted: #9AA6BD;
+  --brand: #4FB596;
+  --brand-hover: #63C4A7;
+  --brand-soft: #12302A;
+  --accent: #6B93E8;
+  --green: #4FB596;
+  --green-bg: #12302A;
+  --amber: #E7B85B;
+  --amber-bg: #3A2D12;
+  --red: #F17B70;
+  --red-bg: #3A1B18;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .16);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, .2);
+  --shadow-3: 0 18px 48px rgba(0, 0, 0, .36);
+  color-scheme: dark;
+}
+
+:root.is-native[data-theme="light"] { color-scheme: light; }
+
+html.is-native input::placeholder,
+html.is-native textarea::placeholder { color: #7B8494; }
+
+.appearance-settings-button,
+.login-password-toggle { display: none; }
+
+.native-appearance-settings { display: grid; gap: 10px; }
+.native-appearance-settings h3 { margin: 0 0 4px; }
+.native-appearance-settings label { margin-top: 4px; font-size: var(--fs-sm); font-weight: 600; }
+.native-appearance-settings select { width: 100%; min-height: 48px; padding: 10px 12px; font: inherit; }
+.native-appearance-settings .modal-actions { margin-top: 10px; }
+
+@media (max-width: 760px) {
+  html.is-native {
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  html.is-native body { min-height: 100dvh; background: var(--bg); font-size: var(--fs-base); line-height: 1.5; }
+  html.is-native .app { min-height: 100dvh; height: 100dvh; }
+  html.is-native .mobile-topbar {
+    top: 0;
+    height: calc(52px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 12px 0;
+    color: var(--ink);
+  }
+  html.is-native .app.focused-view .mobile-topbar,
+  html.is-native .app.project-shell .mobile-topbar { color: var(--ink); }
+  html.is-native .app.focused-view .main,
+  html.is-native .app.project-shell .main { padding-top: calc(60px + env(safe-area-inset-top)); padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+  html.is-native .main { min-height: 0; padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+  html.is-native .mobile-back-btn,
+  html.is-native .mobile-menu-btn,
+  html.is-native .appearance-settings-button {
+    display: inline-flex;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-weight: 700;
+  }
+  html.is-native .appearance-settings-button { display: inline-flex; }
+  html.is-native .mobile-topbar-actions { gap: 6px; }
+  html.is-native .logout-mini-btn { min-height: 44px; }
+  html.is-native .mobile-bottom-nav {
+    background: var(--surface);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  html.is-native.is-ios .mobile-bottom-nav {
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+  html.is-native .mobile-bottom-nav button { min-height: 56px; font-size: var(--fs-xs); font-weight: 600; }
+  html.is-native .mobile-bottom-nav .icon { width: 22px; height: 22px; }
+  html.is-native .btn { min-height: 48px; }
+  html.is-native .btn-sm,
+  html.is-native .link-btn,
+  html.is-native .icon-btn,
+  html.is-native .mobile-tab { min-height: 44px; }
+  html.is-native .icon-btn { min-width: 44px; }
+  html.is-native .project-del,
+  html.is-native .row-complete,
+  html.is-native .drawer-floating-close { min-width: 44px; min-height: 44px; }
+  html.is-native .hint,
+  html.is-native small,
+  html.is-native .chip,
+  html.is-native .badge,
+  html.is-native .task-mobile-label,
+  html.is-native .attn-table td[data-label]::before,
+  html.is-native .attendance-shift-details span,
+  html.is-native .dashboard-metric small { font-size: max(12px, .75rem); }
+  html.is-native .dashboard-metric,
+  html.is-native .dashboard-card,
+  html.is-native .task-panel,
+  html.is-native .attendance-shift-card { border-radius: 16px; }
+  html.is-native .login-screen { min-height: 100dvh; }
+  html.is-native .login-screen { padding: 16px; }
+  html.is-native .login-card { width: min(100%, 400px); padding: 28px 22px; }
+  html.is-native .login-mark { color: var(--ink); }
+  html.is-native .login-card input { min-height: 48px; }
+  html.is-native .login-password-field { position: relative; display: block; }
+  html.is-native .login-password-field input { width: 100%; padding-right: 68px; }
+  html.is-native .login-password-toggle {
+    position: absolute;
+    display: inline-flex;
+    top: 50%;
+    right: 6px;
+    min-width: 52px;
+    min-height: 40px;
+    align-items: center;
+    justify-content: center;
+    transform: translateY(-50%);
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+  }
+
+  html.is-native .sidebar { height: 100dvh; }
+  html.is-native .app.focused-view .drawer,
+  html.is-native .app.project-shell .drawer { height: calc(100dvh - 52px - env(safe-area-inset-top)); }
+  html.is-native .attendance-shift-action { padding: 14px 0; }
+  html.is-native .attendance-shift-details span { font-size: 12px; }
+  html.is-native .attendance-punch-action {
+    width: 96px;
+    min-width: 96px;
+    height: 96px;
+    min-height: 96px;
+    flex-direction: column;
+    gap: 5px;
+    padding: 10px;
+    border-radius: 50%;
+    font-size: var(--fs-sm);
+    box-shadow: var(--shadow-2);
+  }
+  html.is-native .attendance-punch-action .icon { width: 25px; height: 25px; }
+  html.is-native .attendance-shift-action { justify-items: center; }
+  html.is-native .attendance-shift-details { gap: 8px; }
+  html.is-native .attendance-shift-details > div { padding: 12px; border-radius: 12px; }
+  html.is-native .attendance-complete-note { color: var(--green); }
+  html.is-native .attendance-location-error {
+    margin: 0 0 12px;
+    padding: 12px;
+    border: 1px solid var(--amber);
+    border-radius: 12px;
+    background: var(--amber-bg);
+    color: var(--ink);
+    font-size: var(--fs-sm);
+  }
+  html.is-native .dashboard-metric.alert.has-alert { border-color: var(--red); background: var(--red-bg); }
+  html.is-native .badge.on-site, html.is-native .chip-success { background: var(--green-bg); color: var(--ink); }
+  html.is-native .badge.remote, html.is-native .chip-warning, html.is-native .due-today { background: var(--amber-bg); color: var(--ink); }
+  html.is-native .badge.unknown, html.is-native .chip-neutral, html.is-native .due-upcoming { background: var(--surface-2); color: var(--ink-2); }
+  html.is-native .badge.off-site, html.is-native .chip-danger, html.is-native .due-overdue { background: var(--red-bg); color: var(--ink); }
+  html.is-native .btn-danger { border-color: var(--line-strong); }
+  html.is-native .drawer-loading-line,
+  html.is-native .task-list-skeleton span {
+    background: linear-gradient(90deg, var(--surface-2) 25%, var(--line) 50%, var(--surface-2) 75%);
+    background-size: 200% 100%;
+  }
+  html.is-native[data-theme="dark"] .mobile-topbar { box-shadow: 0 2px 8px rgba(0, 0, 0, .28); }
+  html.is-native[data-theme="dark"] .dashboard-metric.alert.has-alert { border-color: var(--red); }
+}
+
+@media (max-width: 360px) {
+  html.is-native .login-screen { padding: 0; }
+  html.is-native .login-card { width: 100vw; max-width: none; min-height: 100dvh; margin: 0; padding: max(24px, env(safe-area-inset-top)) 18px max(24px, env(safe-area-inset-bottom)); border-radius: 0; }
 }

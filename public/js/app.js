@@ -1,6 +1,42 @@
 // ---------- tiny helpers ----------
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+const nativeApp = Boolean(window.Capacitor?.isNativePlatform?.())
+  || /TaskFlowNative\/1(?:\s|$)/.test(navigator.userAgent);
+const htmlElement = document.documentElement;
+const nativeThemeKey = 'taskflow.native.theme';
+const nativeTextSizeKey = 'taskflow.native.text-size';
+
+if (nativeApp) {
+  htmlElement.classList.add('is-native');
+  htmlElement.classList.add(/iPhone|iPad|iPod/i.test(navigator.userAgent) ? 'is-ios' : 'is-android');
+}
+
+function applyNativeAppearance(theme, textSize) {
+  if (!nativeApp) return;
+  htmlElement.dataset.theme = theme;
+  htmlElement.style.fontSize = { small: '14px', default: '16px', large: '18px' }[textSize] || '16px';
+  const dark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  htmlElement.style.colorScheme = dark ? 'dark' : 'light';
+  const themeColor = document.querySelector('meta[name="theme-color"]');
+  if (themeColor) themeColor.content = dark ? '#0B1220' : '#F4F6F8';
+  const appleStatusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+  if (appleStatusBar && /iPhone|iPad|iPod/i.test(navigator.userAgent)) appleStatusBar.content = dark ? 'black' : 'default';
+}
+
+if (nativeApp) {
+  const storedTheme = localStorage.getItem(nativeThemeKey);
+  const storedTextSize = localStorage.getItem(nativeTextSizeKey);
+  const initialTheme = ['system', 'light', 'dark'].includes(storedTheme) ? storedTheme : 'system';
+  const initialTextSize = ['small', 'default', 'large'].includes(storedTextSize) ? storedTextSize : 'default';
+  applyNativeAppearance(initialTheme, initialTextSize);
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (htmlElement.dataset.theme === 'system') {
+      applyNativeAppearance('system', localStorage.getItem(nativeTextSizeKey) || 'default');
+    }
+  });
+}
+
 let activeTaskDrawerController = null;
 let taskListRequestId = 0;
 let activeTaskListController = null;
@@ -921,6 +957,16 @@ if (loginForm) {
     }
   });
 
+  $('#login-password-toggle')?.addEventListener('click', event => {
+    const input = $('#login-password');
+    const button = event.currentTarget;
+    const reveal = input.type === 'password';
+    input.type = reveal ? 'text' : 'password';
+    button.textContent = reveal ? 'Hide' : 'Show';
+    button.setAttribute('aria-label', `${reveal ? 'Hide' : 'Show'} password`);
+    button.setAttribute('aria-pressed', String(reveal));
+  });
+
   $('#google-login-button')?.addEventListener('click', async () => {
     const companyCode = companyField?.value.trim() || '';
     if (companyCode) localStorage.setItem('taskflow.companyCode', companyCode);
@@ -1354,6 +1400,43 @@ $$('.mobile-tab[data-view]').forEach((btn) => {
   btn.addEventListener('click', () => { closeMobileNav(); showView(btn.dataset.view); });
 });
 $('#btn-mobile-more')?.addEventListener('click', () => $('#btn-mobile-nav')?.click());
+if (nativeApp) {
+  const attendanceTabLabel = $('.mobile-bottom-nav [data-view="attendance"] span');
+  if (attendanceTabLabel) attendanceTabLabel.textContent = 'Punch';
+}
+const appearanceSettingsButton = $('#btn-appearance-settings');
+if (nativeApp && appearanceSettingsButton) {
+  appearanceSettingsButton.addEventListener('click', () => {
+    const theme = htmlElement.dataset.theme || 'system';
+    const textSize = localStorage.getItem(nativeTextSizeKey) || 'default';
+    showModal(`<div class="native-appearance-settings">
+      <h3>Appearance</h3>
+      <label for="native-theme-setting">Theme</label>
+      <select id="native-theme-setting">
+        <option value="system" ${theme === 'system' ? 'selected' : ''}>System</option>
+        <option value="light" ${theme === 'light' ? 'selected' : ''}>Light</option>
+        <option value="dark" ${theme === 'dark' ? 'selected' : ''}>Dark</option>
+      </select>
+      <label for="native-text-size-setting">Text size</label>
+      <select id="native-text-size-setting">
+        <option value="small" ${textSize === 'small' ? 'selected' : ''}>Small</option>
+        <option value="default" ${textSize === 'default' ? 'selected' : ''}>Default</option>
+        <option value="large" ${textSize === 'large' ? 'selected' : ''}>Large</option>
+      </select>
+      <div class="modal-actions"><button class="btn btn-primary" id="native-appearance-done" type="button">Done</button></div>
+    </div>`);
+    const themeSelect = $('#native-theme-setting');
+    const textSizeSelect = $('#native-text-size-setting');
+    const savePreferences = () => {
+      localStorage.setItem(nativeThemeKey, themeSelect.value);
+      localStorage.setItem(nativeTextSizeKey, textSizeSelect.value);
+      applyNativeAppearance(themeSelect.value, textSizeSelect.value);
+    };
+    themeSelect.addEventListener('change', savePreferences);
+    textSizeSelect.addEventListener('change', savePreferences);
+    $('#native-appearance-done').addEventListener('click', closeModal);
+  });
+}
 
 const taskFlowViewHistory = [];
 let currentTaskFlowView = document.querySelector('.nav-item.active')?.dataset.view || 'dashboard';
@@ -3290,6 +3373,18 @@ function attendanceFeedbackMarkup() {
   return `<div id="attendance-biometric-feedback" class="attendance-biometric-feedback hidden" role="status" aria-live="polite"><span id="attendance-biometric-icon" class="attendance-biometric-icon">${icon('fingerprint')}</span><span id="attendance-biometric-message"></span></div><p id="attendance-punch-progress" class="attendance-punch-progress hidden" role="status" aria-live="polite"></p>`;
 }
 
+function showAttendanceLocationHelp(actionRegion, error) {
+  if (!nativeApp || !/location|gps/i.test(error.message || '')) return;
+  let notice = actionRegion.querySelector('.attendance-location-error');
+  if (!notice) {
+    notice = document.createElement('p');
+    notice.className = 'attendance-location-error';
+    notice.setAttribute('role', 'alert');
+    actionRegion.prepend(notice);
+  }
+  notice.textContent = `${error.message} You can manage the permission in your phone settings.`;
+}
+
 function setAttendanceBiometricFeedback(state, message) {
   const feedback = $('#attendance-biometric-feedback');
   const biometricIcon = $('#attendance-biometric-icon');
@@ -3502,11 +3597,13 @@ async function renderPunchCard() {
           setAttendancePunchProgress('Connecting to TaskFlow...');
           await api('/attendance/punch-out', { method: 'POST', body: { ...coords, ...devicePayload, ...activityPayload, verification_method: verificationMethod } });
           stopLiveTracking();
+          if (!verificationMethod) vibrateAttendance();
           showAppNotification('Punched out successfully.');
           await renderPunchCard();
           if (verificationMethod) setAttendanceBiometricFeedback('success', 'Punch out recorded.');
         } catch (error) {
           setAttendancePunchProgress('');
+          showAttendanceLocationHelp(actionRegion, error);
           showAppNotification(`Punch out failed: ${error.message}`);
           button.disabled = false;
         }
@@ -3524,11 +3621,13 @@ async function renderPunchCard() {
           const activityPayload = await getTravelActivity(true);
           setAttendancePunchProgress('Connecting to TaskFlow...');
           await api('/attendance/punch-in', { method: 'POST', body: { ...coords, ...devicePayload, ...activityPayload, verification_method: verificationMethod } });
+          if (!verificationMethod) vibrateAttendance();
           showAppNotification('Punched in successfully.');
           await renderPunchCard();
           if (verificationMethod) setAttendanceBiometricFeedback('success', 'Punch in recorded.');
         } catch (error) {
           setAttendancePunchProgress('');
+          showAttendanceLocationHelp(actionRegion, error);
           showAppNotification(`Punch in failed: ${error.message}`);
           button.disabled = false;
         }
