@@ -1,0 +1,33 @@
+workflows:
+  capacitor-ios-build:
+    name: TaskFlow Capacitor iOS Production Build
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.taskflow.app
+      vars:
+        XCODE_WORKSPACE: ios/App/App.xcworkspace
+        XCODE_SCHEME: App
+      xcode: latest
+      node: 20.18.0
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+    scripts:
+      - name: Install Node dependencies
+        script: npm ci
+      - name: Sync Capacitor iOS project and CocoaPods
+        script: npx cap sync ios
+      - name: Apply App Store signing profiles
+        script: xcode-project use-profiles
+      - name: Build signed iOS IPA
+        script: xcode-project build-ipa --workspace "$XCODE_WORKSPACE" --scheme "$XCODE_SCHEME"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/**/*.log
