@@ -892,6 +892,13 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS attendance_punch_sessions_attendance_idx ON attendance_punch_sessions(attendance_id)');
       await markSchemaVersion(13);
     }
+    if (schemaVersion < 14) {
+      const locationColumns = await dbDriverInterface.prepare('PRAGMA table_info(attendance_locations)').all();
+      if (!locationColumns.some(column => column.name === 'flags')) {
+        await dbDriverInterface.exec("ALTER TABLE attendance_locations ADD COLUMN flags TEXT NOT NULL DEFAULT ''");
+      }
+      await markSchemaVersion(14);
+    }
     console.log('Database schema and default settings are ready.');
   } catch (err) {
     console.error(JSON.stringify({ event: 'tenant_database_initialization_failed', company_id: companyId ?? null }));
