@@ -579,65 +579,79 @@ function createSuperAdminRouter({
   }));
 
   router.get('/user-errors', handle(async (req, res) => {
-    const admin = await getAuthenticatedAdmin(req);
-    if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
-    const controlDb = await getDatabase();
-    const status = req.query.status === 'all' ? 'all' : 'open';
-    const limit = 50;
-    const requestedOffset = Number(req.query.offset || 0);
-    if (!Number.isSafeInteger(requestedOffset) || requestedOffset < 0 || requestedOffset > 1_000_000) {
-      return res.status(400).json({ error: 'Choose a valid error report page.' });
-    }
-    const errorQuery = status === 'all'
-      ? {
-        sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
-          e.event, e.method, e.route, e.status_code, e.diagnostics, e.created_at, e.resolved_at,
-          c.name AS company_name, c.code AS registered_company_code
-          FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
-          ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
-        args: [limit + 1, requestedOffset]
+    let phase = 'admin_authentication';
+    const slowRequestTimer = setTimeout(() => {
+      console.warn(JSON.stringify({
+        event: 'superadmin_user_errors_slow',
+        phase,
+        request_id: req.requestId || null
+      }));
+    }, 5000);
+    try {
+      const admin = await getAuthenticatedAdmin(req);
+      if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
+      phase = 'control_database_connection';
+      const controlDb = await getDatabase();
+      const status = req.query.status === 'all' ? 'all' : 'open';
+      const limit = 50;
+      const requestedOffset = Number(req.query.offset || 0);
+      if (!Number.isSafeInteger(requestedOffset) || requestedOffset < 0 || requestedOffset > 1_000_000) {
+        return res.status(400).json({ error: 'Choose a valid error report page.' });
       }
-      : {
-        sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
-          e.event, e.method, e.route, e.status_code, e.diagnostics, e.created_at, e.resolved_at,
-          c.name AS company_name, c.code AS registered_company_code
-          FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
-          WHERE e.resolved_at IS NULL
-          ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
-        args: [limit + 1, requestedOffset]
-      };
-    const [errorsResult, pendingResult] = await Promise.all([
-      controlDb.execute(errorQuery),
-      controlDb.execute('SELECT COUNT(*) AS count FROM user_error_reports WHERE resolved_at IS NULL')
-    ]);
-    res.set('Cache-Control', 'no-store');
-    const errorRows = errorsResult.rows || [];
-    return res.json({
-      pendingCount: Number(pendingResult.rows?.[0]?.count || 0),
-      hasMore: errorRows.length > limit,
-      errors: errorRows.slice(0, limit).map(row => ({
-        id: Number(row.id),
-        companyId: row.company_id == null ? null : Number(row.company_id),
-        companyCode: row.registered_company_code || row.company_code || null,
-        companyName: row.company_name || null,
-        actorUserId: row.actor_user_id == null ? null : Number(row.actor_user_id),
-        requestId: row.request_id,
-        event: row.event,
-        method: row.method,
-        route: row.route,
-        statusCode: Number(row.status_code),
-        diagnostics: (() => {
-          try {
-            const parsed = JSON.parse(row.diagnostics || '[]');
-            return Array.isArray(parsed) ? parsed.slice(0, 4) : [];
-          } catch (error) {
-            return [];
-          }
-        })(),
-        createdAt: row.created_at,
-        resolvedAt: row.resolved_at
-      }))
-    });
+      const errorQuery = status === 'all'
+        ? {
+          sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
+            e.event, e.method, e.route, e.status_code, e.diagnostics, e.created_at, e.resolved_at,
+            c.name AS company_name, c.code AS registered_company_code
+            FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
+            ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
+          args: [limit + 1, requestedOffset]
+        }
+        : {
+          sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
+            e.event, e.method, e.route, e.status_code, e.diagnostics, e.created_at, e.resolved_at,
+            c.name AS company_name, c.code AS registered_company_code
+            FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
+            WHERE e.resolved_at IS NULL
+            ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
+          args: [limit + 1, requestedOffset]
+        };
+      phase = 'report_queries';
+      const [errorsResult, pendingResult] = await Promise.all([
+        controlDb.execute(errorQuery),
+        controlDb.execute('SELECT COUNT(*) AS count FROM user_error_reports WHERE resolved_at IS NULL')
+      ]);
+      res.set('Cache-Control', 'no-store');
+      const errorRows = errorsResult.rows || [];
+      return res.json({
+        pendingCount: Number(pendingResult.rows?.[0]?.count || 0),
+        hasMore: errorRows.length > limit,
+        errors: errorRows.slice(0, limit).map(row => ({
+          id: Number(row.id),
+          companyId: row.company_id == null ? null : Number(row.company_id),
+          companyCode: row.registered_company_code || row.company_code || null,
+          companyName: row.company_name || null,
+          actorUserId: row.actor_user_id == null ? null : Number(row.actor_user_id),
+          requestId: row.request_id,
+          event: row.event,
+          method: row.method,
+          route: row.route,
+          statusCode: Number(row.status_code),
+          diagnostics: (() => {
+            try {
+              const parsed = JSON.parse(row.diagnostics || '[]');
+              return Array.isArray(parsed) ? parsed.slice(0, 4) : [];
+            } catch (error) {
+              return [];
+            }
+          })(),
+          createdAt: row.created_at,
+          resolvedAt: row.resolved_at
+        }))
+      });
+    } finally {
+      clearTimeout(slowRequestTimer);
+    }
   }));
 
   router.post('/user-errors/:errorId/resolve', handle(async (req, res) => {
