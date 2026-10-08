@@ -899,6 +899,17 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       }
       await markSchemaVersion(14);
     }
+    if (schemaVersion < 15) {
+      await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS task_history_created_idx ON task_history(created_at DESC, id DESC)');
+      await markSchemaVersion(15);
+    }
+    if (schemaVersion < 16) {
+      const reimbursementColumns = await dbDriverInterface.prepare('PRAGMA table_info(reimbursements)').all();
+      if (!reimbursementColumns.some(column => column.name === 'approval_trail')) {
+        await dbDriverInterface.exec("ALTER TABLE reimbursements ADD COLUMN approval_trail TEXT NOT NULL DEFAULT ''");
+      }
+      await markSchemaVersion(16);
+    }
     console.log('Database schema and default settings are ready.');
   } catch (err) {
     console.error(JSON.stringify({ event: 'tenant_database_initialization_failed', company_id: companyId ?? null }));
