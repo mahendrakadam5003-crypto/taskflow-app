@@ -112,6 +112,8 @@ let taskListRequestId = 0;
 let activeTaskListController = null;
 let taskListPagination = { key: '', afterId: 0, hasMore: false, tasks: [] };
 let dashboardSummaryRequestId = 0;
+let attendanceHistoryMonth = null;
+let attendanceHistoryRequestId = 0;
 let forcedPasswordModalOpen = false;
 let modalReturnFocus = null;
 let modalCloseHandler = null;
@@ -4256,47 +4258,136 @@ async function renderPunchCard() {
   }
 }
 
-async function renderHistory() {
-  const table = $('#attendance-history-table');
-  if (!table) return;
-  try {
-    const rawRows = await api('/attendance/mine');
-    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
-    if (!rows || !rows.length) {
-      table.innerHTML = '<tr><td colspan="7" class="hint" style="text-align:center; padding:15px; color:#888;">No tracking history entries generated.</td></tr>';
-      return;
-    }
-    table.innerHTML = rows.map(r => {
-      const present = r.present ?? Boolean(r.punch_in || r.PUNCH_IN);
-      const inLat = r.in_lat || r.IN_LAT;
-      const inLng = r.in_lng || r.IN_LNG;
-      const outLat = r.out_lat || r.OUT_LAT;
-      const outLng = r.out_lng || r.OUT_LNG;
-      
-      const inMapUrl = inLat ? `https://www.google.com/maps?q=${inLat},${inLng}` : null;
-      const outMapUrl = outLat ? `https://www.google.com/maps?q=${outLat},${outLng}` : null;
-      return `
-      <tr>
-        <td data-label="Date">${fmtDate(r.date || r.DATE)}</td>
-        <td data-label="Status"><span class="chip ${present ? 'chip-success' : 'chip-neutral'}">${present ? 'Present' : 'Not present'}</span></td>
-        <td data-label="Punch in">${fmtTime(r.punch_in || r.PUNCH_IN) || '--'}</td>
-        <td data-label="In device">${escapeHtml(r.in_device_info || r.in_device_type || '--')}</td>
-        <td data-label="Punch out">${fmtTime(r.punch_out || r.PUNCH_OUT) || '--'}</td>
-        <td data-label="Out device">${escapeHtml(r.out_device_info || r.out_device_type || '--')}</td>
-        <td data-label="Location">
-          <small style="display:block; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#555;" title="${escapeHtml(r.location_status || r.LOCATION_STATUS || '')}">
-            ${escapeHtml(r.location_status || r.LOCATION_STATUS || '')}
-          </small>
-          <div class="row-actions" style="margin-top:6px;">
-            ${inMapUrl ? `<a href="${inMapUrl}" target="_blank" rel="noopener" class="map-link">${icon('pin')} In</a>` : ''}
-            ${outMapUrl ? `<a href="${outMapUrl}" target="_blank" rel="noopener" class="map-link">${icon('pin')} Out</a>` : ''}
-          </div>
-        </td>
-      </tr>`;
-    }).join('');
-  } catch (error) {
-    table.innerHTML = `<tr><td colspan="7" class="form-error" role="alert">Attendance history unavailable: ${escapeHtml(error.message)}</td></tr>`;
+function attendanceSessionsForRow(row) {
+  if (Array.isArray(row.sessions) && row.sessions.length) return row.sessions;
+  return row.punch_in || row.punch_out ? [row] : [];
+}
+
+function attendanceMonthMarkup(rows, year, month, options = {}) {
+  const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+  const monthRows = rows.filter(row => String(row.date || '').startsWith(monthKey));
+  const attendedRows = monthRows.filter(row => row.punch_in || row.punch_out);
+  const sessions = attendedRows.flatMap(attendanceSessionsForRow);
+  const presentCount = options.admin
+    ? new Set(attendedRows.map(row => Number(row.user_id))).size
+    : new Set(attendedRows.map(row => row.date)).size;
+  const monthTitle = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    .format(new Date(Date.UTC(year, month, 1)));
+  const today = todayISO();
+  const firstWeekday = (new Date(Date.UTC(year, month, 1)).getUTCDay() + 6) % 7;
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const weekdayHeaders = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    .map(day => `<span class="attendance-calendar-weekday">${day}</span>`).join('');
+  const emptyDays = Array.from({ length: firstWeekday }, () => '<span class="attendance-calendar-empty" aria-hidden="true"></span>').join('');
+  const days = Array.from({ length: daysInMonth }, (_, index) => {
+    const date = `${monthKey}-${String(index + 1).padStart(2, '0')}`;
+    const dayRows = monthRows.filter(row => row.date === date);
+    const presentOnDay = dayRows.filter(row => row.punch_in || row.punch_out);
+    const daySessions = presentOnDay.flatMap(attendanceSessionsForRow);
+    const count = options.admin ? presentOnDay.length : Number(presentOnDay.length > 0);
+    const outsideRange = (options.from && date < options.from) || (options.to && date > options.to);
+    const dayLabel = new Intl.DateTimeFormat(undefined, {
+      weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'Asia/Kolkata'
+    }).format(new Date(`${date}T12:00:00.000Z`));
+    return `<button type="button" class="attendance-calendar-day ${count ? 'has-attendance' : ''} ${date === today ? 'is-today' : ''} ${outsideRange ? 'outside-range' : ''}"
+        data-attendance-date="${date}" aria-label="${dayLabel}${count ? `, ${count} ${options.admin ? 'employees' : 'attendance record'}; ${daySessions.filter(session => session.punch_in).length} punch-ins and ${daySessions.filter(session => session.punch_out).length} punch-outs` : ', no recorded punches'}">
+        <span class="attendance-calendar-day-number">${index + 1}</span>
+        ${count ? `<span class="attendance-calendar-day-count">${count}</span>` : ''}
+      </button>`;
+  }).join('');
+  const controls = options.monthNavigation ? `
+    <button type="button" class="attendance-calendar-nav" id="attendance-history-prev" aria-label="Previous month">‹</button>
+    <h3>${monthTitle}</h3>
+    <button type="button" class="attendance-calendar-nav" id="attendance-history-next" aria-label="Next month" ${monthKey >= today.slice(0, 7) ? 'disabled' : ''}>›</button>`
+    : `<h3>${monthTitle}</h3>`;
+  return `<section class="attendance-calendar-month">
+    <div class="attendance-calendar-heading">${controls}</div>
+    <div class="attendance-calendar-summary">
+      <div><b>${presentCount}</b><small>${options.admin ? 'Employees present' : 'Present days'}</small></div>
+      <div><b>${sessions.filter(session => session.punch_in).length}</b><small>Punch-ins</small></div>
+      <div><b>${sessions.filter(session => session.punch_out).length}</b><small>Punch-outs</small></div>
+    </div>
+    <div class="attendance-calendar-weekdays">${weekdayHeaders}</div>
+    <div class="attendance-calendar-grid">${emptyDays}${days}</div>
+  </section>`;
+}
+
+function showAttendanceDayDetails(date, rows, options = {}) {
+  const dateLabel = new Intl.DateTimeFormat(undefined, {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'Asia/Kolkata'
+  }).format(new Date(`${date}T12:00:00.000Z`));
+  let content;
+  if (!options.withinRange) {
+    content = '<p class="hint">This day is outside the selected date range.</p>';
+  } else if (!rows.length || (!options.admin && !attendanceSessionsForRow(rows[0]).length)) {
+    content = '<p class="hint">No punches recorded for this day.</p>';
+  } else {
+    const presentRows = rows.filter(row => row.punch_in || row.punch_out);
+    const detailRows = options.admin && options.allowAdminPunch ? rows : presentRows;
+    content = detailRows.length ? `<div class="attendance-day-details">${detailRows.map(row => {
+      const sessions = attendanceSessionsForRow(row);
+      const sessionMarkup = sessions.length ? sessions.map((session, index) => `
+        <div class="attendance-day-session"><span>${sessions.length > 1 ? `Shift ${index + 1}` : 'Punch times'}</span>
+          <div><small>Punch in</small><b>${fmtTime(session.punch_in) || '--'}</b></div>
+          <div><small>Punch out</small><b>${fmtTime(session.punch_out) || '--'}</b></div>
+        </div>`).join('') : '<p class="hint attendance-day-no-punch">No punches recorded.</p>';
+      const isActive = Boolean(row.punch_in && !row.punch_out);
+      const action = options.allowAdminPunch ? (isActive
+        ? `<button class="btn btn-danger btn-sm attendance-admin-punch" data-action="out" data-user-id="${Number(row.user_id)}">Punch out</button>`
+        : !row.punch_in ? `<button class="btn btn-primary btn-sm attendance-admin-punch" data-action="in" data-user-id="${Number(row.user_id)}">Punch in</button>`
+          : '<span class="hint">Complete</span>') : '';
+      return `<article class="attendance-day-person">
+        ${options.admin ? `<div class="attendance-day-person-heading"><b>${escapeHtml(row.user_name || row.name || 'Employee')}</b>${row.department ? `<small>${escapeHtml(row.department)}</small>` : ''}</div>` : ''}
+        <div class="attendance-day-session-list">${sessionMarkup}</div>
+        ${action}
+      </article>`;
+    }).join('')}</div>` : '<p class="hint">No punches recorded for this day.</p>';
   }
+  showModal(`<div class="attendance-day-dialog"><h3>${dateLabel}</h3>${content}<div class="modal-actions"><button class="btn btn-secondary" id="attendance-day-close" type="button">Close</button></div></div>`);
+  $('#attendance-day-close')?.addEventListener('click', closeModal);
+  $$('.attendance-admin-punch').forEach(button => {
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        await options.onAdminPunch?.(button, date);
+      } catch (error) {
+        showAppNotification(error.message);
+        button.disabled = false;
+      }
+    };
+  });
+}
+
+function renderHistory() {
+  const calendar = $('#attendance-history-calendar');
+  if (!calendar) return;
+  if (!attendanceHistoryMonth) {
+    const [year, month] = todayISO().split('-').map(Number);
+    attendanceHistoryMonth = new Date(Date.UTC(year, month - 1, 1));
+  }
+  const requestId = ++attendanceHistoryRequestId;
+  const year = attendanceHistoryMonth.getUTCFullYear();
+  const month = attendanceHistoryMonth.getUTCMonth();
+  const from = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+  const to = new Date(Date.UTC(year, month + 1, 0)).toISOString().slice(0, 10);
+  api(`/attendance/mine?from=${from}&to=${to}`).then(rawRows => {
+    if (requestId !== attendanceHistoryRequestId) return;
+    const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
+    calendar.innerHTML = attendanceMonthMarkup(rows, year, month, { monthNavigation: true });
+    calendar.querySelectorAll('[data-attendance-date]').forEach(button => {
+      button.onclick = () => showAttendanceDayDetails(button.dataset.attendanceDate, rows.filter(row => row.date === button.dataset.attendanceDate));
+    });
+    $('#attendance-history-prev').onclick = () => {
+      attendanceHistoryMonth = new Date(Date.UTC(year, month - 1, 1));
+      renderHistory();
+    };
+    $('#attendance-history-next')?.addEventListener('click', () => {
+      attendanceHistoryMonth = new Date(Date.UTC(year, month + 1, 1));
+      renderHistory();
+    });
+  }).catch(error => {
+    if (requestId === attendanceHistoryRequestId) calendar.innerHTML = `<p class="form-error" role="alert">Attendance history unavailable: ${escapeHtml(error.message)}</p>`;
+  });
 }
 
 function openTrackingMapLink(event) {
@@ -5658,21 +5749,16 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
       <button class="btn btn-primary" id="admin-att-apply">Filter</button>
       <button class="btn btn-secondary" id="admin-att-export">Export CSV</button>
     </div>
-    <div class="attendance-table-wrap admin-attendance-table-wrap">
-      <table class="attn-table">
-        <thead><tr><th>Employee</th><th>Department</th><th>Registered device</th><th>Date</th><th>Punch in</th><th>In device</th><th>Punch-in location (indicative)</th><th>Punch out</th><th>Out device</th><th>Punch-out location (indicative)</th><th>Action</th></tr></thead>
-        <tbody id="admin-attendance-table"></tbody>
-      </table>
-    </div>`;
+    <div id="admin-attendance-calendar"></div>`;
 
-  const table = $('#admin-attendance-table');
-  const renderRows = async () => {
+  const calendar = $('#admin-attendance-calendar');
+  const renderRows = async (openDate = null) => {
     const from = $('#admin-att-from').value;
     const to = $('#admin-att-to').value;
     const userId = $('#admin-att-employee').value;
     const department = $('#admin-att-department').value;
     if (!from || !to || from > to) {
-      table.innerHTML = '<tr><td colspan="11" class="form-error">Choose a valid date range.</td></tr>';
+      calendar.innerHTML = '<p class="form-error">Choose a valid date range.</p>';
       return;
     }
     try {
@@ -5682,48 +5768,33 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
       } else {
         rows = await api(`/attendance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${userId ? `&user_id=${encodeURIComponent(userId)}` : ''}${department ? `&department=${encodeURIComponent(department)}` : ''}`);
       }
-      if (!rows.length) {
-        table.innerHTML = '<tr><td colspan="11" class="hint" style="text-align:center; padding:15px;">No attendance records found.</td></tr>';
-        return;
+      const monthViews = [];
+      const firstDate = new Date(`${from}T00:00:00.000Z`);
+      const lastDate = new Date(`${to}T00:00:00.000Z`);
+      for (const monthDate = new Date(Date.UTC(firstDate.getUTCFullYear(), firstDate.getUTCMonth(), 1)); monthDate <= lastDate; monthDate.setUTCMonth(monthDate.getUTCMonth() + 1)) {
+        monthViews.push(attendanceMonthMarkup(rows, monthDate.getUTCFullYear(), monthDate.getUTCMonth(), { admin: true, from, to }));
       }
-      table.innerHTML = rows.map(row => {
-        const name = row.user_name || row.name || '—';
-        const departmentName = row.department || '—';
-        const isToday = from === to && from === today;
-        const canAdminPunch = Boolean(myDeviceAccess[`allow_${currentDeviceType()}`]);
-        const action = isToday ? (row.punch_in && !row.punch_out
-          ? (canAdminPunch ? `<button class="btn btn-danger btn-sm admin-punch" data-action="out" data-user-id="${row.user_id}">Punch out</button>` : '<span class="hint">Device not allowed</span>')
-          : !row.punch_in ? (canAdminPunch ? `<button class="btn btn-primary btn-sm admin-punch" data-action="in" data-user-id="${row.user_id}">Punch in</button>` : '<span class="hint">Device not allowed</span>') : '<span class="hint">Complete</span>') : '<span class="hint">—</span>';
-        return `<tr>
-          <td data-label="Employee"><b>${escapeHtml(name)}</b></td>
-          <td data-label="Department">${escapeHtml(departmentName)}</td>
-          <td data-label="Registered device">${escapeHtml(row.registered_device_name || '--')}</td>
-          <td data-label="Date">${escapeHtml(row.date || from)}</td>
-          <td data-label="Punch in">${fmtTime(row.punch_in) || '--'}</td>
-          <td data-label="In device">${escapeHtml(row.in_device_info || row.in_device_type || '--')}</td>
-          <td data-label="Punch-in location">${escapeHtml(row.in_location_text || (row.punch_in ? 'Location unavailable' : '--'))}</td>
-          <td data-label="Punch out">${fmtTime(row.punch_out) || '--'}</td>
-          <td data-label="Out device">${escapeHtml(row.out_device_info || row.out_device_type || '--')}</td>
-          <td data-label="Punch-out location">${escapeHtml(row.out_location_text || (row.punch_out ? 'Location unavailable' : '--'))}</td>
-          <td data-label="Action">${action}</td>
-        </tr>`;
-      }).join('');
-      $$('.admin-punch').forEach(button => {
-        button.onclick = async () => {
-          button.disabled = true;
-          try {
-            await api(`/attendance/admin-punch-${button.dataset.action}`, {
-              method: 'POST', body: { user_id: Number(button.dataset.userId) }
-            });
-            await renderRows();
-          } catch (err) {
-            showAppNotification(err.message);
-            button.disabled = false;
-          }
-        };
+      calendar.innerHTML = monthViews.join('');
+      const allowAdminPunch = from === to && from === today && Boolean(myDeviceAccess[`allow_${currentDeviceType()}`]);
+      const openDay = date => showAttendanceDayDetails(date, allowAdminPunch && date === today
+        ? rows
+        : rows.filter(row => row.date === date), {
+        admin: true,
+        withinRange: date >= from && date <= to,
+        allowAdminPunch: allowAdminPunch && date === today,
+        onAdminPunch: async (button, selectedDate) => {
+          await api(`/attendance/admin-punch-${button.dataset.action}`, {
+            method: 'POST', body: { user_id: Number(button.dataset.userId) }
+          });
+          await renderRows(selectedDate);
+        }
       });
+      calendar.querySelectorAll('[data-attendance-date]').forEach(button => {
+        button.onclick = () => openDay(button.dataset.attendanceDate);
+      });
+      if (openDate) openDay(openDate);
     } catch (err) {
-      table.innerHTML = `<tr><td colspan="11" class="form-error">${escapeHtml(err.message)}</td></tr>`;
+      calendar.innerHTML = `<p class="form-error" role="alert">${escapeHtml(err.message)}</p>`;
     }
   };
 

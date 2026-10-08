@@ -674,6 +674,38 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .attendance-filters { display:flex; flex-wrap:wrap; gap:8px; align-items:end; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:12px; margin-top:20px; }
 .attendance-filters label { display:flex; flex-direction:column; gap:4px; font-size:11px; color:var(--muted); font-weight:600; }
 .attendance-filters input, .attendance-filters select { border:1px solid var(--line); border-radius:6px; padding:7px 9px; font-size:13px; background:var(--surface); color:var(--ink); }
+#attendance-history-calendar, #admin-attendance-calendar { margin-top: 16px; }
+.attendance-calendar-month { max-width: 900px; margin: 0 auto 18px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.attendance-calendar-heading { display: grid; grid-template-columns: 40px minmax(0, 1fr) 40px; align-items: center; gap: 8px; margin-bottom: 14px; }
+.attendance-calendar-heading h3 { margin: 0; text-align: center; font-size: 17px; }
+.attendance-calendar-nav { display: grid; width: 40px; height: 40px; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 22px; cursor: pointer; }
+.attendance-calendar-nav:disabled { opacity: .4; cursor: default; }
+.attendance-calendar-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.attendance-calendar-summary > div { display: grid; gap: 2px; min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); text-align: center; }
+.attendance-calendar-summary b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.attendance-calendar-summary small { color: var(--muted); font-size: 11px; }
+.attendance-calendar-weekdays, .attendance-calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; }
+.attendance-calendar-weekday { padding: 5px 0; color: var(--muted); font-size: 12px; font-weight: 650; text-align: center; }
+.attendance-calendar-empty, .attendance-calendar-day { aspect-ratio: 1; min-width: 0; }
+.attendance-calendar-day { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px; border: 1px solid transparent; border-radius: 50%; background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
+.attendance-calendar-day:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.attendance-calendar-day.has-attendance { background: var(--green-bg); color: var(--green); }
+.attendance-calendar-day.is-today { outline: 2px solid var(--brand); outline-offset: 1px; }
+.attendance-calendar-day.outside-range { opacity: .32; }
+.attendance-calendar-day-number { font-size: 14px; font-weight: 650; }
+.attendance-calendar-day-count { max-width: 100%; overflow: hidden; font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.attendance-day-dialog { max-height: min(78dvh, 720px); overflow-y: auto; }
+.attendance-day-details { display: grid; gap: 10px; }
+.attendance-day-person { display: grid; gap: 8px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.attendance-day-person-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 10px; }
+.attendance-day-person-heading small, .attendance-day-session > span { color: var(--muted); font-size: 11px; }
+.attendance-day-session-list { display: grid; gap: 7px; }
+.attendance-day-session { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 10px; padding-top: 7px; border-top: 1px solid var(--line); }
+.attendance-day-session > span { grid-column: 1 / -1; }
+.attendance-day-session > div { display: grid; gap: 2px; min-width: 0; }
+.attendance-day-session small { color: var(--muted); font-size: 11px; }
+.attendance-day-session b { overflow-wrap: anywhere; font-size: 14px; font-variant-numeric: tabular-nums; }
+.attendance-day-no-punch { margin: 0; }
 
 .task-toolbar { display:flex; gap:10px; align-items:end; margin-bottom:12px; flex-wrap:wrap; }
 .task-toolbar .task-search-wrap { flex:1; min-width:240px; margin-bottom:0; }

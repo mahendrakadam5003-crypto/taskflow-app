@@ -621,3 +621,17 @@ test('admins can reset all attendance devices without changing app sign-in bindi
     attendanceDeviceRegistrations = [];
   }
 });
+
+test('admin attendance range includes each punch session for calendar details', async () => {
+  punchSessions.clear();
+  punchSessions.set(attendanceKey(7, '2026-10-04'), [{ attendance_id: 1, punch_in: '2026-10-04T03:00:00.000Z', punch_out: '2026-10-04T06:00:00.000Z' }]);
+  punchSessions.set(attendanceKey(8, '2026-10-05'), [{ attendance_id: 2, punch_in: '2026-10-05T03:00:00.000Z', punch_out: null }]);
+  const response = await fetch(`${baseUrl}/api/attendance?from=2026-10-04&to=2026-10-05`, {
+    headers: { Cookie: adminCookie }
+  });
+  assert.equal(response.status, 200);
+  const rows = await response.json();
+  assert.equal(rows[0].sessions[0].punch_out, '2026-10-04T06:00:00.000Z');
+  assert.equal(rows[1].sessions[0].punch_in, '2026-10-05T03:00:00.000Z');
+  punchSessions.clear();
+});

@@ -767,8 +767,23 @@ router.get('/', requireAdmin, async (req, res) => {
   sql += ' ORDER BY a.date DESC, u.name';
   
   const rows = await db.prepare(sql).all(...params);
+  const sessionRows = [];
+  for (let offset = 0; offset < rows.length; offset += 500) {
+    const batch = rows.slice(offset, offset + 500);
+    const placeholders = batch.map(() => '?').join(',');
+    sessionRows.push(...await db.prepare(`SELECT attendance_id, punch_in, punch_out
+      FROM attendance_punch_sessions WHERE attendance_id IN (${placeholders}) ORDER BY punch_in`)
+      .all(...batch.map(row => row.id)));
+  }
+  const sessionsByAttendance = new Map();
+  for (const session of sessionRows) {
+    const sessions = sessionsByAttendance.get(Number(session.attendance_id)) || [];
+    sessions.push(session);
+    sessionsByAttendance.set(Number(session.attendance_id), sessions);
+  }
   const mappedRows = rows.map(r => ({
     ...r,
+    sessions: sessionsByAttendance.get(Number(r.id)) || [],
     in_map_url: makeMapLink(r.in_lat, r.in_lng),
     out_map_url: makeMapLink(r.out_lat, r.out_lng)
   }));
