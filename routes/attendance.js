@@ -206,32 +206,53 @@ function getActivitySignal(body = {}) {
   };
 }
 
-async function recordLocationPoint(attendanceId, userId, lat, lng, recordedAt, minimumIntervalMs = 0, activity = {}, clientPointId = null) {
-  const previous = await db.prepare(`SELECT latitude, longitude FROM attendance_locations
+// Server-side checks only (no app update needed). Flags are stored, not used to block punches yet.
+const MAX_PLAUSIBLE_SPEED_MPS = 41.7; // about 150 km/h
+const MIN_DISTANCE_FOR_SPEED_CHECK_M = 200;
+const MAX_ACCEPTABLE_ACCURACY_M = 100;
+
+function sourceFlags(device) {
+  return device?.isNativeApp ? [] : ['browser_source'];
+}
+
+async function recordLocationPoint(attendanceId, userId, lat, lng, recordedAt, minimumIntervalMs = 0, activity = {}, clientPointId = null, extraFlags = []) {
+  const previous = await db.prepare(`SELECT latitude, longitude, recorded_at FROM attendance_locations
     WHERE attendance_id = ? AND recorded_at < ? AND latitude IS NOT NULL AND longitude IS NOT NULL
-    ORDER BY recorded_at DESC, id DESC LIMIT 1`).get(attendanceId);
+    ORDER BY recorded_at DESC, id DESC LIMIT 1`).get(attendanceId, recordedAt);
   const distanceMeters = previous ? distanceBetweenPoints(Number(previous.latitude), Number(previous.longitude), Number(lat), Number(lng)) : 0;
   const placeChanged = distanceMeters >= 50 ? 1 : 0;
   const activitySignal = getActivitySignal(activity);
+
+  const flags = [...extraFlags];
+  const accuracy = Number(activity?.accuracy);
+  if (Number.isFinite(accuracy) && accuracy > MAX_ACCEPTABLE_ACCURACY_M) flags.push('low_accuracy');
+  if (previous) {
+    const seconds = (Date.parse(recordedAt) - Date.parse(previous.recorded_at)) / 1000;
+    if (seconds > 0 && distanceMeters >= MIN_DISTANCE_FOR_SPEED_CHECK_M && distanceMeters / seconds > MAX_PLAUSIBLE_SPEED_MPS) {
+      flags.push('impossible_speed');
+    }
+  }
+  const flagText = flags.join(',');
+
+  const columns = `(attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed, activity_type, activity_confidence, flags`;
   let info;
   if (clientPointId) {
-    info = await db.prepare(`INSERT OR IGNORE INTO attendance_locations
-      (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed, activity_type, activity_confidence, client_point_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged, activitySignal.type, activitySignal.confidence, clientPointId);
+    info = await db.prepare(`INSERT OR IGNORE INTO attendance_locations ${columns}, client_point_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged, activitySignal.type, activitySignal.confidence, flagText, clientPointId);
   } else if (minimumIntervalMs > 0) {
-    info = await db.prepare(`INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed, activity_type, activity_confidence)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (
+    info = await db.prepare(`INSERT INTO attendance_locations ${columns})
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (
         SELECT 1 FROM attendance_locations WHERE attendance_id=? AND recorded_at >= ?
-      )`).run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged, activitySignal.type, activitySignal.confidence,
+      )`).run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged, activitySignal.type, activitySignal.confidence, flagText,
       attendanceId, new Date(Date.now() - minimumIntervalMs).toISOString());
   } else {
-    info = await db.prepare('INSERT INTO attendance_locations (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed, activity_type, activity_confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged, activitySignal.type, activitySignal.confidence);
+    info = await db.prepare(`INSERT INTO attendance_locations ${columns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(attendanceId, userId, recordedAt, lat, lng, distanceMeters, placeChanged, activitySignal.type, activitySignal.confidence, flagText);
   }
   if (minimumIntervalMs > 0 && !info.changes) return null;
-  if (clientPointId && !info.changes) return { id: null, duplicate: true, distanceMeters: 0, placeChanged: 0 };
-  return { id: info.lastInsertRowid, distanceMeters, placeChanged };
+  if (clientPointId && !info.changes) return { id: null, duplicate: true, distanceMeters: 0, placeChanged: 0, flags };
+  return { id: info.lastInsertRowid, distanceMeters, placeChanged, flags };
 }
 
 async function getLocationName(lat, lng, req) {
@@ -471,7 +492,7 @@ router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
   if (!punchIn) return res.status(400).json({ error: 'You are already punched in. Punch out before starting another work interval.' });
   const { attendanceId, locationName, now, mapStr } = punchIn;
   const recordedAt = new Date().toISOString();
-  const locationInfo = await recordLocationPoint(attendanceId, req.session.userId, lat, lng, recordedAt, 0, req.body);
+  const locationInfo = await recordLocationPoint(attendanceId, req.session.userId, lat, lng, recordedAt, 0, req.body, null, sourceFlags(device));
   const activityId = await logActivity(req, 'Punched in', 'attendance', attendanceId,
     `${formatPunchTime(now)} on ${date} - ${locationName}`, req.session.userId);
   await notifyAdmins(req, activityId);
@@ -493,7 +514,7 @@ router.post('/location-update', async (req, res) => {
   if (!recordedAt || new Date(recordedAt) < new Date(activeSession.punch_in)) {
     return res.status(400).json({ error: 'Location timestamp is outside the active shift.' });
   }
-  const locationInfo = await recordLocationPoint(attendance.id, req.session.userId, lat, lng, recordedAt, 30_000, req.body);
+  const locationInfo = await recordLocationPoint(attendance.id, req.session.userId, lat, lng, recordedAt, 30_000, req.body, null, sourceFlags(device));
   if (!locationInfo) return res.json({ ok: true, ignored: true, recorded_at: recordedAt });
   res.json({ ok: true, recorded_at: recordedAt });
 });
@@ -538,7 +559,8 @@ router.post('/location-updates', async (req, res) => {
       item.recordedAt,
       0,
       item.point,
-      item.point.client_point_id
+      item.point.client_point_id,
+      sourceFlags(device)
     );
     if (result?.duplicate) duplicates += 1;
     else accepted += 1;
@@ -854,6 +876,23 @@ router.get('/calendar', requireAdmin, async (req, res) => {
   const staff = await db.prepare(`SELECT COUNT(*) AS total FROM users WHERE ${staffFilters.join(' AND ')}`).get(...staffParams);
 
   res.json({ days, active_staff: Number(staff?.total || 0) });
+});
+
+// admin: flagged location points in a date range (server-side checks)
+router.get('/flags', requireAdmin, async (req, res) => {
+  const { from, to, user_id } = req.query;
+  if (!from || !to) return res.status(400).json({ error: 'from and to are required.' });
+  const params = [from, to];
+  let userFilter = '';
+  if (user_id) { userFilter = ' AND l.user_id = ?'; params.push(user_id); }
+  const rows = await db.prepare(`SELECT l.user_id, u.name AS user_name, a.date, l.flags, COUNT(*) AS points
+    FROM attendance_locations l
+    JOIN attendance a ON a.id = l.attendance_id
+    JOIN users u ON u.id = l.user_id
+    WHERE a.date >= ? AND a.date <= ? AND l.flags <> ''${userFilter}
+    GROUP BY l.user_id, a.date, l.flags
+    ORDER BY a.date DESC, u.name`).all(...params);
+  res.json(rows);
 });
 
 // admin: who is currently active right now
