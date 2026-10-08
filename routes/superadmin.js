@@ -585,16 +585,26 @@ function createSuperAdminRouter({
     const status = req.query.status === 'all' ? 'all' : 'open';
     const requestedLimit = Number(req.query.limit);
     const limit = Number.isSafeInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 100) : 50;
-    const [errorsResult, pendingResult] = await Promise.all([
-      controlDb.execute({
+    const errorQuery = status === 'all'
+      ? {
         sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
           e.event, e.method, e.route, e.status_code, e.diagnostics, e.created_at, e.resolved_at,
           c.name AS company_name, c.code AS registered_company_code
           FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
-          WHERE ? = 'all' OR e.resolved_at IS NULL
           ORDER BY e.created_at DESC, e.id DESC LIMIT ?`,
-        args: [status, limit]
-      }),
+        args: [limit]
+      }
+      : {
+        sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
+          e.event, e.method, e.route, e.status_code, e.diagnostics, e.created_at, e.resolved_at,
+          c.name AS company_name, c.code AS registered_company_code
+          FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
+          WHERE e.resolved_at IS NULL
+          ORDER BY e.created_at DESC, e.id DESC LIMIT ?`,
+        args: [limit]
+      };
+    const [errorsResult, pendingResult] = await Promise.all([
+      controlDb.execute(errorQuery),
       controlDb.execute('SELECT COUNT(*) AS count FROM user_error_reports WHERE resolved_at IS NULL')
     ]);
     res.set('Cache-Control', 'no-store');
