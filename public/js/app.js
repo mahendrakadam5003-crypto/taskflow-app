@@ -5898,8 +5898,12 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
     const requestId = ++requestCounter;
     const { year, month, from, to } = monthRange();
     const userId = $('#admin-att-employee').value;
+    calendar.innerHTML = '<p class="hint" role="status">Loading attendance...</p>';
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
     try {
-      const rawRows = await api(`/attendance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${filterQuery()}`);
+      const rawRows = await api(`/attendance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${filterQuery()}`, { signal: controller.signal });
+      clearTimeout(timeout);
       if (requestId !== requestCounter) return;
       const rows = Array.isArray(rawRows) ? rawRows : [];
       calendar.innerHTML = attendanceMonthMarkup(rows, year, month, { admin: !userId, monthNavigation: true });
@@ -5940,7 +5944,12 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
       });
       if (openDate) await openDay(openDate);
     } catch (err) {
-      if (requestId === requestCounter) calendar.innerHTML = `<p class="form-error" role="alert">${escapeHtml(err.message)}</p>`;
+      clearTimeout(timeout);
+      if (requestId === requestCounter) {
+        const message = err.name === 'AbortError' ? 'Attendance is taking too long to load.' : err.message;
+        calendar.innerHTML = `<p class="form-error" role="alert">${escapeHtml(message)}</p><button class="btn btn-secondary" id="admin-att-retry" type="button">Retry</button>`;
+        $('#admin-att-retry').onclick = () => renderRows();
+      }
     }
   };
 
