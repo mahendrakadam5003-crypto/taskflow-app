@@ -617,7 +617,7 @@ function createSuperAdminRouter({
           sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
             e.event, e.method, e.route, e.status_code, e.created_at, e.resolved_at,
             c.name AS company_name, c.code AS registered_company_code
-            FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
+            FROM user_error_reports e INDEXED BY user_error_reports_created_idx LEFT JOIN companies c ON c.id = e.company_id
             ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
           args: [limit + 1, requestedOffset]
         }
@@ -625,7 +625,7 @@ function createSuperAdminRouter({
           sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
             e.event, e.method, e.route, e.status_code, e.created_at, e.resolved_at,
             c.name AS company_name, c.code AS registered_company_code
-            FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
+            FROM user_error_reports e INDEXED BY user_error_reports_status_created_id_idx LEFT JOIN companies c ON c.id = e.company_id
             WHERE e.resolved_at IS NULL
             ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
           args: [limit + 1, requestedOffset]

@@ -16,7 +16,7 @@ const controlDatabase = {
     if (sql.includes('FROM super_admin_sessions s')) {
       return { rows: [{ id: 8, name: 'Test Admin', username: 'admin', admin_token_version: 2, session_token_version: 2, expires_at: Date.now() + 60000 }] };
     }
-    if (sql.includes('FROM user_error_reports e LEFT JOIN companies')) {
+    if (sql.includes('FROM user_error_reports e') && sql.includes('LEFT JOIN companies')) {
       return { rows: [{
         id: 19,
         company_id: 42,
