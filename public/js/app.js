@@ -324,6 +324,7 @@ function showModal(html) {
     if (backdropEl.classList.contains('hidden')) modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     modalEl.innerHTML = html;
     modalEl.classList.toggle('user-edit-modal', html.includes('user-edit-dialog'));
+    modalEl.classList.toggle('receipt-preview-dialog', html.includes('receipt-preview-modal'));
     const title = modalEl.querySelector('h3');
     if (title) {
       title.id = 'modal-title';
@@ -346,7 +347,7 @@ function closeModal() {
   if (modalEl && backdropEl) {
     backdropEl.classList.add('hidden'); 
     modalEl.innerHTML = ''; 
-    modalEl.classList.remove('user-edit-modal');
+    modalEl.classList.remove('user-edit-modal', 'receipt-preview-dialog');
   }
   const onClose = modalCloseHandler;
   modalCloseHandler = null;
