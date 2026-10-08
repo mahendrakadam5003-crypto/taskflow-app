@@ -4,13 +4,16 @@ const express = require('express');
 const path = require('node:path');
 
 const APP_SHELL_CACHE_CONTROL = 'no-store, no-cache, must-revalidate';
+const ASSET_CACHE_CONTROL = 'no-cache'; // browser keeps the file and revalidates with ETag (304 when unchanged)
 
 function createAppShellSetHeaders(publicDirectory) {
   const noCacheFiles = new Set(['index.html', 'service-worker.js', 'manifest.webmanifest']);
   return (res, filePath) => {
     const relativePath = path.relative(publicDirectory, filePath).replace(/\\/g, '/');
-    if (noCacheFiles.has(relativePath) || relativePath.startsWith('js/') || relativePath.startsWith('css/')) {
+    if (noCacheFiles.has(relativePath)) {
       res.setHeader('Cache-Control', APP_SHELL_CACHE_CONTROL);
+    } else if (relativePath.startsWith('js/') || relativePath.startsWith('css/')) {
+      res.setHeader('Cache-Control', ASSET_CACHE_CONTROL);
     }
   };
 }
