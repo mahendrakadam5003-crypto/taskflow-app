@@ -1715,7 +1715,7 @@ async function enterApp() {
     syncLiveTracking();
     requestNativeNotificationPermission();
     startNotificationsPolling();
-    const returnView = sessionStorage.getItem('taskflow_return_view') || sessionStorage.getItem('taskflow_last_view') || 'dashboard';
+    const returnView = sessionStorage.getItem('taskflow_return_view') || (nativeApp ? 'dashboard' : sessionStorage.getItem('taskflow_last_view')) || 'dashboard';
     const returnProjectId = sessionStorage.getItem('taskflow_return_project_id') || sessionStorage.getItem('taskflow_last_project_id');
     const flashMessage = sessionStorage.getItem('taskflow_flash_message');
     sessionStorage.removeItem('taskflow_return_view');
