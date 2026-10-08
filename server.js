@@ -390,7 +390,7 @@ const sessionOptions = {
   secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
-  rolling: false,
+  rolling: true,
   cookie: {
     maxAge: sessionMaxAgeMs,
     httpOnly: true,

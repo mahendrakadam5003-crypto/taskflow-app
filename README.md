@@ -141,7 +141,7 @@ $rng.GetBytes($bytes)
 [Environment]::SetEnvironmentVariable('SESSION_SECRET', [Convert]::ToBase64String($bytes), 'User')
 $rng.Dispose()
 ```
-Restart VS Code or open a new PowerShell window after setting it. Never commit the value. Sessions expire after 14 days and do not extend while in use. The cookie is `HttpOnly`; Render uses `Secure` over HTTPS, while local HTTP development keeps it disabled. The deployment uses a new cookie name, so the first release signs out existing users once.
+Restart VS Code or open a new PowerShell window after setting it. Never commit the value. Sessions expire after 14 days without activity; active sessions are extended as users continue using TaskFlow. The cookie is `HttpOnly`; Render uses `Secure` over HTTPS, while local HTTP development keeps it disabled. The deployment uses a new cookie name, so the first release signs out existing users once.
 
 The Render blueprint generates `SESSION_SECRET` for new services. For an existing service, set or rotate it in the Render environment settings before deploying; rotating it signs out all users. Render proxy trust is configured for its single forwarded proxy so secure cookies work behind HTTPS termination.
 
