@@ -129,6 +129,9 @@ test('super-admin data panels show accessible loading skeletons and honor reduce
   assert.match(script, /setDataLoading\('demo-request-loading', \['demo-request-list'\], true/);
   assert.match(script, /setDataLoading\('plan-loading', \['plan-rows'\], true/);
   assert.match(script, /setDataLoading\('billing-requests-loading', \['cross-company-billing-requests'\], true/);
+  assert.match(script, /setTimeout\(\(\) => controller\.abort\(\), 20000\)/);
+  assert.match(script, /Loading user error reports timed out/);
+  assert.match(script, /clearTimeout\(timeout\)/);
   const styles = await fs.readFile(path.join(__dirname, '..', 'public', 'css', 'superadmin.css'), 'utf8');
   assert.match(styles, /@keyframes skeleton-shimmer/);
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.skeleton-block \{ animation: none/);

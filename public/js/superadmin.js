@@ -151,12 +151,17 @@ async function loadUserErrors(status = 'open') {
   const errorTarget = document.getElementById('user-error-load-error');
   errorTarget.classList.add('hidden');
   setDataLoading('user-error-loading', ['user-error-list'], true, 'user-error-inbox');
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 20000);
   try {
-    renderUserErrors(await request(`user-errors?status=${status}`));
+    renderUserErrors(await request(`user-errors?status=${status}`, { signal: controller.signal }));
   } catch (error) {
-    errorTarget.textContent = `Could not load user error reports. Refresh and try again. ${error.message}`;
+    errorTarget.textContent = error.name === 'AbortError'
+      ? 'Loading user error reports timed out. Check the connection and refresh.'
+      : `Could not load user error reports. Refresh and try again. ${error.message}`;
     errorTarget.classList.remove('hidden');
   } finally {
+    window.clearTimeout(timeout);
     setDataLoading('user-error-loading', ['user-error-list'], false, 'user-error-inbox');
   }
 }
