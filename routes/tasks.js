@@ -1559,11 +1559,31 @@ async function getTaskForCheckin(taskId, userId, admin) {
   return task;
 }
 
+// Same rule as attendance punches: if the employee has "Biometric Required" on, a check-in or check-out
+// must carry the phone's fingerprint/screen-lock approval (from the TaskFlow app) or the account password.
+async function requireBiometricForTaskCheckin(req, res) {
+  const access = await db.prepare('SELECT user_id FROM attendance_verification_access WHERE user_id=?').get(req.session.userId);
+  if (!access) return true;
+  const userAgent = String(req.get('user-agent') || '').slice(0, 500);
+  const isTaskFlowApp = req.session?.loginClient === 'app' && /TaskFlowNative\/1(?:\s|$)/.test(userAgent);
+  if (req.body.verification_method === 'native-device-credential' && isTaskFlowApp) return true;
+  const password = req.body.verification_password;
+  if (typeof password === 'string' && password) {
+    const user = await db.prepare('SELECT password_hash FROM users WHERE id=? AND active=1').get(req.session.userId);
+    if (user?.password_hash && await bcrypt.compare(password, user.password_hash)) return true;
+    res.status(401).json({ error: 'Password verification failed.' });
+    return false;
+  }
+  res.status(403).json({ error: 'Verify with your fingerprint or phone screen lock in the TaskFlow app before checking in or out.' });
+  return false;
+}
+
 router.post('/tasks/:id/check-in', async (req, res) => {
   try {
     const task = await getTaskForCheckin(req.params.id, req.session.userId, req.session.role === 'admin');
     if (!task) return res.status(403).json({ error: 'You do not have access to this task.' });
     if (task.error) return res.status(400).json({ error: task.error });
+    if (!(await requireBiometricForTaskCheckin(req, res))) return;
     const lat = Number(req.body.lat), lng = Number(req.body.lng);
     if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
       return res.status(400).json({ error: 'A valid latitude and longitude are required to check in.' });
@@ -1598,6 +1618,7 @@ router.post('/tasks/:id/check-in', async (req, res) => {
 
 router.post('/tasks/:id/check-out', async (req, res) => {
   try {
+    if (!(await requireBiometricForTaskCheckin(req, res))) return;
     const existing = await db.prepare(`SELECT * FROM task_checkins
       WHERE task_id=? AND user_id=? AND check_in_at IS NOT NULL AND check_out_at IS NULL
       ORDER BY id DESC LIMIT 1`).get(req.params.id, req.session.userId);
