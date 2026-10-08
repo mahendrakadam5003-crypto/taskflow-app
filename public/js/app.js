@@ -4471,6 +4471,11 @@ function showAttendanceDayDetails(date, rows, options = {}) {
 }
 
 function renderHistory() {
+  if (ME?.role === 'admin') {
+    // Admins use the single attendance calendar above (choose "My attendance" in its employee filter).
+    $('#attendance-history')?.classList.add('hidden');
+    return;
+  }
   const calendar = $('#attendance-history-calendar');
   if (!calendar) return;
   if (!attendanceHistoryMonth) {
@@ -5848,71 +5853,102 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
   if (!wrap) return;
   const myDeviceAccess = await api('/attendance/device-access/me');
   const today = todayISO();
-  const employeeOptions = users.map(u => `<option value="${u.id}">${escapeHtml(u.name || u.NAME)}</option>`).join('');
+  const myId = Number(ME?.id);
+  // Put the signed-in admin first so they can check their own attendance in the same calendar.
+  const orderedUsers = [...users].sort((a, b) => Number(Number(b.id ?? b.ID) === myId) - Number(Number(a.id ?? a.ID) === myId));
+  const employeeOptions = orderedUsers.map(u => {
+    const id = Number(u.id ?? u.ID);
+    const name = escapeHtml(u.name || u.NAME);
+    return `<option value="${id}">${id === myId ? `My attendance (${name})` : name}</option>`;
+  }).join('');
   const departments = [...new Set(users.map(u => u.department || u.DEPARTMENT || '').filter(Boolean))].sort();
   const departmentOptions = departments.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
 
+  const [startYear, startMonth] = today.split('-').map(Number);
+  let monthStart = new Date(Date.UTC(startYear, startMonth - 1, 1));
+  let requestCounter = 0;
+
   wrap.innerHTML = `
+    <h2 class="section-title">Attendance calendar</h2>
     <div class="attendance-filters">
-      <label>From <input type="date" id="admin-att-from" value="${today}"></label>
-      <label>To <input type="date" id="admin-att-to" value="${today}"></label>
       <label>Employee <select id="admin-att-employee"><option value="">All employees</option>${employeeOptions}</select></label>
       <label>Department <select id="admin-att-department"><option value="">All departments</option>${departmentOptions}</select></label>
-      <button class="btn btn-primary" id="admin-att-apply">Filter</button>
-      <button class="btn btn-secondary" id="admin-att-export">Export CSV</button>
+      <button class="btn btn-secondary" id="admin-att-export" type="button">Export CSV</button>
     </div>
     <div id="admin-attendance-calendar"></div>`;
 
   const calendar = $('#admin-attendance-calendar');
-  const renderRows = async (openDate = null) => {
-    const from = $('#admin-att-from').value;
-    const to = $('#admin-att-to').value;
+  const monthRange = () => {
+    const year = monthStart.getUTCFullYear();
+    const month = monthStart.getUTCMonth();
+    return {
+      year,
+      month,
+      from: `${year}-${String(month + 1).padStart(2, '0')}-01`,
+      to: new Date(Date.UTC(year, month + 1, 0)).toISOString().slice(0, 10)
+    };
+  };
+  const filterQuery = () => {
     const userId = $('#admin-att-employee').value;
     const department = $('#admin-att-department').value;
-    if (!from || !to || from > to) {
-      calendar.innerHTML = '<p class="form-error">Choose a valid date range.</p>';
-      return;
-    }
+    return `${userId ? `&user_id=${encodeURIComponent(userId)}` : ''}${department ? `&department=${encodeURIComponent(department)}` : ''}`;
+  };
+
+  const renderRows = async (openDate = null) => {
+    const requestId = ++requestCounter;
+    const { year, month, from, to } = monthRange();
+    const userId = $('#admin-att-employee').value;
     try {
-      let rows;
-      if (from === to) {
-        rows = await api(`/attendance/overview?date=${encodeURIComponent(from)}${userId ? `&user_id=${encodeURIComponent(userId)}` : ''}${department ? `&department=${encodeURIComponent(department)}` : ''}`);
-      } else {
-        rows = await api(`/attendance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${userId ? `&user_id=${encodeURIComponent(userId)}` : ''}${department ? `&department=${encodeURIComponent(department)}` : ''}`);
-      }
-      const monthViews = [];
-      const firstDate = new Date(`${from}T00:00:00.000Z`);
-      const lastDate = new Date(`${to}T00:00:00.000Z`);
-      for (const monthDate = new Date(Date.UTC(firstDate.getUTCFullYear(), firstDate.getUTCMonth(), 1)); monthDate <= lastDate; monthDate.setUTCMonth(monthDate.getUTCMonth() + 1)) {
-        monthViews.push(attendanceMonthMarkup(rows, monthDate.getUTCFullYear(), monthDate.getUTCMonth(), { admin: true, from, to }));
-      }
-      calendar.innerHTML = monthViews.join('');
-      const allowAdminPunch = from === to && from === today && Boolean(myDeviceAccess[`allow_${currentDeviceType()}`]);
-      const openDay = date => showAttendanceDayDetails(date, allowAdminPunch && date === today
-        ? rows
-        : rows.filter(row => row.date === date), {
-        admin: true,
-        withinRange: date >= from && date <= to,
-        allowAdminPunch: allowAdminPunch && date === today,
-        onAdminPunch: async (button, selectedDate) => {
-          await api(`/attendance/admin-punch-${button.dataset.action}`, {
-            method: 'POST', body: { user_id: Number(button.dataset.userId) }
-          });
-          await renderRows(selectedDate);
+      const rawRows = await api(`/attendance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${filterQuery()}`);
+      if (requestId !== requestCounter) return;
+      const rows = Array.isArray(rawRows) ? rawRows : [];
+      calendar.innerHTML = attendanceMonthMarkup(rows, year, month, { admin: !userId, monthNavigation: true });
+      const openDay = async date => {
+        // Admins can punch people in/out from today's details when this device is allowed to punch.
+        const allowAdminPunch = date === today && Boolean(myDeviceAccess[`allow_${currentDeviceType()}`]);
+        let dayRows = rows.filter(row => row.date === date);
+        if (allowAdminPunch) {
+          try {
+            dayRows = await api(`/attendance/overview?date=${encodeURIComponent(date)}${filterQuery()}`);
+          } catch (error) {
+            showAppNotification(error.message);
+            return;
+          }
         }
-      });
+        showAttendanceDayDetails(date, dayRows, {
+          admin: true,
+          withinRange: true,
+          allowAdminPunch,
+          onAdminPunch: async (button, selectedDate) => {
+            await api(`/attendance/admin-punch-${button.dataset.action}`, {
+              method: 'POST', body: { user_id: Number(button.dataset.userId) }
+            });
+            await renderRows(selectedDate);
+          }
+        });
+      };
       calendar.querySelectorAll('[data-attendance-date]').forEach(button => {
         button.onclick = () => openDay(button.dataset.attendanceDate);
       });
-      if (openDate) openDay(openDate);
+      $('#attendance-history-prev').onclick = () => {
+        monthStart = new Date(Date.UTC(year, month - 1, 1));
+        renderRows();
+      };
+      $('#attendance-history-next')?.addEventListener('click', () => {
+        monthStart = new Date(Date.UTC(year, month + 1, 1));
+        renderRows();
+      });
+      if (openDate) await openDay(openDate);
     } catch (err) {
-      calendar.innerHTML = `<p class="form-error" role="alert">${escapeHtml(err.message)}</p>`;
+      if (requestId === requestCounter) calendar.innerHTML = `<p class="form-error" role="alert">${escapeHtml(err.message)}</p>`;
     }
   };
 
-  $('#admin-att-apply').onclick = renderRows;
+  $('#admin-att-employee').onchange = () => renderRows();
+  $('#admin-att-department').onchange = () => renderRows();
   $('#admin-att-export').onclick = () => {
-    const query = new URLSearchParams({ from: $('#admin-att-from').value, to: $('#admin-att-to').value });
+    const { from, to } = monthRange();
+    const query = new URLSearchParams({ from, to });
     if ($('#admin-att-employee').value) query.set('user_id', $('#admin-att-employee').value);
     if ($('#admin-att-department').value) query.set('department', $('#admin-att-department').value);
     window.open(`/api/attendance/export.csv?${query.toString()}`, '_blank');
