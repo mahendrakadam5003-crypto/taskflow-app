@@ -3053,11 +3053,22 @@ async function renderTasks({ loadMore = false } = {}) {
     $$('.row-complete').forEach(button => {
       button.onclick = async () => {
         const reopening = button.classList.contains('row-reopen');
+        const row = button.closest('tr');
+        const previousRowClass = row?.className;
+        // Show the change at once; roll it back if the server refuses it.
+        row?.classList.toggle('done', !reopening);
+        button.classList.toggle('row-reopen', !reopening);
+        button.disabled = true;
         try {
           await api(`/tasks/${button.dataset.taskId}`, { method: 'PUT', body: { status: reopening ? 'open' : 'done' } });
-          await renderTasks();
           showAppNotification(reopening ? 'Task reopened successfully.' : 'Task completed successfully.');
-        } catch (error) { showAppNotification(error.message); }
+          renderTasks();
+        } catch (error) {
+          if (row) row.className = previousRowClass;
+          button.classList.toggle('row-reopen', reopening);
+          button.disabled = false;
+          showAppNotification(error.message);
+        }
       };
     });
     $$('.task-row').forEach(row => {
