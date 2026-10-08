@@ -494,6 +494,24 @@ test('super-admin Activity exposes safe error diagnostics and resolves reports',
     assert.ok(resolvedReport.resolvedAt);
     const openReports = await fetch(`${baseUrl}/user-errors`, { headers });
     assert.equal((await openReports.json()).pendingCount, 0);
+
+    for (let index = 0; index < 51; index += 1) {
+      await controlDb.execute({
+        sql: `INSERT INTO user_error_reports (request_id, event, method, route, status_code)
+          VALUES (?, ?, ?, ?, ?)`,
+        args: [`req-page-${index}`, 'test_error', 'GET', '/test', 500]
+      });
+    }
+    const firstPageResponse = await fetch(`${baseUrl}/user-errors?offset=0&limit=50`, { headers });
+    const firstPage = await firstPageResponse.json();
+    assert.equal(firstPageResponse.status, 200);
+    assert.equal(firstPage.errors.length, 50);
+    assert.equal(firstPage.hasMore, true);
+    const secondPageResponse = await fetch(`${baseUrl}/user-errors?offset=50&limit=50`, { headers });
+    const secondPage = await secondPageResponse.json();
+    assert.equal(secondPageResponse.status, 200);
+    assert.equal(secondPage.errors.length, 1);
+    assert.equal(secondPage.hasMore, false);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await controlDb.close();

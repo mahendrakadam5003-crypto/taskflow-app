@@ -583,16 +583,19 @@ function createSuperAdminRouter({
     if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
     const controlDb = await getDatabase();
     const status = req.query.status === 'all' ? 'all' : 'open';
-    const requestedLimit = Number(req.query.limit);
-    const limit = Number.isSafeInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 100) : 50;
+    const limit = 50;
+    const requestedOffset = Number(req.query.offset || 0);
+    if (!Number.isSafeInteger(requestedOffset) || requestedOffset < 0 || requestedOffset > 1_000_000) {
+      return res.status(400).json({ error: 'Choose a valid error report page.' });
+    }
     const errorQuery = status === 'all'
       ? {
         sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
           e.event, e.method, e.route, e.status_code, e.diagnostics, e.created_at, e.resolved_at,
           c.name AS company_name, c.code AS registered_company_code
           FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
-          ORDER BY e.created_at DESC, e.id DESC LIMIT ?`,
-        args: [limit]
+          ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
+        args: [limit + 1, requestedOffset]
       }
       : {
         sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
@@ -600,17 +603,19 @@ function createSuperAdminRouter({
           c.name AS company_name, c.code AS registered_company_code
           FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
           WHERE e.resolved_at IS NULL
-          ORDER BY e.created_at DESC, e.id DESC LIMIT ?`,
-        args: [limit]
+          ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
+        args: [limit + 1, requestedOffset]
       };
     const [errorsResult, pendingResult] = await Promise.all([
       controlDb.execute(errorQuery),
       controlDb.execute('SELECT COUNT(*) AS count FROM user_error_reports WHERE resolved_at IS NULL')
     ]);
     res.set('Cache-Control', 'no-store');
+    const errorRows = errorsResult.rows || [];
     return res.json({
       pendingCount: Number(pendingResult.rows?.[0]?.count || 0),
-      errors: (errorsResult.rows || []).map(row => ({
+      hasMore: errorRows.length > limit,
+      errors: errorRows.slice(0, limit).map(row => ({
         id: Number(row.id),
         companyId: row.company_id == null ? null : Number(row.company_id),
         companyCode: row.registered_company_code || row.company_code || null,

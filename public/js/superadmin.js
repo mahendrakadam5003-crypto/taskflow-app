@@ -21,6 +21,10 @@ let invoicePage = 1;
 let invoicePageCount = 1;
 let invoiceStatusFilter = 'all';
 let pricingLoadPromise = null;
+const userErrorPageSize = 50;
+let userErrorOffset = 0;
+let userErrorHasMore = false;
+let userErrorStatus = 'open';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -145,16 +149,30 @@ function renderUserErrors(result) {
       </article>`;
     }).join('')
     : '<p class="user-error-empty">No open user errors.</p>';
+  userErrorHasMore = Boolean(result.hasMore);
+  const pagination = document.getElementById('user-error-pagination');
+  const previous = document.getElementById('user-error-prev');
+  const next = document.getElementById('user-error-next');
+  const pageLabel = document.getElementById('user-error-page-label');
+  pagination.classList.toggle('hidden', !result.errors.length && userErrorOffset === 0 && !userErrorHasMore);
+  previous.disabled = userErrorOffset === 0;
+  next.disabled = !userErrorHasMore;
+  const first = result.errors.length ? userErrorOffset + 1 : 0;
+  const last = userErrorOffset + result.errors.length;
+  pageLabel.textContent = `Reports ${first}-${last}`;
 }
 
-async function loadUserErrors(status = 'open') {
+async function loadUserErrors(status = userErrorStatus, offset = userErrorOffset) {
+  userErrorStatus = status;
+  userErrorOffset = Math.max(0, offset);
   const errorTarget = document.getElementById('user-error-load-error');
   errorTarget.classList.add('hidden');
   setDataLoading('user-error-loading', ['user-error-list'], true, 'user-error-inbox');
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 20000);
   try {
-    renderUserErrors(await request(`user-errors?status=${status}`, { signal: controller.signal }));
+    const params = new URLSearchParams({ status, offset: String(userErrorOffset), limit: String(userErrorPageSize) });
+    renderUserErrors(await request(`user-errors?${params.toString()}`, { signal: controller.signal }));
   } catch (error) {
     errorTarget.textContent = error.name === 'AbortError'
       ? 'Loading user error reports timed out. Check the connection and refresh.'
@@ -1129,6 +1147,10 @@ document.getElementById('company-table-wrap').addEventListener('click', event =>
   getFilteredCompanies();
 });
 document.getElementById('user-error-refresh').addEventListener('click', () => loadUserErrors());
+document.getElementById('user-error-prev').addEventListener('click', () => loadUserErrors(userErrorStatus, Math.max(0, userErrorOffset - userErrorPageSize)));
+document.getElementById('user-error-next').addEventListener('click', () => {
+  if (userErrorHasMore) loadUserErrors(userErrorStatus, userErrorOffset + userErrorPageSize);
+});
 document.getElementById('user-error-list').addEventListener('click', async event => {
   const button = event.target.closest('[data-error-resolve]');
   if (!button) return;
