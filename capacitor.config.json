@@ -2,7 +2,8 @@
   "appId": "com.taskflow.app",
   "appName": "TaskFlow",
   "server": {
-    "url": "https://taskflow-app-zjlw.onrender.com/app"
+    "url": "https://taskflow-app-zjlw.onrender.com/app",
+    "errorPath": "offline.html"
   },
   "android": {
     "appendUserAgent": "TaskFlowNative/1"
