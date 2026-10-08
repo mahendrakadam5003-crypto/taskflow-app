@@ -261,6 +261,25 @@ function describeRequestError(error) {
   return { kind: 'error', title: 'Could not load', message: error?.message || 'Something went wrong.' };
 }
 
+// Skeleton placeholders: same shape as the real content, so the screen doesn't jump when data arrives.
+function uiSkeletonCalendar() {
+  const cells = Array.from({ length: 35 }, () => '<span class="ui-skel ui-skel-cell" aria-hidden="true"></span>').join('');
+  return `<div class="ui-skeleton" role="status" aria-label="Loading calendar">
+    <div class="ui-skel-row ui-skel-heading"><span class="ui-skel ui-skel-arrow"></span><span class="ui-skel ui-skel-title"></span><span class="ui-skel ui-skel-arrow"></span></div>
+    <div class="ui-skel-row ui-skel-summary"><span class="ui-skel"></span><span class="ui-skel"></span><span class="ui-skel"></span></div>
+    <div class="ui-skel-grid">${cells}</div>
+  </div>`;
+}
+
+function uiSkeletonRows(count = 5) {
+  const rows = Array.from({ length: count }, () => `<div class="ui-skel-line">
+    <span class="ui-skel ui-skel-avatar"></span>
+    <span class="ui-skel ui-skel-text"></span>
+    <span class="ui-skel ui-skel-chip"></span>
+  </div>`).join('');
+  return `<div class="ui-skeleton" role="status" aria-label="Loading">${rows}</div>`;
+}
+
 function uiLoadingState(label = 'Loading...') {
   return `<div class="ui-state ui-state-loading" role="status" aria-live="polite"><span class="ui-spinner" aria-hidden="true"></span><span>${escapeHtml(label)}</span><small class="ui-state-slow hidden">Still loading. Your connection may be slow.</small></div>`;
 }
@@ -1690,6 +1709,8 @@ function showStorageDetails(storage) {
 }
 
 async function renderDashboard() {
+  const projectsPlaceholder = $('#dashboard-projects');
+  if (projectsPlaceholder && !projectsPlaceholder.children.length) projectsPlaceholder.innerHTML = uiSkeletonRows(3);
   const requestId = ++dashboardSummaryRequestId;
   updateDashboardGreeting();
   const adminCard = $('#dashboard-admin-card');
@@ -2183,7 +2204,7 @@ window.TaskFlowApp?.addListener('backButton', async () => {
 async function renderNotifications() {
   const list = $('#notifications-list');
   if (!list) return;
-  list.innerHTML = '<p class="hint" role="status">Loading recent activity...</p>';
+  list.innerHTML = uiSkeletonRows(3);
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60000);
@@ -2238,6 +2259,7 @@ async function renderNotifications() {
 async function renderReimbursements() {
   const wrap = $('#reimbursements-content');
   if (!wrap) return;
+  if (!wrap.children.length) wrap.innerHTML = uiSkeletonRows(4);
   const isAdmin = ME && ME.role === 'admin';
   const access = await api('/auth/reimbursement-access/me');
   const canReview = isAdmin || Number(access.approval_level) > 0;
@@ -2246,9 +2268,9 @@ async function renderReimbursements() {
   const categoryOptions = ['Travel', 'Fuel', 'Meals', 'Lodging', 'Supplies', 'Other'].map(category => `<option>${category}</option>`).join('');
   const reimbursementSummary = `
     <div class="reimbursement-summary">
-      <div class="reimbursement-summary-card"><span>Total claims</span><b id="reimbursement-total-amount">Loading...</b><small id="reimbursement-total-count">Loading claims...</small></div>
-      <div class="reimbursement-summary-card"><span>Pending</span><b class="pending" id="reimbursement-pending-amount">Loading...</b></div>
-      <div class="reimbursement-summary-card"><span>Approved</span><b class="approved" id="reimbursement-approved-amount">Loading...</b></div>
+      <div class="reimbursement-summary-card"><span>Total claims</span><b id="reimbursement-total-amount"><span class="ui-skel ui-skel-inline"></span></b><small id="reimbursement-total-count"><span class="ui-skel ui-skel-inline ui-skel-inline-sm"></span></small></div>
+      <div class="reimbursement-summary-card"><span>Pending</span><b class="pending" id="reimbursement-pending-amount"><span class="ui-skel ui-skel-inline"></span></b></div>
+      <div class="reimbursement-summary-card"><span>Approved</span><b class="approved" id="reimbursement-approved-amount"><span class="ui-skel ui-skel-inline"></span></b></div>
     </div>`;
   const employeeOverview = isAdmin ? `<div class="admin-block">${reimbursementSummary}</div>` : `
     <div class="admin-block">
@@ -2985,7 +3007,7 @@ async function renderTasks({ loadMore = false } = {}) {
   const pageSize = 50;
   if (!appendPage) {
     taskListPagination = { key: paginationKey, afterId: 0, hasMore: false, tasks: [] };
-    list.innerHTML = '<tr><td colspan="4"><div class="task-list-skeleton" role="status" aria-label="Loading tasks"><span></span><span></span><span></span></div></td></tr>';
+    list.innerHTML = `<tr><td colspan="4">${uiSkeletonRows(5)}</td></tr>`;
   } else {
     list.querySelector('#task-list-more')?.remove();
     list.querySelector('#task-list-retry')?.closest('tr')?.remove();
@@ -3458,13 +3480,13 @@ async function openTaskDrawer(taskId) {
         renderActivity();
       };
     });
-    activityContainer.innerHTML = '<div class="hint">Loading activity...</div>';
+    activityContainer.innerHTML = uiSkeletonRows(3);
     activityPagePromise.then(page => {
       if (activeTaskDrawerController !== controller) return;
       if (page.error) {
         activityContainer.innerHTML = `<div class="form-error">Unable to load activity: ${escapeHtml(page.error.message)}</div><button type="button" id="task-activity-retry" class="link-btn">Retry</button>`;
         $('#task-activity-retry').onclick = () => {
-          activityContainer.innerHTML = '<div class="hint">Loading activity...</div>';
+          activityContainer.innerHTML = uiSkeletonRows(3);
           api(`/tasks/${taskId}/activity?limit=15&offset=0`, { signal: controller.signal }).then(nextPage => {
             if (activeTaskDrawerController !== controller) return;
             activityItems.push(...nextPage.items);
@@ -4521,7 +4543,7 @@ function renderHistory() {
     attendanceHistoryMonth = new Date(Date.UTC(year, month - 1, 1));
   }
   const requestId = ++attendanceHistoryRequestId;
-  if (!calendar.children.length) calendar.innerHTML = uiLoadingState('Loading your attendance...');
+  if (!calendar.children.length) calendar.innerHTML = uiSkeletonCalendar();
   const year = attendanceHistoryMonth.getUTCFullYear();
   const month = attendanceHistoryMonth.getUTCMonth();
   const from = `${year}-${String(month + 1).padStart(2, '0')}-01`;
@@ -4565,6 +4587,8 @@ async function renderTracking() {
   const detail = $('#tracking-detail');
   const dateInput = $('#tracking-date-filter');
   if (!peoplePanel || !detail) return;
+  if (!peoplePanel.children.length) peoplePanel.innerHTML = uiSkeletonRows(6);
+  if (!detail.children.length) detail.innerHTML = uiSkeletonRows(3);
   const selectedDate = dateInput?.value || todayISO();
   if (dateInput) dateInput.value = selectedDate;
   if (dateInput) dateInput.onchange = () => {
@@ -4809,7 +4833,7 @@ function renderAttendanceDeviceAccess(devices) {
 async function renderAdmin() {
   const wrap = $('#admin-content');
   if (!wrap) return;
-  wrap.innerHTML = '<div class="hint" id="admin-loading-status" role="status">Loading administrator settings...</div>';
+  wrap.innerHTML = `<div class="hint" id="admin-loading-status" role="status">Loading administrator settings...</div>${uiSkeletonRows(4)}`;
   try {
     const adminPaths = ['/auth/users', '/auth/settings', '/auth/departments', '/auth/reimbursement-access', '/attendance/tracking-access', '/attendance/verification-access', '/payment-history/access', '/attendance/device-access', '/attendance/device-access/me', '/project-action-access', '/task-checkin-access', '/task-work-mode-access'];
     const pendingPaths = new Set(adminPaths);
@@ -5740,7 +5764,7 @@ async function renderAdmin() {
     });
 
     const activityList = $('#activity-log-list');
-    activityList.innerHTML = '<p class="hint" role="status">Loading recent activity...</p>';
+    activityList.innerHTML = uiSkeletonRows(3);
     const loadActivity = async () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 60000);
@@ -5769,7 +5793,7 @@ async function renderAdmin() {
       if (!activityList.isConnected) return;
       activityList.innerHTML = `<p class="form-error">Recent activity unavailable: ${escapeHtml(error.message)}</p><button class="btn btn-secondary" id="activity-retry" type="button">Retry</button>`;
       $('#activity-retry').onclick = () => {
-        activityList.innerHTML = '<p class="hint" role="status">Loading recent activity...</p>';
+        activityList.innerHTML = uiSkeletonRows(3);
         loadActivity().then(entries => {
           if (!activityList.isConnected) return;
           activityList.innerHTML = entries.length ? entries.map(entry => `
@@ -6038,7 +6062,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
     const requestId = ++requestCounter;
     const { year, month, from, to } = activeRange();
     const userId = $('#admin-att-employee').value;
-    calendar.innerHTML = uiLoadingState('Loading attendance...');
+    calendar.innerHTML = uiSkeletonCalendar();
     const stopSlowHint = startSlowLoadingHint(calendar);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
