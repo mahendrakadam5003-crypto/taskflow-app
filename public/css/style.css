@@ -726,3 +726,16 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .task-row.search-result .task-title-cell { font-size:15px !important; }
 .task-result-project { color:var(--muted); font-size:12px; margin-top:4px; }
 @media (max-width: 850px) { .task-filter-grid { grid-template-columns:repeat(2, minmax(140px, 1fr)); } }
+
+/* ---------- shared UI states ---------- */
+.ui-state { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding: 24px 16px; color: var(--muted); font-size: 14px; }
+.ui-state b { color: var(--ink); font-size: 15px; }
+.ui-state p { margin: 0; max-width: 360px; }
+.ui-state-loading { flex-direction: row; justify-content: center; flex-wrap: wrap; }
+.ui-state-loading small { flex-basis: 100%; font-size: 12px; }
+.ui-spinner { width: 16px; height: 16px; border: 2px solid var(--line-strong); border-top-color: var(--brand); border-radius: 50%; animation: ui-spin .8s linear infinite; }
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+.ui-state-error, .ui-state-timeout, .ui-state-server, .ui-state-offline, .ui-state-session, .ui-state-permission { color: var(--ink); }
+.ui-state-error b, .ui-state-timeout b, .ui-state-server b { color: var(--red); }
+.ui-state-offline b, .ui-state-session b, .ui-state-permission b { color: var(--ink); }
+@media (prefers-reduced-motion: reduce) { .ui-spinner { animation: none; } }
