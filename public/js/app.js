@@ -5848,6 +5848,59 @@ async function renderAdmin() {
   }
 }
 
+function attendanceSummaryMonthMarkup(summary, year, month, options = {}) {
+  const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+  const today = options.today;
+  const days = Array.isArray(summary?.days) ? summary.days : [];
+  const byDate = new Map(days.map(day => [day.date, day]));
+  const activeStaff = Number(summary?.active_staff) || 0;
+  const presentTotal = days.reduce((sum, day) => sum + Number(day.present), 0);
+  const punchIns = days.reduce((sum, day) => sum + Number(day.punch_ins), 0);
+  const punchOuts = days.reduce((sum, day) => sum + Number(day.punch_outs), 0);
+  const presentDays = days.filter(day => Number(day.present) > 0).length;
+  const monthTitle = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    .format(new Date(Date.UTC(year, month, 1)));
+  const firstWeekday = (new Date(Date.UTC(year, month, 1)).getUTCDay() + 6) % 7;
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const weekdayHeaders = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    .map(day => `<span class="attendance-calendar-weekday">${day}</span>`).join('');
+  const emptyDays = Array.from({ length: firstWeekday }, () => '<span class="attendance-calendar-empty" aria-hidden="true"></span>').join('');
+  const dayCells = Array.from({ length: daysInMonth }, (_, index) => {
+    const date = `${monthKey}-${String(index + 1).padStart(2, '0')}`;
+    const present = Number(byDate.get(date)?.present || 0);
+    const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+    const isWorkday = weekday !== 0 && weekday !== 6;
+    const outsideRange = (options.from && date < options.from) || (options.to && date > options.to);
+    let state = '';
+    if (date > today) state = '';                                   // future: nothing yet
+    else if (present > 0 && present >= activeStaff) state = 'has-attendance';
+    else if (date === today) state = present > 0 ? 'has-attendance' : '';  // today is still in progress
+    else if (isWorkday) state = 'is-absent';                        // past working day, someone missing
+    else state = present > 0 ? 'has-attendance' : '';               // weekend with punches
+    const label = state === 'is-absent' ? ', absent' : (present ? `, ${present} present` : '');
+    return `<button type="button" class="attendance-calendar-day ${state} ${date === today ? 'is-today' : ''} ${outsideRange ? 'outside-range' : ''}"
+        data-attendance-date="${date}" aria-label="${date}${label}">
+        <span class="attendance-calendar-day-number">${index + 1}</span>
+        ${options.admin && present ? `<span class="attendance-calendar-day-count">${present}</span>` : ''}
+      </button>`;
+  }).join('');
+  const controls = options.monthNavigation ? `
+    <button type="button" class="attendance-calendar-nav" id="attendance-history-prev" aria-label="Previous month">‹</button>
+    <h3>${monthTitle}</h3>
+    <button type="button" class="attendance-calendar-nav" id="attendance-history-next" aria-label="Next month" ${monthKey >= today.slice(0, 7) ? 'disabled' : ''}>›</button>`
+    : `<h3>${monthTitle}</h3>`;
+  return `<section class="attendance-calendar-month">
+    <div class="attendance-calendar-heading">${controls}</div>
+    <div class="attendance-calendar-summary">
+      <div><b>${options.admin ? presentTotal : presentDays}</b><small>${options.admin ? 'Employee-days present' : 'Present days'}</small></div>
+      <div><b>${punchIns}</b><small>Punch-ins</small></div>
+      <div><b>${punchOuts}</b><small>Punch-outs</small></div>
+    </div>
+    <div class="attendance-calendar-weekdays">${weekdayHeaders}</div>
+    <div class="attendance-calendar-grid">${emptyDays}${dayCells}</div>
+  </section>`;
+}
+
 async function renderAdminAttendance(users, targetId = 'admin-attendance-content') {
   const wrap = $(`#${targetId}`);
   if (!wrap) return;
@@ -5947,24 +6000,22 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
     try {
-      const rawRows = await api(`/attendance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${filterQuery()}`, { signal: controller.signal });
+      // One small row per day from the server, not every punch row for the month.
+      const summary = await api(`/attendance/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${filterQuery()}`, { signal: controller.signal });
       clearTimeout(timeout);
       if (requestId !== requestCounter) return;
-      const rows = Array.isArray(rawRows) ? rawRows : [];
-      calendar.innerHTML = attendanceMonthMarkup(rows, year, month, { admin: !userId, monthNavigation: true, from, to });
+      calendar.innerHTML = attendanceSummaryMonthMarkup(summary, year, month, { admin: !userId, monthNavigation: true, from, to, today });
       const openDay = async date => {
-        // Admins can punch people in/out from today's details when this device is allowed to punch.
+        // Details load for the one day clicked.
         const allowAdminPunch = date === today && Boolean(myDeviceAccess[`allow_${currentDeviceType()}`]);
-        let dayRows = rows.filter(row => row.date === date);
-        if (allowAdminPunch) {
-          try {
-            dayRows = await api(`/attendance/overview?date=${encodeURIComponent(date)}${filterQuery()}`);
-          } catch (error) {
-            showAppNotification(error.message);
-            return;
-          }
+        let dayRows;
+        try {
+          dayRows = await api(`${allowAdminPunch ? '/attendance/overview' : '/attendance'}?date=${encodeURIComponent(date)}${filterQuery()}`);
+        } catch (error) {
+          showAppNotification(error.message);
+          return;
         }
-        showAttendanceDayDetails(date, dayRows, {
+        showAttendanceDayDetails(date, Array.isArray(dayRows) ? dayRows : [], {
           admin: true,
           withinRange: date >= from && date <= to,
           allowAdminPunch,
