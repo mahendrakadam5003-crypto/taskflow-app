@@ -786,6 +786,8 @@ router.get('/', requireAdmin, async (req, res) => {
   };
 
   try {
+    // Round trip to the database with no real work: separates connection delay from query cost.
+    await timed('ping', () => db.prepare('SELECT 1 AS ok').get());
     const rows = await timed('rows', () => db.prepare(`SELECT a.*, u.name AS user_name, u.department, rd.device_name AS registered_device_name, rd.device_info AS registered_device_info
       FROM attendance a JOIN users u ON u.id = a.user_id
       LEFT JOIN attendance_registered_devices rd ON rd.user_id=u.id WHERE 1=1${where}
