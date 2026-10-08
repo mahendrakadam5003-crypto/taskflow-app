@@ -100,8 +100,10 @@ test('super-admin sections use accessible hash-addressable tabs and keep request
   assert.match(script, /event\.key === 'ArrowRight'/);
   assert.match(script, /window\.addEventListener\('hashchange'/);
   assert.match(script, /if \(page === 'activity'\) await loadUserErrors\(\)/);
-  const overviewLoader = script.slice(script.indexOf('async function loadOverview()'), script.indexOf("document.querySelectorAll('[data-admin-page]')"));
-  assert.doesNotMatch(overviewLoader, /loadUserErrors\(\)/);
+  const overviewStart = script.indexOf('async function loadOverview()');
+  const overviewEnd = script.indexOf("document.getElementById('user-error-refresh')", overviewStart);
+  const overviewLoader = script.slice(overviewStart, overviewEnd);
+  assert.match(overviewLoader, /if \(initialPage === 'activity'\) loadUserErrors\(\)/);
 });
 
 test('super-admin billing tab exposes cross-company invoices and pending billing actions', async () => {

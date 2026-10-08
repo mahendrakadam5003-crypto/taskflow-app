@@ -1090,6 +1090,7 @@ async function loadOverview() {
     showControlPage(initialPage);
     if (initialPage === 'plans') activateControlPage('plans', { updateHash: false });
     if (initialPage === 'billing') activateControlPage('billing', { updateHash: false });
+    if (initialPage === 'activity') loadUserErrors();
     loadDemoRequests();
   } catch (error) {
     if (error.status === 401) return showLogin();
