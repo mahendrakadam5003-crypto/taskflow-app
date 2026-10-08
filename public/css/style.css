@@ -776,3 +776,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   .attendance-device-access-row > .save-device-access,
   .attendance-device-access-row > .reset-attendance-device { width: 100%; min-height: 36px; white-space: nowrap; }
 }
+
+/* ---------- project feature settings ---------- */
+.feature-toggle { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-size: 14px; }
+.feature-toggle input { width: 16px; height: 16px; }
