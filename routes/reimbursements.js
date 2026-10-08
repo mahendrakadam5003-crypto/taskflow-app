@@ -117,12 +117,22 @@ async function cleanupUploadedReceipts(uploaded, reimbursementId = null, req = n
 
 function handleReceiptUpload(req, res, next) {
   req.receiptUploadBytes = 0;
+  // Multer finishes from stream events, which drop the per-company database context.
+  // Re-enter it so every later db call in the route can find the tenant.
+  const tenantId = req.companyTenantId ?? req.session?.companyId;
   upload.array('receipt', 10)(req, res, error => {
-    if (!error) return verifyReceiptFiles(req, res, next);
-    if (error.code === 'LIMIT_RECEIPT_TOTAL_SIZE') return res.status(413).json({ error: error.message });
-    if (error.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Receipt files cannot exceed 10 MB each.' });
-    if (error.status === 415) return res.status(415).json({ error: error.message });
-    return res.status(400).json({ error: 'Unable to receive receipt files. Check the files and try again.' });
+    if (tenantId == null) return next(new Error('The company tenant context is missing.'));
+    try {
+      return db.runWithTenant(tenantId, () => {
+        if (!error) return verifyReceiptFiles(req, res, next);
+        if (error.code === 'LIMIT_RECEIPT_TOTAL_SIZE') return res.status(413).json({ error: error.message });
+        if (error.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Receipt files cannot exceed 10 MB each.' });
+        if (error.status === 415) return res.status(415).json({ error: error.message });
+        return res.status(400).json({ error: 'Unable to receive receipt files. Check the files and try again.' });
+      });
+    } catch (contextError) {
+      return next(contextError);
+    }
   });
 }
 
