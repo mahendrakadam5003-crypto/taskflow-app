@@ -256,6 +256,20 @@ let reimbursementApprovalLevels = 2;
 function reimbursementStepLabels() {
   return ['Submitted', ...Array.from({ length: reimbursementApprovalLevels }, (_, index) => `Level ${index + 1}`), 'Paid'];
 }
+// Rebuilds the approver dropdowns in place after the level count changes, without reloading the app.
+function refreshReimbursementApproverRows() {
+  document.querySelectorAll('.reimbursement-access-row').forEach(row => {
+    const select = row.querySelector('.reimbursement-access-level');
+    if (!select) return;
+    const current = Math.min(Number(select.value), reimbursementApprovalLevels);
+    select.innerHTML = Array.from({ length: reimbursementApprovalLevels + 1 }, (_, level) => {
+      const label = level === 0 ? 'No access' : (level === reimbursementApprovalLevels ? 'Final approver + payer' : `Level ${level} approver`);
+      return `<option value="${level}" ${current === level ? 'selected' : ''}>${label}</option>`;
+    }).join('');
+  });
+  const levelSelect = $('#reimbursement-levels-select');
+  if (levelSelect) levelSelect.value = String(reimbursementApprovalLevels);
+}
 function reimbursementStatusFilterOptions() {
   return Array.from({ length: Math.max(reimbursementApprovalLevels - 1, 0) }, (_, index) =>
     `<option value="approved_level_${index + 1}">Level ${index + 1} approved</option>`).join('');
@@ -5742,8 +5756,12 @@ async function renderAdmin() {
       const button = event.currentTarget;
       button.disabled = true;
       try {
-        await api('/auth/settings', { method: 'PUT', body: { reimbursement_approval_levels: Number($('#reimbursement-levels-select').value) } });
-        reloadWithActionMessage('admin', 'Approval levels saved. Claims already in progress keep their current approvals.');
+        const savedLevels = Number($('#reimbursement-levels-select').value);
+        await api('/auth/settings', { method: 'PUT', body: { reimbursement_approval_levels: savedLevels } });
+        reimbursementApprovalLevels = savedLevels;
+        refreshReimbursementApproverRows();
+        showAppNotification('Approval levels saved. Claims already in progress keep their current approvals.');
+        button.disabled = false;
       } catch (error) {
         showAppNotification(error.message);
         button.disabled = false;
