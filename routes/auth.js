@@ -536,9 +536,10 @@ router.get('/activity', requireAuth, async (req, res) => {
     const beforeParams = before ? [before] : [];
     const visibilityFilter = isAdmin ? ' WHERE a.created_at >= ?' : ' WHERE a.created_at >= ? AND (a.actor_id = ? OR a.subject_user_id = ? OR n.user_id = ?)';
     const visibilityParams = isAdmin ? [cutoff] : [cutoff, req.session.userId, req.session.userId, req.session.userId];
-    const activityRowsPromise = timed('activity', () => db.prepare(`SELECT a.*, u.name AS actor_name
+    const activityRowsPromise = timed('activity', () => db.prepare(`SELECT a.*, u.name AS actor_name, t.title AS task_title, t.project_id AS task_project_id
       FROM activity_log a
       LEFT JOIN users u ON u.id = a.actor_id
+      LEFT JOIN tasks t ON a.entity_type = 'task' AND t.id = a.entity_id
       LEFT JOIN activity_notification_recipients n ON n.activity_id = a.id AND n.user_id = ?
       ${visibilityFilter}${before ? ' AND a.created_at <= ?' : ''}
       ORDER BY a.created_at DESC, a.id DESC LIMIT ?`).all(req.session.userId, ...visibilityParams, ...beforeParams, pageSize))
@@ -553,7 +554,7 @@ router.get('/activity', requireAuth, async (req, res) => {
     const [activityRows, taskHistoryRows] = await Promise.all([
       activityRowsPromise,
       timed('task_history', () => db.prepare(`SELECT h.id, h.actor_id, u.name AS actor_name, h.field_name,
-          h.old_value, h.new_value, h.created_at, t.title AS task_title
+          h.old_value, h.new_value, h.created_at, t.title AS task_title, h.task_id, t.project_id AS task_project_id
         FROM task_history h
         JOIN tasks t ON t.id = h.task_id
         LEFT JOIN users u ON u.id = h.actor_id
@@ -562,6 +563,10 @@ router.get('/activity', requireAuth, async (req, res) => {
     ]);
     const taskActivity = (taskHistoryRows || []).map(row => ({
       source: 'task',
+      entity_type: 'task',
+      entity_id: row.task_id,
+      task_title: row.task_title,
+      task_project_id: row.task_project_id,
       id: row.id,
       actor_id: row.actor_id,
       actor_name: row.actor_name,
