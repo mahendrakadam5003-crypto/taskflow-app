@@ -886,6 +886,12 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
         FROM attendance WHERE punch_in IS NOT NULL`);
       await markSchemaVersion(12);
     }
+    if (schemaVersion < 13) {
+      await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS attendance_date_idx ON attendance(date)');
+      await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS attendance_user_date_idx ON attendance(user_id, date)');
+      await dbDriverInterface.exec('CREATE INDEX IF NOT EXISTS attendance_punch_sessions_attendance_idx ON attendance_punch_sessions(attendance_id)');
+      await markSchemaVersion(13);
+    }
     console.log('Database schema and default settings are ready.');
   } catch (err) {
     console.error(JSON.stringify({ event: 'tenant_database_initialization_failed', company_id: companyId ?? null }));
