@@ -1516,6 +1516,10 @@ router.get('/tasks/:id/activity', async (req, res) => {
           : !!localPath && fs.existsSync(localPath)
       };
     });
+    const missingAttachments = items.filter(item => item.activity_type === 'comment' && item.image_path && !item.attachment_available).map(item => item.id);
+    if (missingAttachments.length) {
+      console.warn(JSON.stringify({ event: 'comment_attachment_unavailable', task_id: Number(req.params.id), comment_ids: missingAttachments.slice(0, 20) }));
+    }
     res.json({ items, has_more: hasMore, next_offset: offset + items.length });
   } catch (err) { sendInternalError(res, err, 'Task activity request failed'); }
 });
