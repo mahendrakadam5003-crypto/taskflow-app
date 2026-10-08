@@ -764,3 +764,13 @@ html.is-native textarea::placeholder { color: #7B8494; }
 .activity-group-entry.comment .comment-meta b { color: var(--ink); font-weight: 600; }
 .activity-group-entry.comment .comment-body { font-size: 13.5px; line-height: 1.45; color: var(--ink); }
 .activity-group-entry.comment .comment-image { max-height: 180px; margin-top: 6px; }
+
+/* ---------- Comments vs activity: comments are speech bubbles with an avatar ---------- */
+.activity-group-entry.comment { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border: 0; background: transparent; }
+.activity-group-entry.comment:last-child { border: 0; }
+.comment-avatar { flex: 0 0 28px; width: 28px; height: 28px; min-width: 28px; font-size: 11px; display: grid; place-items: center; margin-top: 2px; }
+.comment-content { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.activity-group-entry.comment .comment-meta { margin-bottom: 4px; }
+.activity-group-entry.comment .comment-body { font-size: 13.5px; }
+.comment-pending .comment-content { opacity: .75; }
+.comment-pending .comment-avatar { opacity: .75; }
