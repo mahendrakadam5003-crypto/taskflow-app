@@ -14,6 +14,24 @@ const router = express.Router();
 wrapAsyncRoutes(router);
 router.use(requireAuth);
 router.use(requireFeature('attendance'));
+// Live location: about one point every 30 seconds per device, so 120 per 15 minutes leaves room for reconnect bursts.
+const locationUpdateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: req => `location:user:${req.session?.userId}`,
+  message: { error: 'Too many location updates. Please try again shortly.' }
+});
+// Queued uploads carry up to 100 points each.
+const queuedLocationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: req => `queued-location:user:${req.session?.userId}`,
+  message: { error: 'Too many location uploads. Please try again shortly.' }
+});
 const attendanceVerificationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 5,
@@ -538,7 +556,7 @@ router.post('/punch-in', attendanceVerificationLimiter, async (req, res) => {
   res.json({ ok: true, time: now, status: mapStr });
 });
 
-router.post('/location-update', async (req, res) => {
+router.post('/location-update', locationUpdateLimiter, async (req, res) => {
   if (!(await checkRegisteredDevice(req, res))) return;
   const device = getPunchDevice(req, req.body.device_model);
   if (!(await canPunchFromDevice(req.session.userId, device))) return res.status(403).json({ error: 'Live tracking from this device is not allowed.' });
@@ -558,7 +576,7 @@ router.post('/location-update', async (req, res) => {
   res.json({ ok: true, recorded_at: recordedAt });
 });
 
-router.post('/location-updates', async (req, res) => {
+router.post('/location-updates', queuedLocationLimiter, async (req, res) => {
   if (!(await checkRegisteredDevice(req, res))) return;
   const device = getPunchDevice(req, req.body.device_model);
   if (!device.isNativeApp) return res.status(403).json({ error: 'Background location uploads require the TaskFlow mobile app.' });
