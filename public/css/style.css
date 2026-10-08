@@ -761,3 +761,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 
 /* ---------- notifications paging ---------- */
 .notifications-more { display: grid; justify-items: center; gap: 8px; padding: 12px 0 4px; }
+
+/* ---------- reimbursement approvers: one line each ---------- */
+.reimbursement-access-row { display: grid; grid-template-columns: minmax(180px, 1.2fr) minmax(180px, 240px) auto; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.reimbursement-access-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) { .reimbursement-access-row { grid-template-columns: 1fr auto; } .reimbursement-access-row select { grid-column: 1 / -1; } }
