@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 
-const CURRENT_SCHEMA_VERSION = 17;
+const CURRENT_SCHEMA_VERSION = 18;
 
 const CONTROL_MIGRATIONS = [{
   version: 1,
@@ -478,6 +478,12 @@ const CONTROL_MIGRATIONS = [{
   statements: [
     'CREATE INDEX IF NOT EXISTS user_error_reports_status_id_idx ON user_error_reports(resolved_at, id DESC)',
     { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [17] }
+  ]
+}, {
+  version: 18,
+  statements: [
+    'CREATE INDEX IF NOT EXISTS user_error_reports_created_idx ON user_error_reports(created_at DESC, id DESC)',
+    { sql: 'INSERT OR IGNORE INTO control_schema_migrations (version) VALUES (?)', args: [18] }
   ]
 }];
 

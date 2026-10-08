@@ -580,22 +580,36 @@ function createSuperAdminRouter({
 
   router.get('/user-errors', handle(async (req, res) => {
     let phase = 'admin_authentication';
-    const slowRequestTimer = setTimeout(() => {
+    let controlDb;
+    let reportQueryStartedAt = null;
+    const slowRequestTimer = setTimeout(async () => {
+      let select1Ms = null;
+      if (controlDb) {
+        const select1StartedAt = Date.now();
+        try {
+          await controlDb.execute('SELECT 1');
+          select1Ms = Date.now() - select1StartedAt;
+        } catch (error) {
+          select1Ms = Date.now() - select1StartedAt;
+        }
+      }
       console.warn(JSON.stringify({
         event: 'superadmin_user_errors_slow',
         phase,
-        request_id: req.requestId || null
+        request_id: req.requestId || null,
+        select1_ms: select1Ms,
+        query_ms: reportQueryStartedAt == null ? null : Date.now() - reportQueryStartedAt
       }));
     }, 5000);
     try {
       const admin = await getAuthenticatedAdmin(req);
       if (!admin) return res.status(401).json({ error: 'Sign in to the super-admin panel.' });
       phase = 'control_database_connection';
-      const controlDb = await getDatabase();
+      controlDb = await getDatabase();
       const status = req.query.status === 'all' ? 'all' : 'open';
       const limit = 50;
       const requestedOffset = Number(req.query.offset || 0);
-      if (!Number.isSafeInteger(requestedOffset) || requestedOffset < 0 || requestedOffset > 1_000_000) {
+      if (!Number.isSafeInteger(requestedOffset) || requestedOffset < 0 || requestedOffset > 5_000) {
         return res.status(400).json({ error: 'Choose a valid error report page.' });
       }
       const errorQuery = status === 'all'
@@ -604,7 +618,7 @@ function createSuperAdminRouter({
             e.event, e.method, e.route, e.status_code, e.diagnostics, e.created_at, e.resolved_at,
             c.name AS company_name, c.code AS registered_company_code
             FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
-            ORDER BY e.id DESC LIMIT ? OFFSET ?`,
+            ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
           args: [limit + 1, requestedOffset]
         }
         : {
@@ -617,9 +631,17 @@ function createSuperAdminRouter({
           args: [limit + 1, requestedOffset]
         };
       phase = 'report_list_query';
+      reportQueryStartedAt = Date.now();
       const errorsResult = await controlDb.execute(errorQuery);
+      const queryMs = Date.now() - reportQueryStartedAt;
       res.set('Cache-Control', 'no-store');
       const errorRows = errorsResult.rows || [];
+      console.info(JSON.stringify({
+        event: 'superadmin_user_errors_query_complete',
+        request_id: req.requestId || null,
+        query_ms: queryMs,
+        rows_returned: errorRows.length
+      }));
       const hasMore = errorRows.length > limit;
       return res.json({
         pendingCount: status === 'open'

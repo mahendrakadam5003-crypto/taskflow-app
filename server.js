@@ -111,6 +111,13 @@ async function cleanupExpiredSessions() {
   await db.runForEachTenant(() => db.deleteExpiredSessions(Date.now()));
 }
 
+async function cleanupResolvedUserErrors() {
+  if (!hasControlDatabaseConfiguration()) return;
+  const controlDatabase = await getControlDatabase();
+  await controlDatabase.execute(`DELETE FROM user_error_reports
+    WHERE resolved_at IS NOT NULL AND resolved_at < datetime('now', '-90 days')`);
+}
+
 // ========================================================
 // CORE MIDDLEWARE & INTEGRATION ROUTES
 // ========================================================
@@ -385,6 +392,20 @@ app.use((req, res, next) => {
   res.setHeader('X-Request-ID', req.requestId);
   next();
 });
+app.get('/healthz', async (req, res) => {
+  try {
+    await db.runWithTenant('legacy', () => db.prepare('SELECT 1').get());
+    if (hasControlDatabaseConfiguration()) {
+      const controlDatabase = await getControlDatabase();
+      await controlDatabase.execute('SELECT 1');
+    }
+    res.set('Cache-Control', 'no-store');
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    logCompanyEvent(null, 'health_check_failed', 'warn');
+    return res.status(503).json({ ok: false });
+  }
+});
 const sessionOptions = {
   name: 'taskflow.sid.v2',
   secret: sessionSecret,
@@ -473,6 +494,11 @@ async function runDailyMaintenance() {
       await entitlementScheduler.runEntitlementMaintenance();
     } catch (error) {
       logCompanyEvent(null, 'entitlement_maintenance_failed');
+    }
+    try {
+      await cleanupResolvedUserErrors();
+    } catch (error) {
+      logCompanyEvent(null, 'resolved_user_error_cleanup_failed');
     }
     await runBackupMaintenance();
   } finally {
