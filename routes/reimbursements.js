@@ -91,7 +91,7 @@ async function uploadReceiptFiles(files, req) {
     return uploaded;
   } catch (error) {
     await cleanupUploadedReceipts(uploaded, null, req);
-    throw error;
+    throw Object.assign(new Error('Receipt storage upload failed.', { cause: error }), { code: 'RECEIPT_STORAGE_UNAVAILABLE' });
   }
 }
 
@@ -124,6 +124,20 @@ function handleReceiptUpload(req, res, next) {
     if (error.status === 415) return res.status(415).json({ error: error.message });
     return res.status(400).json({ error: 'Unable to receive receipt files. Check the files and try again.' });
   });
+}
+
+function requireReceiptStorage(req, res, next) {
+  if ((req.files || []).length && !storageProvider.isConfigured({ companyId: req.companyTenantId })) {
+    return res.status(503).json({ error: 'Receipt storage is not configured. Contact your administrator.' });
+  }
+  next();
+}
+
+function respondToReceiptStorageError(req, res, error) {
+  if (error?.code !== 'RECEIPT_STORAGE_UNAVAILABLE') return false;
+  logRequestEvent(req, 'receipt_storage_upload_failed');
+  res.status(502).json({ error: 'Receipt storage is temporarily unavailable. Try again or contact your administrator.' });
+  return true;
 }
 
 function getReceiptPaths(row) {
@@ -319,7 +333,7 @@ router.get('/export.csv', requireFeature('export'), async (req, res) => {
   }
 });
 
-router.post('/', uploadRateLimit, handleReceiptUpload, async (req, res) => {
+router.post('/', uploadRateLimit, handleReceiptUpload, requireReceiptStorage, async (req, res) => {
   try {
     const amount = parseMoneyAmount(req.body.amount, { allowZero: false });
     const category = String(req.body.category || '').trim();
@@ -420,11 +434,12 @@ router.post('/', uploadRateLimit, handleReceiptUpload, async (req, res) => {
     res.json({ ok: true, id: info.lastInsertRowid });
   } catch (error) {
     if (error instanceof StorageLimitError) return res.status(error.statusCode).json({ error: error.message });
+    if (respondToReceiptStorageError(req, res, error)) return;
     sendInternalError(res, error, 'Reimbursement creation failed');
   }
 });
 
-router.put('/:id(\\d+)', handleReceiptUpload, async (req, res) => {
+router.put('/:id(\\d+)', handleReceiptUpload, requireReceiptStorage, async (req, res) => {
   try {
     const claim = await db.prepare('SELECT * FROM reimbursements WHERE id = ?').get(req.params.id);
     if (!claim) return res.status(404).json({ error: 'Expense not found.' });
@@ -462,7 +477,7 @@ router.put('/:id(\\d+)', handleReceiptUpload, async (req, res) => {
     if (receiptBytes > 0) reservation = await reserveUpload(req, receiptBytes);
     let uploadedAttachments;
     try {
-      uploadedAttachments = await uploadReceiptFiles(req.files || []);
+      uploadedAttachments = await uploadReceiptFiles(req.files || [], req);
     } catch (error) {
       if (reservation) {
         try { await releaseUpload(reservation); }
@@ -516,6 +531,7 @@ router.put('/:id(\\d+)', handleReceiptUpload, async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     if (error instanceof StorageLimitError) return res.status(error.statusCode).json({ error: error.message });
+    if (respondToReceiptStorageError(req, res, error)) return;
     sendInternalError(res, error, 'Reimbursement update failed');
   }
 });

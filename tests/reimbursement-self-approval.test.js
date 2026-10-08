@@ -58,6 +58,7 @@ let reimbursementListQuery = '';
 let reimbursementSummaryQuery = '';
 let receiptUploadCalls = 0;
 let deletedTelegramMessages = [];
+let telegramStorageConfigured = true;
 const auditEntries = [];
 const submissionClaims = new Map();
 class TestStorageLimitError extends Error {
@@ -165,6 +166,7 @@ require.cache[storagePath] = {
   filename: storagePath,
   loaded: true,
   exports: {
+    isConfigured: () => telegramStorageConfigured,
     uploadToTelegram: async file => {
       receiptUploadCalls += 1;
       if (file.originalname === 'fail.png') throw new Error('simulated receipt upload failure');
@@ -373,6 +375,28 @@ test('receipt uploads reject unsupported MIME types and mismatched content as JS
   assert.equal(reimbursementWrites, 0);
 });
 
+test('receipt uploads explain when Telegram storage is not configured', async () => {
+  telegramStorageConfigured = false;
+  const form = new FormData();
+  form.append('amount', '25.00');
+  form.append('category', 'Travel');
+  form.append('expense_date', '2026-10-05');
+  form.append('submission_key', '550e8400-e29b-41d4-a716-446655440003');
+  const pngSignature = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/+E0AAAAASUVORK5CYII=', 'base64');
+  form.append('receipt', new Blob([pngSignature], { type: 'image/png' }), 'receipt.png');
+  try {
+    const response = await fetch(`${baseUrl}/api/reimbursements`, {
+      method: 'POST', headers: { Cookie: cookie }, body: form
+    });
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: 'Receipt storage is not configured. Contact your administrator.' });
+    assert.equal(receiptUploadCalls, 0);
+    assert.equal(reimbursementWrites, 0);
+  } finally {
+    telegramStorageConfigured = true;
+  }
+});
+
 test('receipt uploads stop when aggregate request bytes exceed the memory budget', async () => {
   const form = new FormData();
   form.append('amount', '25.00');
@@ -410,7 +434,8 @@ test('failed multi-receipt upload deletes earlier Telegram messages before creat
     body: form
   });
 
-  assert.equal(response.status, 500);
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), { error: 'Receipt storage is temporarily unavailable. Try again or contact your administrator.' });
   assert.equal(receiptUploadCalls, 2);
   assert.deepEqual(deletedTelegramMessages, [101]);
   assert.equal(reimbursementWrites, 0);
