@@ -486,30 +486,76 @@ router.delete('/push/register', requireAuth, async (req, res) => {
   }
 });
 
+const ACTIVITY_DEADLINE_MS = 20000;
+const ACTIVITY_WINDOW_DAYS = 30;
+// Same text format SQLite uses for datetime('now'), so the comparison matches stored timestamps.
+function activityCutoff() {
+  return new Date(Date.now() - ACTIVITY_WINDOW_DAYS * 86400000).toISOString().slice(0, 19).replace('T', ' ');
+}
+// Page size: 10 by default for the notifications panel, up to 100 when a caller asks for more.
+function activityPageSize(rawLimit) {
+  const requested = Number.parseInt(rawLimit, 10);
+  return Number.isInteger(requested) ? Math.min(Math.max(requested, 1), 100) : 10;
+}
+// Cursor: created_at of the last item already shown. Only well-formed timestamps are accepted.
+function activityBeforeCursor(rawBefore) {
+  const value = String(rawBefore || '').trim();
+  return /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(value) ? value.replace('T', ' ') : null;
+}
+
 router.get('/activity', requireAuth, async (req, res) => {
+  const startedAt = Date.now();
+  const timings = {};
+  let deadlineTimer;
+  const deadline = new Promise((_, reject) => {
+    deadlineTimer = setTimeout(() => {
+      const error = new Error('Activity request exceeded the server deadline');
+      error.name = 'ActivityDeadline';
+      reject(error);
+    }, ACTIVITY_DEADLINE_MS);
+  });
+  const timed = (step, work) => {
+    const stepStart = Date.now();
+    return Promise.race([work(), deadline]).finally(() => {
+      timings[step] = Date.now() - stepStart;
+    });
+  };
+
   try {
     const isAdmin = req.session.role === 'admin';
-    const visibilityFilter = isAdmin ? '' : ' WHERE a.actor_id = ? OR a.subject_user_id = ? OR n.user_id = ?';
-    const visibilityParams = isAdmin ? [] : [req.session.userId, req.session.userId, req.session.userId];
-    const activityRowsPromise = db.prepare(`SELECT a.*, u.name AS actor_name
+    const cutoff = activityCutoff();
+    const pageSize = activityPageSize(req.query.limit);
+    const before = activityBeforeCursor(req.query.before);
+    const beforeClause = before ? ' AND created_at <= ?' : '';
+    const beforeParams = before ? [before] : [];
+    const visibilityFilter = isAdmin ? ' WHERE a.created_at >= ?' : ' WHERE a.created_at >= ? AND (a.actor_id = ? OR a.subject_user_id = ? OR n.user_id = ?)';
+    const visibilityParams = isAdmin ? [cutoff] : [cutoff, req.session.userId, req.session.userId, req.session.userId];
+    const activityRowsPromise = timed('activity', () => db.prepare(`SELECT a.*, u.name AS actor_name
       FROM activity_log a
       LEFT JOIN users u ON u.id = a.actor_id
       LEFT JOIN activity_notification_recipients n ON n.activity_id = a.id AND n.user_id = ?
-      ${visibilityFilter}
-      ORDER BY a.id DESC LIMIT 100`).all(req.session.userId, ...visibilityParams);
-    if (req.session.role !== 'admin') return res.json(await activityRowsPromise || []);
+      ${visibilityFilter}${before ? ' AND a.created_at <= ?' : ''}
+      ORDER BY a.created_at DESC, a.id DESC LIMIT ?`).all(req.session.userId, ...visibilityParams, ...beforeParams, pageSize))
+      .then(rows => (rows || []).map(row => ({ ...row, source: 'activity' })));
+
+    if (!isAdmin) {
+      const rows = await activityRowsPromise;
+      console.log(JSON.stringify({ event: 'activity_list_timing', role: 'user', rows: rows.length, total_ms: Date.now() - startedAt, ...timings }));
+      return res.json(rows);
+    }
 
     const [activityRows, taskHistoryRows] = await Promise.all([
       activityRowsPromise,
-      db.prepare(`SELECT h.id, h.actor_id, u.name AS actor_name, h.field_name,
+      timed('task_history', () => db.prepare(`SELECT h.id, h.actor_id, u.name AS actor_name, h.field_name,
           h.old_value, h.new_value, h.created_at, t.title AS task_title
         FROM task_history h
         JOIN tasks t ON t.id = h.task_id
         LEFT JOIN users u ON u.id = h.actor_id
-        WHERE h.field_name NOT IN ('Task created', 'Task check-in', 'Task check-out')
-        ORDER BY h.id DESC LIMIT 100`).all()
+        WHERE h.created_at >= ? AND h.field_name NOT IN ('Task created', 'Task check-in', 'Task check-out')${before ? ' AND h.created_at <= ?' : ''}
+        ORDER BY h.created_at DESC, h.id DESC LIMIT ?`).all(cutoff, ...beforeParams, pageSize))
     ]);
     const taskActivity = (taskHistoryRows || []).map(row => ({
+      source: 'task',
       id: row.id,
       actor_id: row.actor_id,
       actor_name: row.actor_name,
@@ -517,12 +563,20 @@ router.get('/activity', requireAuth, async (req, res) => {
       details: `${row.task_title}: ${row.old_value || '—'} -> ${row.new_value || '—'}`,
       created_at: row.created_at
     }));
-    const rows = [...(activityRows || []), ...taskActivity]
+    const rows = [...activityRows, ...taskActivity]
       .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
-      .slice(0, 100);
+      .slice(0, pageSize);
+    console.log(JSON.stringify({ event: 'activity_list_timing', role: 'admin', rows: rows.length, total_ms: Date.now() - startedAt, ...timings }));
     res.json(rows || []);
   } catch (err) {
+    if (err.name === 'ActivityDeadline') {
+      console.error(JSON.stringify({ event: 'activity_deadline_exceeded', role: req.session.role, total_ms: Date.now() - startedAt, ...timings }));
+      res.locals.reportUserError?.('activity_deadline_exceeded', 504, err);
+      return res.status(504).json({ error: 'Recent activity is taking too long to load. Please try again.' });
+    }
     sendInternalError(res, err, 'Activity request failed');
+  } finally {
+    clearTimeout(deadlineTimer);
   }
 });
 
