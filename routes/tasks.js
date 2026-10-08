@@ -354,6 +354,15 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
     const reimbursementParams = reimbursementWhere ? [req.session.userId] : [];
     const reimbursement = await db.prepare(`SELECT COUNT(*) AS count, ROUND(COALESCE(SUM(amount), 0), 2) AS amount
       FROM reimbursements WHERE status IN ('submitted', 'approved_level_1')${reimbursementWhere}`).get(...reimbursementParams);
+    const checkinVisibility = req.session.role === 'admin' ? '' : `AND c.user_id = ?
+      AND (p.created_by = ? OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = ?) OR t.assignee_id = ?)`;
+    const checkinParams = [today, today];
+    if (req.session.role !== 'admin') checkinParams.push(req.session.userId, req.session.userId, req.session.userId, req.session.userId);
+    const checkinTasks = await db.prepare(`SELECT DISTINCT t.id, t.project_id, t.title
+      FROM task_checkins c JOIN tasks t ON t.id = c.task_id JOIN projects p ON p.id = t.project_id
+      WHERE (date(c.check_in_at, '+5 hours', '+30 minutes') = ? OR date(c.check_out_at, '+5 hours', '+30 minutes') = ?)
+        ${checkinVisibility}
+      ORDER BY t.title COLLATE NOCASE, t.id`).all(...checkinParams);
     const activeTask = await db.prepare(`SELECT t.id, t.project_id, t.title, t.customer_name, p.name AS project_name
       FROM task_checkins c JOIN tasks t ON t.id=c.task_id JOIN projects p ON p.id=t.project_id
       WHERE c.user_id=? AND c.check_in_at IS NOT NULL AND c.check_out_at IS NULL
@@ -376,6 +385,8 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
       overdue_tasks: taskRows.filter(task => task.due_date && task.due_date < today).length,
       pending_reimbursements: Number(reimbursement?.count || 0),
       pending_reimbursement_amount: Number(reimbursement?.amount || 0),
+      checkin_task_count: checkinTasks.length,
+      checkin_tasks: checkinTasks,
       active_task: activeTask || null,
       payment_alert_count: paymentAlerts.length,
       payment_alerts: paymentAlerts.map(row => ({ ...row, pending_amount: Math.round(Math.max(0, Number(row.total_amount || 0) - Number(row.amount_received || 0)) * 100) / 100 })),

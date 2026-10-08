@@ -14,6 +14,8 @@ process.env.TURSO_ORG = 'taskflow-org';
 process.env.TURSO_DATABASE = 'taskflow';
 let failOrganizationUsage = false;
 let plansEndpointAvailable = false;
+let dashboardCheckinTasks = [];
+let dashboardCheckinSql = '';
 
 const mockDb = {
   ready: Promise.resolve(),
@@ -26,7 +28,13 @@ const mockDb = {
         if (sql.includes('FROM payment_history_access')) return null;
         return null;
       },
-      all: async () => []
+      all: async () => {
+        if (sql.includes('FROM task_checkins c JOIN tasks t ON t.id = c.task_id JOIN projects p ON p.id = t.project_id')) {
+          dashboardCheckinSql = sql;
+          return dashboardCheckinTasks;
+        }
+        return [];
+      }
     };
   }
 };
@@ -142,4 +150,21 @@ test('dashboard company storage is independent of the configured Turso database 
   assert.equal(summary.storage.available, true);
   assert.equal(summary.storage.total_bytes, 9_000_000_000);
   assert.equal(summary.storage.source, 'company');
+});
+
+test('dashboard lists distinct tasks checked in or out today for admins', async () => {
+  dashboardCheckinTasks = [
+    { id: 12, project_id: 3, title: 'Site inspection' },
+    { id: 13, project_id: 3, title: 'Equipment setup' }
+  ];
+  const response = await fetch(`${baseUrl}/api/dashboard/summary`, { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+  const summary = await response.json();
+  assert.equal(summary.checkin_task_count, 2);
+  assert.deepEqual(summary.checkin_tasks, dashboardCheckinTasks);
+  assert.match(dashboardCheckinSql, /SELECT DISTINCT t\.id, t\.project_id, t\.title/);
+  assert.match(dashboardCheckinSql, /date\(c\.check_in_at, '\+5 hours', '\+30 minutes'\)/);
+  assert.match(dashboardCheckinSql, /date\(c\.check_out_at, '\+5 hours', '\+30 minutes'\)/);
+  assert.doesNotMatch(dashboardCheckinSql, /c\.user_id = \?/);
+  dashboardCheckinTasks = [];
 });

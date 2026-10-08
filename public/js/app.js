@@ -1614,11 +1614,18 @@ async function renderDashboard() {
 
       summaryPanel.innerHTML = `
         ${summary.active_task ? `<button type="button" class="dashboard-metric dashboard-active-task" id="dashboard-active-task-card"><small>Currently working on</small><b>${escapeHtml(summary.active_task.title)}</b><span>${escapeHtml(summary.active_task.customer_name || summary.active_task.project_name || 'Task')}</span><span class="dashboard-active-task-hint">Click to open task</span></button>` : ''}
-        <div class="dashboard-metric"><small>Open tasks</small><b>${summary.open_tasks}</b></div>
-        <div class="dashboard-metric alert ${Number(summary.overdue_tasks) > 0 ? 'has-alert' : ''}"><small>Overdue tasks</small><b>${summary.overdue_tasks}</b></div>
+        <div class="dashboard-metric dashboard-checkin-count"><small>Tasks checked in/out today</small><b>${Number(summary.checkin_task_count) || 0}</b></div>
+        <div class="dashboard-metric dashboard-checkin-list"><small>Task names</small><div class="dashboard-checkin-task-list">${summary.checkin_tasks?.length ? summary.checkin_tasks.map(task => `<button type="button" class="dashboard-checkin-task" data-task-id="${Number(task.id)}" data-project-id="${Number(task.project_id)}">${escapeHtml(task.title)}</button>`).join('') : '<span class="hint">No tasks checked in/out today</span>'}</div></div>
         <div class="dashboard-metric money"><small>Pending reimbursements</small><b>${summary.pending_reimbursements} · INR ${Number(summary.pending_reimbursement_amount).toFixed(2)}</b></div>
         ${summary.payment_alerts?.length ? `<div class="dashboard-metric alert dashboard-payment-alert"><small>Overdue invoices</small><b>${summary.payment_alerts.length}</b>${summary.payment_alerts.slice(0, 3).map(invoice => `<span>${escapeHtml(invoice.invoice_number)} · ${escapeHtml(invoice.customer_name || 'No customer')} · pending ${Number(invoice.pending_amount || 0).toFixed(2)}</span>`).join('')}</div>` : ''}
         ${storageMetric}`;
+      $$('.dashboard-checkin-task').forEach(button => button.onclick = async () => {
+        const projectId = Number(button.dataset.projectId);
+        const project = PROJECTS.find(item => Number(item.id) === projectId);
+        if (!project) return showAppNotification('This task project is no longer available.');
+        pendingSearchTaskId = Number(button.dataset.taskId);
+        await openProject(projectId);
+      });
       const activeTaskCard = $('#dashboard-active-task-card');
       if (activeTaskCard) activeTaskCard.onclick = async () => {
         const project = PROJECTS.find(item => Number(item.id) === Number(summary.active_task.project_id));
