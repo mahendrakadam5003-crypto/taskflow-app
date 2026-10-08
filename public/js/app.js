@@ -3525,11 +3525,11 @@ const renderActivity = () => {
       const activityHtml = visibleItems.map((entry, index) => {
         const timestamp = escapeHtml(activityTime(entry.created_at));
         if (entry.activity_type === 'comment') {
-          return `<div class="task-activity-group"><div class="activity-group-entry comment" data-comment-id="${entry.id}">
+          return `<div class="task-activity-group"><div class="activity-group-entry comment" data-comment-id="${entry.id}"><span class="avatar comment-avatar" aria-hidden="true">${escapeHtml(getInitials(entry.user_name || entry.author_name || ''))}</span><div class="comment-content">
             <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b> <span class="activity-inline-time">· ${timestamp}</span>${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
             <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
             ${renderCommentAttachment(entry)}
-          </div></div>`;
+          </div></div></div>`;
         }
         const isAsanaStory = String(entry.field_name || '').startsWith('Asana:');
         const actorName = entry.author_name || entry.actor_name || '';
@@ -3925,12 +3925,12 @@ const renderActivity = () => {
       if (!body && !attachment) return;
       const attachmentPreviewUrl = attachment && attachment.type.startsWith('image/') ? URL.createObjectURL(attachment) : null;
       const commentEntry = document.createElement('div');
-      commentEntry.className = 'comment comment-pending';
-      commentEntry.innerHTML = `
+      commentEntry.className = 'activity-group-entry comment comment-pending';
+      commentEntry.innerHTML = `<span class="avatar comment-avatar" aria-hidden="true">${escapeHtml(getInitials(ME?.name || 'You'))}</span><div class="comment-content">
         <div class="comment-meta"><b>${escapeHtml(ME?.name || 'You')}</b> · just now</div>
         ${escapeHtml(body).replace(/\n/g, '<br>')}
         ${attachmentPreviewUrl ? `<img class="comment-image comment-pending-attachment" src="${attachmentPreviewUrl}" alt="Uploading attachment">` : (attachment ? `<div class="hint comment-pending-attachment">${escapeHtml(attachment.name)}</div>` : '')}
-        ${attachment ? '<div class="hint comment-pending-status">Uploading attachment...</div>' : '<div class="hint comment-pending-status">Sending...</div>'}`;
+        ${attachment ? '<div class="hint comment-pending-status">Uploading attachment...</div>' : '<div class="hint comment-pending-status">Sending...</div>'}</div>`;
       $('#drawer-activity').appendChild(commentEntry);
       commentEntry.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       const previousBody = body;
@@ -3949,7 +3949,7 @@ const renderActivity = () => {
       try {
         const result = await uploadTaskComment(`/api/tasks/${taskId}/comments`, formData, percent => {
           const pendingStatus = commentEntry.querySelector('.comment-pending-status');
-          if (pendingStatus) pendingStatus.textContent = `Uploading attachment... ${percent}%`;
+          if (pendingStatus && attachment) pendingStatus.textContent = `Uploading attachment... ${percent}%`;
         });
         const pendingStatus = commentEntry.querySelector('.comment-pending-status');
         if (pendingStatus) pendingStatus.remove();
@@ -4935,10 +4935,9 @@ function renderAttendanceDeviceAccess(devices) {
 async function renderAdmin() {
   const wrap = $('#admin-content');
   if (!wrap) return;
-  wrap.innerHTML = `<div class="hint" id="admin-loading-status" role="status">Loading administrator settings...</div>${uiSkeletonRows(4)}`;
+  wrap.innerHTML = uiSkeletonRows(4);
   try {
     const adminPaths = ['/auth/users', '/auth/settings', '/auth/departments', '/auth/reimbursement-access', '/attendance/tracking-access', '/attendance/verification-access', '/payment-history/access', '/attendance/device-access', '/attendance/device-access/me', '/project-action-access', '/task-checkin-access', '/task-work-mode-access'];
-    const pendingPaths = new Set(adminPaths);
     const loadAdminData = async (path) => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15000);
@@ -4949,9 +4948,6 @@ async function renderAdmin() {
         throw new Error(`${path}: ${error.message}`);
       } finally {
         clearTimeout(timeout);
-        pendingPaths.delete(path);
-        const status = $('#admin-loading-status');
-        if (status && pendingPaths.size) status.textContent = `Loading administrator settings... ${pendingPaths.size} requests remaining.`;
       }
     };
     const [users, settings, departments, reimbursementAccess, trackingAccess, verificationAccess, paymentAccess, deviceAccess, myDeviceAccess, projectActionAccess, taskCheckinAccess, taskWorkModeAccess] = await Promise.all(adminPaths.map(loadAdminData));
