@@ -478,6 +478,11 @@ test('super-admin Activity exposes safe error diagnostics and resolves reports',
       body: JSON.stringify({ username: 'test owner', password: 'Superadmin-Test-Password-2026!' })
     });
     const headers = { Cookie: login.headers.get('set-cookie').split(';', 1)[0] };
+    const inboxIndex = await controlDb.execute({
+      sql: "SELECT name FROM sqlite_master WHERE type='index' AND name=?",
+      args: ['user_error_reports_status_id_idx']
+    });
+    assert.equal(inboxIndex.rows.length, 1);
     const inserted = await controlDb.execute({
       sql: `INSERT INTO user_error_reports (request_id, event, method, route, status_code, diagnostics)
         VALUES (?, ?, ?, ?, ?, ?)`,

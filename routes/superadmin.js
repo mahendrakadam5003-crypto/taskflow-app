@@ -604,7 +604,7 @@ function createSuperAdminRouter({
             e.event, e.method, e.route, e.status_code, e.diagnostics, e.created_at, e.resolved_at,
             c.name AS company_name, c.code AS registered_company_code
             FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
-            ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
+            ORDER BY e.id DESC LIMIT ? OFFSET ?`,
           args: [limit + 1, requestedOffset]
         }
         : {
@@ -613,7 +613,7 @@ function createSuperAdminRouter({
             c.name AS company_name, c.code AS registered_company_code
             FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
             WHERE e.resolved_at IS NULL
-            ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
+            ORDER BY e.id DESC LIMIT ? OFFSET ?`,
           args: [limit + 1, requestedOffset]
         };
       phase = 'report_list_query';
