@@ -388,7 +388,7 @@ function renderCommentAttachment(entry) {
   const name = entry.attachment_name || 'Telegram attachment';
   const type = attachmentTypeLabel(entry.attachment_type, name);
   if (String(entry.attachment_type || '').toLowerCase().startsWith('image/')) {
-    return `<a class="comment-attachment" href="${entry.image_path}" target="_blank" rel="noopener"><img class="comment-image" src="${entry.image_path}" loading="lazy" decoding="async" alt="${escapeHtml(name)}"><span>${escapeHtml(name)}</span></a>`;
+    return `<a class="comment-attachment" href="${entry.image_path}" target="_blank" rel="noopener"><img class="comment-image" src="${entry.image_path}" loading="lazy" decoding="async" alt="${escapeHtml(name)}"><span class="comment-attachment-caption">${escapeHtml(name)} · Download</span></a>`;
   }
   return `<a class="comment-file-card" href="${entry.image_path}" target="_blank" rel="noopener"><span class="comment-file-icon">${icon('folder')}</span><span><b>${escapeHtml(name)}</b><small>${escapeHtml(type)} · Download</small></span></a>`;
 }
@@ -2342,6 +2342,33 @@ async function renderNotifications({ more = false } = {}) {
   }
 }
 
+// Native photo picking. The gallery source uses the system photo picker, which does not need camera
+// permission; the camera source asks for camera permission only when the user takes a photo.
+async function pickNativePhoto(source) {
+  const camera = window.TaskFlowCamera;
+  if (!camera) throw new Error('Photo picker is unavailable. Update TaskFlow and try again.');
+  if (source === window.TaskFlowCameraSource.Camera) {
+    let permission = await camera.checkPermissions();
+    if (permission.camera !== 'granted') permission = await camera.requestPermissions({ permissions: ['camera'] });
+    if (permission.camera !== 'granted') throw new Error('Allow camera access for TaskFlow in phone settings, then try again.');
+  }
+  const photo = await camera.getPhoto({
+    source,
+    resultType: window.TaskFlowCameraResultType.Base64,
+    quality: 85,
+    width: 1800,
+    height: 1800,
+    allowEditing: false,
+    saveToGallery: false
+  });
+  if (!photo.base64String) throw new Error('No photo was selected.');
+  const binary = atob(photo.base64String);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  const mimeType = photo.format === 'jpg' ? 'image/jpeg' : `image/${photo.format}`;
+  return new File([bytes], `photo-${Date.now()}.${photo.format}`, { type: mimeType });
+}
+
 async function renderReimbursements() {
   const wrap = $('#reimbursements-content');
   if (!wrap) return;
@@ -2472,7 +2499,17 @@ async function renderReimbursements() {
     receiptInput.value = '';
     updateReceiptSelection();
   });
-  $('#reimbursement-gallery')?.addEventListener('click', () => receiptInput?.click());
+  $('#reimbursement-gallery')?.addEventListener('click', async () => {
+    if (!window.Capacitor?.isNativePlatform?.() || !window.TaskFlowCamera) return receiptInput?.click();
+    const error = $('#reimbursement-form-error');
+    error.textContent = '';
+    try {
+      selectedReceiptFiles.push(await pickNativePhoto(window.TaskFlowCameraSource.Photos));
+      updateReceiptSelection();
+    } catch (pickError) {
+      if (!/cancel/i.test(pickError.message || '')) error.textContent = pickError.message || 'Unable to open the photo gallery.';
+    }
+  });
   $('#reimbursement-camera')?.addEventListener('click', async event => {
     const button = event.currentTarget;
     const error = $('#reimbursement-form-error');
@@ -3575,6 +3612,33 @@ const renderActivity = () => {
         }
       };
     };
+    // Live refresh: pick up comments and activity from other people or other devices while this task is open.
+    const refreshTaskActivityLatest = async () => {
+      if (activeTaskDrawerController !== controller || activityLoading || document.hidden) return;
+      try {
+        const page = await api(`/tasks/${taskId}/activity?limit=15&offset=0`, { signal: controller.signal });
+        if (activeTaskDrawerController !== controller) return;
+        const keyOf = item => `${item.activity_type}:${item.id}`;
+        const latest = new Map(page.items.map(item => [keyOf(item), item]));
+        const known = new Set(activityItems.map(keyOf));
+        let changed = false;
+        activityItems.forEach((item, index) => {
+          const newer = latest.get(keyOf(item));
+          if (newer && JSON.stringify(newer) !== JSON.stringify(item)) { activityItems[index] = newer; changed = true; }
+        });
+        const fresh = page.items.filter(item => !known.has(keyOf(item)));
+        if (fresh.length) { activityItems.push(...fresh); changed = true; }
+        if (changed) renderActivity();
+      } catch (refreshError) {
+        // Ignore; the next tick tries again.
+      }
+    };
+    window.refreshOpenTaskActivity = refreshTaskActivityLatest;
+    const activityPollTimer = setInterval(refreshTaskActivityLatest, 10000);
+    controller.signal.addEventListener('abort', () => {
+      clearInterval(activityPollTimer);
+      if (window.refreshOpenTaskActivity === refreshTaskActivityLatest) window.refreshOpenTaskActivity = null;
+    });
     $$('.activity-filter-tab').forEach(button => {
       button.onclick = () => {
         activityMode = button.dataset.activityMode;
@@ -3895,6 +3959,28 @@ const renderActivity = () => {
     };
     commentInput.onblur = () => setTimeout(hideMentionSuggestions, 120);
     $('#btn-attach-image').onclick = () => { if (!taskActionsLocked) fileInput.click(); };
+    if (window.Capacitor?.isNativePlatform?.() && window.TaskFlowCamera && !$('#btn-comment-camera')) {
+      const cameraButton = document.createElement('button');
+      cameraButton.type = 'button';
+      cameraButton.className = 'icon-btn';
+      cameraButton.id = 'btn-comment-camera';
+      cameraButton.title = 'Take photo';
+      cameraButton.setAttribute('aria-label', 'Take photo');
+      cameraButton.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-camera"></use></svg>';
+      $('#btn-attach-image').insertAdjacentElement('afterend', cameraButton);
+      cameraButton.onclick = async () => {
+        if (taskActionsLocked) return;
+        try {
+          const photo = await pickNativePhoto(window.TaskFlowCameraSource.Camera);
+          const transfer = new DataTransfer();
+          transfer.items.add(photo);
+          fileInput.files = transfer.files;
+          fileInput.onchange?.();
+        } catch (cameraError) {
+          if (!/cancel/i.test(cameraError.message || '')) showAppNotification(cameraError.message || 'Unable to take a photo.');
+        }
+      };
+    }
     fileInput.onchange = () => {
       const file = fileInput.files[0];
       if (!file) { filePreview.classList.add('hidden'); return; }
@@ -3951,9 +4037,8 @@ const renderActivity = () => {
           const pendingStatus = commentEntry.querySelector('.comment-pending-status');
           if (pendingStatus && attachment) pendingStatus.textContent = `Uploading attachment... ${percent}%`;
         });
-        const pendingStatus = commentEntry.querySelector('.comment-pending-status');
-        if (pendingStatus) pendingStatus.remove();
-        commentEntry.classList.remove('comment-pending');
+        commentEntry.remove();
+        window.refreshOpenTaskActivity?.();
       } catch (error) {
         commentEntry.remove();
         if (attachmentPreviewUrl) URL.revokeObjectURL(attachmentPreviewUrl);
