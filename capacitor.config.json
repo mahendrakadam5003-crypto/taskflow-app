@@ -1,6 +1,7 @@
 {
   "appId": "com.taskflow.app",
   "appName": "TaskFlow",
+  "backgroundColor": "#0F1B33",
   "server": {
     "url": "https://taskflow-app-zjlw.onrender.com/app",
     "errorPath": "offline.html"
