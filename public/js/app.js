@@ -6,6 +6,7 @@ const nativeApp = Boolean(window.Capacitor?.isNativePlatform?.())
 const htmlElement = document.documentElement;
 const nativeThemeKey = 'taskflow.native.theme';
 const nativeTextSizeKey = 'taskflow.native.text-size';
+const nativeDashboardCacheKey = 'taskflow.native.dashboard-cache.v1';
 
 if (nativeApp) {
   htmlElement.classList.add('is-native');
@@ -142,6 +143,7 @@ async function api(path, opts = {}) {
   let data = null;
   try { data = await res.json(); } catch (e) { /* no body */ }
   if (res.status === 401 && path !== '/auth/login' && path !== '/auth/change-password' && ME) {
+    clearNativeDashboardCache();
     ME = null;
     $('#app')?.classList.add('hidden');
     $('#login-screen')?.classList.remove('hidden');
@@ -1190,6 +1192,76 @@ function stopTaskListPolling() {
   taskListPollBusy = false;
 }
 
+function clearNativeDashboardCache() {
+  try { localStorage.removeItem(nativeDashboardCacheKey); } catch (error) { }
+  const app = $('#app');
+  if (!app) return;
+  app.classList.remove('native-dashboard-preview');
+  app.removeAttribute('aria-busy');
+  app.inert = false;
+  app.style.pointerEvents = '';
+}
+
+function saveNativeDashboardCache() {
+  if (!nativeApp || !ME?.id) return;
+  const summary = $('#dashboard-summary');
+  const projects = $('#dashboard-projects');
+  if (!summary || !projects) return;
+  const cached = {
+    version: 1,
+    savedAt: Date.now(),
+    displayName: String(ME.name || ''),
+    greetingText: $('#dashboard-greeting-text')?.textContent || '',
+    dateText: $('#dashboard-date-text')?.textContent || '',
+    summaryHtml: summary.innerHTML,
+    projectsHtml: projects.innerHTML,
+    adminVisible: ME.role === 'admin',
+    trackingVisible: $('#dashboard-tracking-card')?.style.display !== 'none',
+    paymentVisible: $('#dashboard-payment-history-card')?.style.display !== 'none',
+    storageVisible: $('#dashboard-storage-card')?.style.display !== 'none'
+  };
+  try { localStorage.setItem(nativeDashboardCacheKey, JSON.stringify(cached)); } catch (error) { }
+}
+
+function restoreNativeDashboardPreview() {
+  if (!nativeApp) return false;
+  let cached;
+  try { cached = JSON.parse(localStorage.getItem(nativeDashboardCacheKey) || 'null'); } catch (error) { }
+  if (!cached || cached.version !== 1 || !Number.isFinite(Number(cached.savedAt))
+    || Date.now() - Number(cached.savedAt) > 14 * 24 * 60 * 60 * 1000
+    || typeof cached.summaryHtml !== 'string' || typeof cached.projectsHtml !== 'string') {
+    clearNativeDashboardCache();
+    return false;
+  }
+
+  const app = $('#app');
+  const dashboard = $('#view-dashboard');
+  const summary = $('#dashboard-summary');
+  const projects = $('#dashboard-projects');
+  if (!app || !dashboard || !summary || !projects) return false;
+  summary.innerHTML = cached.summaryHtml;
+  projects.innerHTML = cached.projectsHtml;
+  $('#dashboard-greeting-text').textContent = cached.greetingText || 'TaskFlow';
+  $('#dashboard-date-text').textContent = cached.dateText || '';
+  $('#me-badge').innerHTML = `Signed in as<br><b>${escapeHtml(cached.displayName || '')}</b>`;
+  $('#dashboard-admin-card')?.style.setProperty('display', cached.adminVisible ? '' : 'none');
+  $('#dashboard-tracking-card')?.style.setProperty('display', cached.trackingVisible ? '' : 'none');
+  $('#dashboard-payment-history-card')?.style.setProperty('display', cached.paymentVisible ? '' : 'none');
+  $('#dashboard-storage-card')?.style.setProperty('display', cached.storageVisible ? '' : 'none');
+  $$('#app .view').forEach(view => view.classList.toggle('hidden', view !== dashboard));
+  $$('.nav-item').forEach(button => button.classList.toggle('active', button.dataset.view === 'dashboard'));
+  $$('.mobile-tab[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === 'dashboard'));
+  $('#mobile-page-title').textContent = 'TaskFlow';
+  app.classList.remove('hidden', 'booting');
+  app.classList.add('dashboard-view', 'focused-view', 'native-dashboard-preview');
+  app.setAttribute('aria-busy', 'true');
+  app.inert = true;
+  app.style.pointerEvents = 'none';
+  $('#startup-screen')?.classList.add('hidden');
+  $('#login-screen')?.classList.add('hidden');
+  return true;
+}
+
 // ---------- boot backend authentication initialization ----------
 function setLoginStatus(element, message, state = '') {
   if (!element) return;
@@ -1205,6 +1277,7 @@ async function getLoginDevicePayload() {
 }
 
 (async function init() {
+  const cachedDashboardPreview = restoreNativeDashboardPreview();
   const startupController = new AbortController();
   const startupTimeout = setTimeout(() => startupController.abort(), nativeApp ? 15_000 : 90_000);
   try {
@@ -1219,16 +1292,27 @@ async function getLoginDevicePayload() {
   } catch (e) {
     if (e.mustChangePassword) return;
     if (e.status !== 401) {
-      $('#startup-message').textContent = nativeApp
-        ? (e.name === 'AbortError'
-          ? 'Could not restore your session yet. Check your connection and retry.'
-          : 'Unable to connect. Check your connection and retry.')
-        : (e.name === 'AbortError'
-          ? 'TaskFlow is taking longer than expected to respond. Please try again.'
-          : 'Unable to connect. Check your connection and try again.');
-      $('#startup-retry').classList.remove('hidden');
+      if (nativeApp && cachedDashboardPreview) {
+        const banner = $('#mobile-offline-banner');
+        const message = $('#mobile-offline-message');
+        if (message) message.textContent = 'Showing the last saved dashboard. Retry to refresh.';
+        banner?.classList.remove('hidden');
+        const app = $('#app');
+        if (app) { app.inert = false; app.style.pointerEvents = ''; app.removeAttribute('aria-busy'); }
+      } else {
+        $('#startup-message').textContent = nativeApp
+          ? (e.name === 'AbortError'
+            ? 'Could not restore your session yet. Check your connection and retry.'
+            : 'Unable to connect. Check your connection and retry.')
+          : (e.name === 'AbortError'
+            ? 'TaskFlow is taking longer than expected to respond. Please try again.'
+            : 'Unable to connect. Check your connection and try again.');
+        $('#startup-retry').classList.remove('hidden');
+      }
     } else {
+      clearNativeDashboardCache();
       $('#startup-screen').classList.add('hidden');
+      $('#app')?.classList.add('hidden');
       $('#login-screen')?.classList.remove('hidden');
     }
   } finally {
@@ -1376,6 +1460,7 @@ if (btnLogout) {
     try { await stopNativeShiftTracking(); } catch (error) { console.warn('Unable to stop native shift tracking before logout:', error.message); }
     stopNotificationsPolling();
     stopTaskListPolling();
+    clearNativeDashboardCache();
     await unregisterPushToken();
     await api('/auth/logout', { method: 'POST' });
     location.reload();
@@ -1416,6 +1501,7 @@ if (dashboardLogoutButton) {
     try { await stopNativeShiftTracking(); } catch (error) { console.warn('Unable to stop native shift tracking before logout:', error.message); }
     stopNotificationsPolling();
     stopTaskListPolling();
+    clearNativeDashboardCache();
     await unregisterPushToken();
     await api('/auth/logout', { method: 'POST' });
     location.reload();
@@ -1553,6 +1639,7 @@ async function renderDashboard() {
     const summaryPanel = $('#dashboard-summary');
     if (summaryPanel) summaryPanel.innerHTML = '<div class="hint">Dashboard metrics are temporarily unavailable.</div>';
   }
+  saveNativeDashboardCache();
 
 }
 
@@ -1663,9 +1750,10 @@ async function enterApp() {
   const loginScreen = $('#login-screen');
   if (loginScreen) loginScreen.classList.add('hidden');
   const appEl = $('#app');
+  const cachedPreview = appEl?.classList.contains('native-dashboard-preview');
   if (appEl) {
     appEl.classList.remove('hidden');
-    appEl.classList.add('booting');
+    if (!cachedPreview) appEl.classList.add('booting');
   }
   const companyStatusBanner = $('#company-status-banner');
   if (companyStatusBanner) {
@@ -1730,13 +1818,16 @@ async function enterApp() {
     } else {
       showView(returnView);
     }
-    appEl?.classList.remove('booting');
+    appEl?.classList.remove('booting', 'native-dashboard-preview');
+    if (appEl) { appEl.inert = false; appEl.style.pointerEvents = ''; appEl.removeAttribute('aria-busy'); }
     $('#startup-screen')?.classList.add('hidden');
     if (flashMessage) showAppNotification(flashMessage);
   } catch (err) {
     console.error('App boot failure:', err);
     appEl?.classList.remove('booting');
     appEl?.classList.add('hidden');
+    appEl?.classList.remove('native-dashboard-preview');
+    if (appEl) { appEl.inert = false; appEl.style.pointerEvents = ''; appEl.removeAttribute('aria-busy'); }
     $('#startup-screen')?.classList.add('hidden');
     loginScreen?.classList.remove('hidden');
     const loginError = $('#login-error');
@@ -5631,6 +5722,7 @@ function showSelfPasswordModal(forced = false) {
     try {
       await unregisterPushToken();
       try { await stopNativeShiftTracking(); } catch (error) { console.warn('Unable to stop native shift tracking before logout:', error.message); }
+      clearNativeDashboardCache();
       await api('/auth/logout', { method: 'POST' });
       ME = null;
       location.reload();

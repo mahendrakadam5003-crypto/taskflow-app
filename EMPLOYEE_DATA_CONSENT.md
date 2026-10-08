@@ -29,6 +29,7 @@ Phone/laptop classification is inferred from browser-provided information and ca
 
 - The configured database is stored in Turso when cloud database credentials are configured; a local SQLite database is used as a fallback.
 - Attendance location points are stored in the configured TaskFlow database. The native app may temporarily queue points in app-private storage while offline so they can upload later. New attendance location points are not sent to Telegram. Receipt and comment attachments may also be stored in the configured Telegram channel.
+- The native app stores the last dashboard summary and project list in local app storage so they can appear while the session is being restored at launch. The snapshot is replaced after a successful session check, cleared on sign-out or an invalid session, and discarded when older than 14 days.
 - GPS coordinates are sent to OpenStreetMap Nominatim's reverse-geocoding service to obtain a readable location name.
 - Administrators and employees explicitly granted tracking access can view live attendance locations and selected employees' location timelines. Individual timeline views are recorded in the activity log with the viewer, employee, and date.
 - Tailscale or Render may provide network hosting/proxy services depending on the deployment.
