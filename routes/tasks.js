@@ -223,6 +223,31 @@ async function notifyTaskRelatedPeople(req, taskId, action, details = null) {
   }
 }
 
+function commentSnippet(body) {
+  return String(body || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+}
+
+// @Name mentions of active project members notify those members, even if they are not otherwise recipients.
+async function notifyMentionedMembers(req, taskId, body) {
+  try {
+    if (!body || !String(body).includes('@')) return;
+    const task = await db.prepare('SELECT title, project_id FROM tasks WHERE id=?').get(taskId);
+    if (!task) return;
+    const members = await db.prepare(`SELECT u.id, u.name FROM project_members pm
+      JOIN users u ON u.id=pm.user_id AND u.active=1 WHERE pm.project_id=?`).all(task.project_id);
+    const lowerBody = String(body).toLowerCase();
+    const mentioned = [...new Set((members || [])
+      .filter(member => Number(member.id) !== Number(req.session.userId) && member.name
+        && lowerBody.includes(`@${String(member.name).toLowerCase()}`))
+      .map(member => Number(member.id)))];
+    if (!mentioned.length) return;
+    const activityId = await logActivity(req, 'Mentioned you in a comment', 'task', taskId, `${task.title}: ${commentSnippet(body)}`);
+    await notifyActivityRecipients(activityId, mentioned);
+  } catch (error) {
+    logRequestEvent(req, 'task_mention_notification_failed', 'warn');
+  }
+}
+
 async function canChangeTaskWorkMode(req) {
   if (req.session.role === 'admin') return true;
   return !!(await db.prepare('SELECT user_id FROM task_work_mode_access WHERE user_id=?').get(req.session.userId));
@@ -1770,7 +1795,8 @@ router.post('/tasks/:id/comments', requireTaskCheckinToComment, uploadRateLimit,
           },
           { sql: 'DELETE FROM file_usage WHERE file_reference = ?', args: [reservation] }
         ]);
-        await notifyTaskRelatedPeople(req, req.params.id, 'Task comment added');
+        await notifyTaskRelatedPeople(req, req.params.id, 'Task comment added', commentSnippet(body));
+    await notifyMentionedMembers(req, req.params.id, body);
         return res.json({ ok: true, id: results?.[1]?.lastInsertRowid });
       } catch (error) {
         if (attachment?.messageId) {
@@ -1784,7 +1810,8 @@ router.post('/tasks/:id/comments', requireTaskCheckinToComment, uploadRateLimit,
     }
     const info = await db.prepare('INSERT INTO comments (task_id, user_id, body, image_path, attachment_name, attachment_type) VALUES (?, ?, ?, ?, ?, ?)')
       .run(req.params.id, req.session.userId, body, null, null, null);
-    await notifyTaskRelatedPeople(req, req.params.id, 'Task comment added');
+    await notifyTaskRelatedPeople(req, req.params.id, 'Task comment added', commentSnippet(body));
+    await notifyMentionedMembers(req, req.params.id, body);
     res.json({ ok: true, id: info.lastInsertRowid });
   } catch (err) {
     if (err instanceof StorageLimitError) return res.status(err.statusCode).json({ error: err.message });
