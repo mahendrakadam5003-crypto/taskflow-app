@@ -910,6 +910,16 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       }
       await markSchemaVersion(16);
     }
+    if (schemaVersion < 17) {
+      const projectColumns = await dbDriverInterface.prepare('PRAGMA table_info(projects)').all();
+      if (!projectColumns.some(column => column.name === 'show_billing')) {
+        await dbDriverInterface.exec('ALTER TABLE projects ADD COLUMN show_billing INTEGER NOT NULL DEFAULT 1');
+      }
+      if (!projectColumns.some(column => column.name === 'show_work_location')) {
+        await dbDriverInterface.exec('ALTER TABLE projects ADD COLUMN show_work_location INTEGER NOT NULL DEFAULT 1');
+      }
+      await markSchemaVersion(17);
+    }
     console.log('Database schema and default settings are ready.');
   } catch (err) {
     console.error(JSON.stringify({ event: 'tenant_database_initialization_failed', company_id: companyId ?? null }));
