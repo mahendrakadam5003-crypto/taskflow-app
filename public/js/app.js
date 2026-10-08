@@ -619,6 +619,7 @@ function openReimbursementDrawer(row) {
   $$('.receipt-preview-button').forEach(button => {
     button.onclick = () => openReceiptPreview(imageReceiptItems.map(item => item.url), Number(button.dataset.receiptIndex));
   });
+  applyProjectFeatureVisibility();
   drawer.classList.remove('hidden');
   $('#app').classList.add('drawer-open');
   $('#reimbursement-drawer-close').onclick = closeDrawer;
@@ -2499,17 +2500,7 @@ async function renderReimbursements() {
     receiptInput.value = '';
     updateReceiptSelection();
   });
-  $('#reimbursement-gallery')?.addEventListener('click', async () => {
-    if (!window.Capacitor?.isNativePlatform?.() || !window.TaskFlowCamera) return receiptInput?.click();
-    const error = $('#reimbursement-form-error');
-    error.textContent = '';
-    try {
-      selectedReceiptFiles.push(await pickNativePhoto(window.TaskFlowCameraSource.Photos));
-      updateReceiptSelection();
-    } catch (pickError) {
-      if (!/cancel/i.test(pickError.message || '')) error.textContent = pickError.message || 'Unable to open the photo gallery.';
-    }
-  });
+  $('#reimbursement-gallery')?.addEventListener('click', () => receiptInput?.click());
   $('#reimbursement-camera')?.addEventListener('click', async event => {
     const button = event.currentTarget;
     const error = $('#reimbursement-form-error');
@@ -2882,8 +2873,52 @@ async function openProject(id) {
   await enterProjectView(project);
 }
 
+// Per-project feature switches (set by admins). Missing values mean the feature is on.
+function projectFeatureOn(feature) {
+  return !CURRENT_PROJECT || Number(CURRENT_PROJECT[feature] ?? 1) === 1;
+}
+function applyProjectFeatureVisibility() {
+  $('#drawer-work-mode')?.closest('.field-row')?.classList.toggle('hidden', !projectFeatureOn('show_work_location'));
+  $('#drawer-billing-details')?.closest('details')?.classList.toggle('hidden', !projectFeatureOn('show_billing'));
+}
+function openProjectFeatureSettings() {
+  const project = CURRENT_PROJECT;
+  if (!project) return;
+  showModal(`<h3>Project settings</h3>
+    <p class="hint">Choose which optional fields new and existing tasks in ${escapeHtml(project.name)} show. Only admins can change these.</p>
+    <label class="feature-toggle"><input type="checkbox" id="project-feature-billing" ${projectFeatureOn('show_billing') ? 'checked' : ''}> Billing fields on tasks</label>
+    <label class="feature-toggle"><input type="checkbox" id="project-feature-work" ${projectFeatureOn('show_work_location') ? 'checked' : ''}> Work location (office or on field)</label>
+    <div class="modal-actions"><button class="btn btn-secondary" id="project-feature-cancel" type="button">Cancel</button><button class="btn btn-primary" id="project-feature-save" type="button">Save</button></div>`);
+  $('#project-feature-cancel').onclick = closeModal;
+  $('#project-feature-save').onclick = async () => {
+    const body = { show_billing: $('#project-feature-billing').checked, show_work_location: $('#project-feature-work').checked };
+    try {
+      const result = await api(`/projects/${project.id}/feature-settings`, { method: 'PUT', body });
+      project.show_billing = result.show_billing;
+      project.show_work_location = result.show_work_location;
+      const listed = PROJECTS.find(item => Number(item.id) === Number(project.id));
+      if (listed) Object.assign(listed, { show_billing: result.show_billing, show_work_location: result.show_work_location });
+      closeModal();
+      showAppNotification('Project settings saved.');
+    } catch (error) {
+      showAppNotification(error.message);
+    }
+  };
+}
+
 async function enterProjectView(project) {
   CURRENT_PROJECT = project;
+  let settingsButton = $('#btn-project-settings');
+  if (!settingsButton) {
+    settingsButton = document.createElement('button');
+    settingsButton.id = 'btn-project-settings';
+    settingsButton.type = 'button';
+    settingsButton.className = 'btn btn-secondary';
+    settingsButton.textContent = 'Settings';
+    $('#btn-manage-members')?.insertAdjacentElement('afterend', settingsButton);
+  }
+  settingsButton.style.display = ME?.role === 'admin' ? '' : 'none';
+  settingsButton.onclick = openProjectFeatureSettings;
   showView('project');
   renderFocusedProjectSwitcher();
   $$('.project-item').forEach((b) => b.classList.toggle('active', Number(b.dataset.id) === project.id));
@@ -3316,6 +3351,7 @@ async function showNewTaskDrawer() {
   if (deleteButton) deleteButton.style.display = 'none';
   $('#drawer-subtasks').innerHTML = '';
   $('#drawer-activity').innerHTML = '<div class="hint">Activity will be available after the task is created.</div>';
+  applyProjectFeatureVisibility();
   drawer.classList.remove('hidden');
   $('#app').classList.add('drawer-open');
   title?.focus();
@@ -3360,6 +3396,7 @@ function showTaskDrawerLoading() {
   const drawer = $('#task-drawer');
   if (!drawer) return;
   drawer.classList.add('loading');
+  applyProjectFeatureVisibility();
   drawer.classList.remove('hidden');
   $('#app').classList.add('drawer-open');
   $('#drawer-close').onclick = closeDrawer;
@@ -4051,7 +4088,7 @@ const renderActivity = () => {
           filePreview.classList.remove('hidden');
         }
         autoGrowComment();
-        showAppNotification(`Attendance update failed: ${error.message}`);
+        showAppNotification(`Comment not posted: ${error.message}`);
       } finally {
         if (postButton) postButton.disabled = false;
       }
