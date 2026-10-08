@@ -26,9 +26,15 @@ const settingKeys = new Set([
   'office_radius_m',
   'attendance_verification_enabled',
   'attachment_retention_days',
-  'attendance_location_retention_days'
+  'attendance_location_retention_days',
+  'reimbursement_approval_levels'
 ]);
 const booleanSettingKeys = new Set(['attendance_verification_enabled']);
+async function getApprovalLevels() {
+  const row = await db.prepare("SELECT value FROM settings WHERE key = 'reimbursement_approval_levels'").get();
+  const levels = Number(row?.value);
+  return Number.isInteger(levels) && levels >= 1 && levels <= 5 ? levels : 2;
+}
 const loginLimitOptions = {
   windowMs: 15 * 60 * 1000,
   limit: 10,
@@ -879,13 +885,21 @@ router.get('/reimbursement-access', requireAdmin, asyncHandler(async (req, res) 
 
 router.get('/reimbursement-access/me', requireAuth, asyncHandler(async (req, res) => {
   const row = await db.prepare('SELECT approval_level, can_pay FROM reimbursement_access WHERE user_id = ?').get(req.session.userId);
-  res.json({ approval_level: req.session.role === 'admin' ? 2 : (row ? row.approval_level : 0), can_pay: req.session.role === 'admin' ? 1 : (row ? row.can_pay : 0) });
+  const levels = await getApprovalLevels();
+  res.json({
+    approval_level: req.session.role === 'admin' ? levels : (row ? row.approval_level : 0),
+    can_pay: req.session.role === 'admin' ? 1 : (row ? row.can_pay : 0),
+    approval_levels: levels
+  });
 }));
 
 router.put('/reimbursement-access/:userId', requireAdmin, asyncHandler(async (req, res) => {
+  const levels = await getApprovalLevels();
   const approvalLevel = Number(req.body?.approval_level);
-  if (![0, 1, 2].includes(approvalLevel)) return res.status(400).json({ error: 'Approval level must be 0, 1, or 2.' });
-  const canPay = approvalLevel === 2 && req.body?.can_pay ? 1 : 0;
+  if (!Number.isInteger(approvalLevel) || approvalLevel < 0 || approvalLevel > levels) {
+    return res.status(400).json({ error: `Approval level must be a whole number from 0 to ${levels}.` });
+  }
+  const canPay = approvalLevel === levels && req.body?.can_pay ? 1 : 0;
   const target = await db.prepare('SELECT name, active FROM users WHERE id = ?').get(req.params.userId);
   if (!target) return res.status(404).json({ error: 'User not found.' });
   if (approvalLevel > 0 && Number(target.active) !== 1) return res.status(400).json({ error: 'Cannot grant reimbursement access to a deactivated user.' });
@@ -967,7 +981,8 @@ router.put('/settings', requireAdmin, async (req, res) => {
     }
     const retentionLimits = {
       attachment_retention_days: { min: 0, max: 36500 },
-      attendance_location_retention_days: { min: 1, max: 36500 }
+      attendance_location_retention_days: { min: 1, max: 36500 },
+      reimbursement_approval_levels: { min: 1, max: 5 }
     };
     for (const [key, { min, max }] of Object.entries(retentionLimits)) {
       if (settings[key] === undefined) continue;
