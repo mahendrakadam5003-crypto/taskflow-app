@@ -205,8 +205,15 @@ async function mapRows(rows) {
   return (rows || []).map(row => mapRow(row, attachmentsByFileId));
 }
 
+// Company setting: how many approval levels a claim passes through (1 to 5, default 2).
+async function getApprovalLevels() {
+  const row = await db.prepare("SELECT value FROM settings WHERE key = 'reimbursement_approval_levels'").get();
+  const levels = Number(row?.value);
+  return Number.isInteger(levels) && levels >= 1 && levels <= 5 ? levels : 2;
+}
+
 async function getAccess(req) {
-  if (req.session.role === 'admin') return { approval_level: 2, can_pay: 1 };
+  if (req.session.role === 'admin') return { approval_level: await getApprovalLevels(), can_pay: 1 };
   return await db.prepare(`SELECT ra.approval_level, ra.can_pay, u.department
     FROM reimbursement_access ra JOIN users u ON u.id=ra.user_id WHERE ra.user_id=?`).get(req.session.userId)
     || { approval_level: 0, can_pay: 0, department: '' };
@@ -219,20 +226,34 @@ async function canAccessClaim(req, claim) {
   return Number(access.approval_level) > 0;
 }
 
-function getApprovalTransition(access, claim, approverId) {
-  const level = Number(access.approval_level || 0);
-  if (claim.status === 'submitted') {
-    if (level < 1) return { error: 'You do not have level 1 approval access.', status: 403 };
-    return { status: 'approved_level_1', actorColumn: 'approved_level_1_by' };
+// Stage 1 is the first approval; the last stage (= company levels) makes the claim approved.
+function approvalStageFor(status) {
+  if (status === 'submitted') return 1;
+  const match = /^approved_level_(\d+)$/.exec(String(status || ''));
+  return match ? Number(match[1]) + 1 : 0;
+}
+
+function approvalTrail(claim) {
+  const ids = String(claim.approval_trail || '').split(',').map(Number).filter(id => Number.isSafeInteger(id) && id > 0);
+  if (claim.approved_level_1_by) ids.push(Number(claim.approved_level_1_by));
+  return [...new Set(ids)];
+}
+
+function appendApprovalTrail(claim, approverId) {
+  return [...approvalTrail(claim), Number(approverId)].join(',');
+}
+
+function getApprovalTransition(access, claim, approverId, levels) {
+  const rawStage = approvalStageFor(claim.status);
+  if (!rawStage) return { error: `A claim in ${claim.status} cannot be approved.`, status: 409 };
+  // If the company lowered its level count, claims waiting on a removed level move to the final stage.
+  const stage = Math.min(rawStage, levels);
+  if (Number(access.approval_level || 0) < stage) return { error: `This claim requires level ${stage} approval.`, status: 403 };
+  if (approvalTrail(claim).includes(Number(approverId))) {
+    return { error: 'Each approval level must be completed by a different person.', status: 403 };
   }
-  if (claim.status === 'approved_level_1') {
-    if (level < 2) return { error: 'This claim requires level 2 approval.', status: 403 };
-    if (Number(claim.approved_level_1_by) === Number(approverId)) {
-      return { error: 'Level 1 and level 2 approvals must be completed by different people.', status: 403 };
-    }
-    return { status: 'approved', actorColumn: 'approved_by' };
-  }
-  return { error: `A claim in ${claim.status} cannot be approved.`, status: 409 };
+  const final = stage >= levels;
+  return { status: final ? 'approved' : `approved_level_${stage}`, stage, final };
 }
 
 async function getReimbursementRows(req, { paginate = false } = {}) {
@@ -262,7 +283,7 @@ router.get('/summary', async (req, res) => {
     const access = await getAccess(req);
     let sql = `SELECT r.currency, COUNT(*) AS claim_count,
       ROUND(COALESCE(SUM(r.amount), 0), 2) AS total_amount,
-      ROUND(COALESCE(SUM(CASE WHEN r.status IN ('submitted', 'approved_level_1') THEN r.amount ELSE 0 END), 0), 2) AS pending_amount,
+      ROUND(COALESCE(SUM(CASE WHEN r.status = 'submitted' OR r.status LIKE 'approved_level_%' THEN r.amount ELSE 0 END), 0), 2) AS pending_amount,
       ROUND(COALESCE(SUM(CASE WHEN r.status IN ('approved', 'paid') THEN r.amount ELSE 0 END), 0), 2) AS approved_amount
       FROM reimbursements r JOIN users u ON u.id = r.user_id
       WHERE r.expense_date <= ?`;
@@ -591,7 +612,7 @@ router.put('/bulk-status', async (req, res) => {
     const access = await getAccess(req);
     if (!access.approval_level) return res.status(403).json({ error: 'You do not have reimbursement approval access.' });
     const claims = await Promise.all(ids.map(id => db.prepare(`SELECT r.id, r.user_id, r.status, r.amount, r.currency, r.category,
-      r.approved_level_1_by, u.department FROM reimbursements r JOIN users u ON u.id=r.user_id WHERE r.id=?`).get(id)));
+      r.approved_level_1_by, r.approval_trail, u.department FROM reimbursements r JOIN users u ON u.id=r.user_id WHERE r.id=?`).get(id)));
     if (claims.some(claim => !claim)) return res.status(404).json({ error: 'One or more reimbursements were not found.' });
     for (const claim of claims) {
       if (!(await canAccessClaim(req, claim))) return res.status(403).json({ error: 'You do not have access to every selected reimbursement.' });
@@ -599,20 +620,26 @@ router.put('/bulk-status', async (req, res) => {
     if (claims.some(claim => claim && Number(claim.user_id) === Number(req.session.userId))) {
       return res.status(403).json({ error: 'You cannot approve or pay your own reimbursement.' });
     }
-    const transitions = claims.map(claim => getApprovalTransition(access, claim, req.session.userId));
+    const levels = await getApprovalLevels();
+    const transitions = claims.map(claim => getApprovalTransition(access, claim, req.session.userId, levels));
     const invalidTransition = transitions.find(transition => transition.error);
     if (invalidTransition) return res.status(invalidTransition.status).json({ error: invalidTransition.error });
-    const statements = claims.map((claim, index) => ({
-      sql: `UPDATE reimbursements SET status=?, ${transitions[index].actorColumn}=?, updated_at=datetime('now') WHERE id=? AND status=?`,
-      args: [transitions[index].status, req.session.userId, claim.id, claim.status]
-    }));
+    const statements = claims.map((claim, index) => {
+      const transition = transitions[index];
+      const actorColumn = transition.final ? 'approved_by' : (transition.stage === 1 ? 'approved_level_1_by' : null);
+      const actorSet = actorColumn ? `${actorColumn}=?, ` : '';
+      return {
+        sql: `UPDATE reimbursements SET status=?, ${actorSet}approval_trail=?, updated_at=datetime('now') WHERE id=? AND status=?`,
+        args: [transition.status, ...(actorColumn ? [req.session.userId] : []), appendApprovalTrail(claim, req.session.userId), claim.id, claim.status]
+      };
+    });
     const results = await db.batch(statements);
     if (!Array.isArray(results) || results.length !== statements.length
       || results.some(result => Number(result.rowsAffected ?? result.changes ?? 0) !== 1)) {
       return res.status(409).json({ error: 'One or more reimbursement statuses changed. Reload and try again.' });
     }
     for (const [index, claim] of claims.entries()) {
-      const activityStatus = transitions[index].status === 'approved_level_1' ? 'approved (level 1)' : 'approved';
+      const activityStatus = transitions[index].final ? 'approved' : `approved (level ${transitions[index].stage})`;
       await logActivity(req, `Reimbursement ${activityStatus}`, 'reimbursement', claim.id, `${claim.amount} ${claim.currency} - ${claim.category}`, claim.user_id);
     }
     res.json({ ok: true, updated: claims.length });
@@ -634,16 +661,17 @@ router.put('/:id/status', async (req, res) => {
     if (Number(claim.user_id) === Number(req.session.userId)) return res.status(403).json({ error: 'You cannot approve or pay your own reimbursement.' });
     if (!(await canAccessClaim(req, claim))) return res.status(403).json({ error: 'You do not have access to this reimbursement.' });
     let nextStatus = status;
+    const levels = await getApprovalLevels();
     if (status === 'approved') {
-      const transition = getApprovalTransition(access, claim, req.session.userId);
+      const transition = getApprovalTransition(access, claim, req.session.userId, levels);
       if (transition.error) return res.status(transition.status).json({ error: transition.error });
       nextStatus = transition.status;
     } else if (status === 'rejected') {
-      if (!['submitted', 'approved_level_1', 'approved'].includes(claim.status)) {
+      if (!/^(submitted|approved_level_\d+|approved)$/.test(claim.status)) {
         return res.status(409).json({ error: `A claim in ${claim.status} cannot be rejected.` });
       }
-      if (claim.status === 'approved' && Number(access.approval_level) < 2) {
-        return res.status(403).json({ error: 'Level 2 approval is required to reject this claim.' });
+      if (claim.status === 'approved' && Number(access.approval_level) < levels) {
+        return res.status(403).json({ error: 'Final approval level is required to reject this claim.' });
       }
     } else if (!access.can_pay || claim.status !== 'approved') {
       return res.status(403).json({ error: 'Only the final payer can mark an approved claim as paid.' });
@@ -659,6 +687,10 @@ router.put('/:id/status', async (req, res) => {
     const noteToPersist = note ? (claim.admin_note ? `${claim.admin_note}\n${note}` : note) : null;
     const updates = ['status=?'];
     const values = [nextStatus];
+    if (status === 'approved') {
+      updates.push('approval_trail=?');
+      values.push(appendApprovalTrail(claim, req.session.userId));
+    }
     if (nextStatus === 'approved_level_1') {
       updates.push('approved_level_1_by=?');
       values.push(req.session.userId);
@@ -677,7 +709,7 @@ router.put('/:id/status', async (req, res) => {
     values.push(req.params.id, previousStatus);
     const updated = await db.prepare(`UPDATE reimbursements SET ${updates.join(', ')} WHERE id=? AND status=?`).run(...values);
     if (!updated.changes) return res.status(409).json({ error: 'This claim status changed. Reload and try again.' });
-    const activityStatus = nextStatus === 'approved_level_1' ? 'approved (level 1)' : nextStatus;
+    const activityStatus = /^approved_level_\d+$/.test(nextStatus) ? `approved (level ${nextStatus.split('_').pop()})` : nextStatus;
     await logActivity(req, `Reimbursement ${activityStatus}`, 'reimbursement', req.params.id, `${claim.amount} ${claim.currency} - ${claim.category}`, claim.user_id);
     res.json({ ok: true });
   } catch (error) {
