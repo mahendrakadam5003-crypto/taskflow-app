@@ -111,6 +111,12 @@ let activeTaskDrawerController = null;
 let taskListRequestId = 0;
 let activeTaskListController = null;
 let taskListPagination = { key: '', afterId: 0, hasMore: false, tasks: [] };
+let taskListObserver = null;
+// Used by the scroll sentinel and the button; ignores the request while a page is already loading.
+function loadMoreTasks() {
+  if (document.querySelector('#task-list-loading-more')) return;
+  return renderTasks({ loadMore: true });
+}
 let dashboardSummaryRequestId = 0;
 let attendanceHistoryMonth = null;
 let attendanceHistoryRequestId = 0;
@@ -3055,9 +3061,11 @@ async function renderTasks({ loadMore = false } = {}) {
     const value = $(`#${id}`)?.value;
     if (value) query.set(key, value);
   });
+  if (search) query.set('q', search);
   const paginationKey = `${projectId}?${query.toString()}`;
-  const appendPage = !search && loadMore && taskListPagination.key === paginationKey && taskListPagination.hasMore;
-  const pageSize = 50;
+  const appendPage = loadMore && taskListPagination.key === paginationKey && taskListPagination.hasMore;
+  const pageSize = 10;
+  if (taskListObserver) { taskListObserver.disconnect(); taskListObserver = null; }
   if (!appendPage) {
     taskListPagination = { key: paginationKey, afterId: 0, hasMore: false, tasks: [] };
     list.innerHTML = `<tr><td colspan="4">${uiSkeletonRows(5)}</td></tr>`;
@@ -3068,13 +3076,7 @@ async function renderTasks({ loadMore = false } = {}) {
   }
   let tasks = appendPage ? taskListPagination.tasks.slice() : [];
   try {
-    if (search) {
-      query.set('q', search);
-      query.set('after_id', '0');
-      query.set('limit', String(pageSize));
-      tasks = await api(`/projects/${projectId}/tasks?${query.toString()}`, { signal: controller.signal });
-      if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
-    } else {
+    {
       const afterId = appendPage ? taskListPagination.afterId : 0;
       const pageQuery = new URLSearchParams(query);
       pageQuery.set('after_id', String(afterId));
@@ -3120,9 +3122,16 @@ async function renderTasks({ loadMore = false } = {}) {
         <td class="task-due-cell" data-label="Due"><span class="task-mobile-label">Due</span><span class="chip ${due.className}">${escapeHtml(due.label)}</span></td>
       </tr>`;
     }).join('') : `<tr><td colspan="4"><div class="empty-state">${icon('check')}<b>${search ? 'No matching tasks' : 'No tasks yet'}</b><p>${search ? 'Try a different search or clear your filters.' : 'Add a task to get this project moving.'}</p>${PROJECT_ACTION_ACCESS.create_task ? '<button type="button" class="btn btn-primary" id="empty-add-task">Add task</button>' : ''}</div></td></tr>`;
-    if (!search && taskListPagination.hasMore) {
-      list.insertAdjacentHTML('beforeend', `<tr id="task-list-more"><td colspan="4" class="hint" style="text-align:center;padding:12px"><button type="button" class="link-btn" id="task-list-load-more">Load more tasks (${tasks.length} shown)</button></td></tr>`);
-      $('#task-list-load-more').onclick = () => renderTasks({ loadMore: true });
+    if (taskListPagination.hasMore) {
+      list.insertAdjacentHTML('beforeend', `<tr id="task-list-more"><td colspan="4" class="hint" style="text-align:center;padding:12px"><span id="task-list-sentinel" aria-hidden="true"></span><button type="button" class="link-btn" id="task-list-load-more">Load more tasks (${tasks.length} shown)</button></td></tr>`);
+      $('#task-list-load-more').onclick = () => loadMoreTasks();
+      const sentinel = $('#task-list-sentinel');
+      if (sentinel && 'IntersectionObserver' in window) {
+        taskListObserver = new IntersectionObserver(entries => {
+          if (entries.some(entry => entry.isIntersecting)) loadMoreTasks();
+        }, { rootMargin: '150px' });
+        taskListObserver.observe(sentinel);
+      }
     }
     $('#empty-add-task')?.addEventListener('click', () => $('#btn-new-task')?.click());
     $$('.row-complete').forEach(button => {
