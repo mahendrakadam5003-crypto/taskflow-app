@@ -12,6 +12,7 @@ if (nativeApp) {
   htmlElement.classList.add('is-native');
   htmlElement.classList.add(/iPhone|iPad|iPod/i.test(navigator.userAgent) ? 'is-ios' : 'is-android');
 }
+let nativeAppResumeGeneration = 0;
 
 function applyNativeAppearance(theme, textSize) {
   if (!nativeApp) return;
@@ -42,6 +43,24 @@ if (nativeApp) {
   const offlineBanner = $('#mobile-offline-banner');
   const offlineMessage = $('#mobile-offline-message');
   const retryButton = $('#mobile-offline-retry');
+  let connectivityCheckId = 0;
+  const checkBackendConnectivity = async () => {
+    const checkId = ++connectivityCheckId;
+    try {
+      const response = await fetch('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' });
+      if (checkId !== connectivityCheckId) return;
+      if (!response.ok && response.status !== 401) throw new Error(`Server returned ${response.status}.`);
+      offlineBanner?.classList.add('hidden');
+    } catch (error) {
+      if (checkId !== connectivityCheckId) return;
+      if (offlineMessage) offlineMessage.textContent = 'TaskFlow is still unreachable. Check your connection and retry.';
+      offlineBanner?.classList.remove('hidden');
+    }
+  };
+  const handleAppResume = () => {
+    nativeAppResumeGeneration += 1;
+    void checkBackendConnectivity();
+  };
   const updateConnectivity = () => {
     if (!offlineBanner) return;
     offlineBanner.classList.toggle('hidden', navigator.onLine);
@@ -49,9 +68,12 @@ if (nativeApp) {
   };
   updateConnectivity();
   window.addEventListener('offline', updateConnectivity);
-  window.addEventListener('online', () => {
-    if (offlineMessage) offlineMessage.textContent = 'Connection restored. Tap retry to reconnect to TaskFlow.';
-    offlineBanner?.classList.remove('hidden');
+  window.addEventListener('online', () => void checkBackendConnectivity());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') handleAppResume();
+  });
+  window.TaskFlowApp?.addListener('appStateChange', ({ isActive }) => {
+    if (isActive) handleAppResume();
   });
   retryButton?.addEventListener('click', async () => {
     retryButton.disabled = true;
@@ -118,6 +140,7 @@ function updateCompanyAccessBanner(state, message = '', reasons = []) {
 
 async function api(path, opts = {}) {
   let res;
+  const requestResumeGeneration = nativeAppResumeGeneration;
   try {
     res = await fetch('/api' + path, {
       headers: { 'Content-Type': 'application/json' },
@@ -126,7 +149,7 @@ async function api(path, opts = {}) {
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
   } catch (error) {
-    if (nativeApp) {
+    if (nativeApp && document.visibilityState !== 'hidden' && requestResumeGeneration === nativeAppResumeGeneration) {
       const banner = $('#mobile-offline-banner');
       const message = $('#mobile-offline-message');
       if (message) message.textContent = 'TaskFlow could not be reached. Check your connection and retry.';
@@ -134,6 +157,7 @@ async function api(path, opts = {}) {
     }
     throw error;
   }
+  if (nativeApp && (res.ok || res.status === 401)) $('#mobile-offline-banner')?.classList.add('hidden');
   const accessState = res.headers.get('X-Company-Access-State');
   if (accessState) {
     let accessReasons = [];
