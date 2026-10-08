@@ -758,3 +758,6 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { .ui-skel { animation: none; } }
 .ui-skel-inline { display: inline-block; width: 72px; height: 1em; vertical-align: middle; border-radius: 4px; }
 .ui-skel-inline-sm { width: 110px; }
+
+/* ---------- notifications paging ---------- */
+.notifications-more { display: grid; justify-items: center; gap: 8px; padding: 12px 0 4px; }
