@@ -2266,12 +2266,39 @@ function notificationGroupsMarkup(items) {
           : /reimburse|expense|receipt/.test(action) ? 'receipt'
             : /project/.test(action) ? 'folder'
               : /setting|access|user|permission/.test(action) ? 'settings' : 'check';
-        return `<article class="notification-item">
+        const openable = (entry.entity_type === 'task' && entry.task_project_id) || entry.entity_type === 'reimbursement' || entry.entity_type === 'project';
+        const subjectLine = entry.entity_type === 'task' && entry.task_title ? `<small class="notification-subject">${escapeHtml(entry.task_title)}</small>` : '';
+        const detailLine = entry.details && entry.details !== entry.task_title ? `<p class="notification-detail">${escapeHtml(entry.details)}</p>` : '';
+        return `<article class="notification-item${openable ? ' is-clickable' : ''}" ${openable ? `data-entity-type="${escapeHtml(entry.entity_type)}" data-entity-id="${Number(entry.entity_id) || ''}" data-project-id="${Number(entry.task_project_id) || ''}" role="button" tabindex="0"` : ''}>
           <span class="notification-icon">${icon(iconName)}</span>
-          <div><b>${escapeHtml(entry.action)}</b><p>By ${escapeHtml(entry.actor_name || 'Unknown user')} · ${escapeHtml(fmtDateTime(entry.created_at))}</p>${entry.details ? `<small>${escapeHtml(entry.details)}</small>` : ''}</div>
+          <div><b>${escapeHtml(entry.action)}</b><p>By ${escapeHtml(entry.actor_name || 'Unknown user')} · ${escapeHtml(fmtDateTime(entry.created_at))}</p>${subjectLine}${detailLine}</div>
         </article>`;
       }).join('')}
     </section>` : '').join('');
+}
+
+async function openNotificationTarget(target) {
+  const id = Number(target.entityId);
+  if (!id) return;
+  try {
+    if (target.entityType === 'task') {
+      const project = PROJECTS.find(item => Number(item.id) === Number(target.projectId));
+      if (!project) return showAppNotification('You no longer have access to this task.');
+      await enterProjectView(project);
+      await openTaskDrawer(id);
+    } else if (target.entityType === 'reimbursement') {
+      showView('reimbursements');
+      await renderReimbursements();
+      const rowElement = document.querySelector(`.reimbursement-row[data-reimbursement-id="${id}"]`);
+      if (rowElement) rowElement.click();
+      else showAppNotification('That expense is not on this page. Use the filters to find it.');
+    } else if (target.entityType === 'project') {
+      const project = PROJECTS.find(item => Number(item.id) === id);
+      if (project) await enterProjectView(project);
+    }
+  } catch (error) {
+    showAppNotification(error.message);
+  }
 }
 
 function renderNotificationFeed(list, feed) {
@@ -2287,6 +2314,17 @@ function renderNotificationFeed(list, feed) {
         : '<p class="hint">You are all caught up.</p>'}
     </div>`;
   $('#notifications-load-more')?.addEventListener('click', () => renderNotifications({ more: true }));
+  list.onclick = event => {
+    const item = event.target.closest('.notification-item.is-clickable');
+    if (item) openNotificationTarget({ entityType: item.dataset.entityType, entityId: item.dataset.entityId, projectId: item.dataset.projectId });
+  };
+  list.onkeydown = event => {
+    const item = event.target.closest('.notification-item.is-clickable');
+    if (item && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      openNotificationTarget({ entityType: item.dataset.entityType, entityId: item.dataset.entityId, projectId: item.dataset.projectId });
+    }
+  };
   const sentinel = $('#notifications-sentinel');
   if (sentinel && 'IntersectionObserver' in window) {
     feed.observer = new IntersectionObserver(entries => {
