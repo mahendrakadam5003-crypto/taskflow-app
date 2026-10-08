@@ -74,6 +74,11 @@ const commentUploadTypes = new Map([
   ['.webp', 'image/webp'],
   ['.pdf', 'application/pdf']
 ]);
+// Multipart parsing can finish outside the company's request context; re-enter it before the database is used.
+function reenterTenant(req, next) {
+  return req.companyTenantId === undefined ? next() : db.runWithTenant(req.companyTenantId, () => next());
+}
+
 const commentUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -90,7 +95,7 @@ const commentUpload = multer({
 });
 const handleCommentUploadError = (req, res, next) => {
   commentUpload.single('attachment')(req, res, error => {
-    if (!error) return next();
+    if (!error) return reenterTenant(req, next);
     if (error.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Comment attachments cannot exceed 10 MB.' });
     if (error.status === 415) return res.status(415).json({ error: error.message });
     return res.status(400).json({ error: 'Unable to receive the comment attachment. Check the file and try again.' });
@@ -106,7 +111,7 @@ const asanaAttachmentUpload = multer({
 });
 const handleAsanaUploadError = (uploadMiddleware, label) => (req, res, next) => {
   uploadMiddleware(req, res, error => {
-    if (!error) return next();
+    if (!error) return reenterTenant(req, next);
     const tooLarge = error.code === 'LIMIT_FILE_SIZE';
     const status = tooLarge ? 413 : 400;
     if (!tooLarge) logRequestEvent(req, 'upload_request_rejected', 'warn');
