@@ -1207,10 +1207,6 @@ async function getLoginDevicePayload() {
 (async function init() {
   const startupController = new AbortController();
   const startupTimeout = setTimeout(() => startupController.abort(), nativeApp ? 15_000 : 90_000);
-  if (nativeApp) {
-    $('#startup-screen')?.classList.add('hidden');
-    $('#login-screen')?.classList.remove('hidden');
-  }
   try {
     const rawMe = await api('/auth/me', { signal: startupController.signal });
     // Unrolls any array wrappers returned from cloud proxies
@@ -1223,18 +1219,14 @@ async function getLoginDevicePayload() {
   } catch (e) {
     if (e.mustChangePassword) return;
     if (e.status !== 401) {
-      if (nativeApp) {
-        const loginError = $('#login-error');
-        if (loginError) loginError.textContent = e.name === 'AbortError'
-          ? 'Could not restore your session yet. Sign in or retry when the connection is available.'
-          : 'Could not restore your session. Check the connection, then sign in or retry.';
-        $('#login-retry-connection')?.classList.remove('hidden');
-      } else {
-        $('#startup-message').textContent = e.name === 'AbortError'
+      $('#startup-message').textContent = nativeApp
+        ? (e.name === 'AbortError'
+          ? 'Could not restore your session yet. Check your connection and retry.'
+          : 'Unable to connect. Check your connection and retry.')
+        : (e.name === 'AbortError'
           ? 'TaskFlow is taking longer than expected to respond. Please try again.'
-          : 'Unable to connect. Check your connection and try again.';
-        $('#startup-retry').classList.remove('hidden');
-      }
+          : 'Unable to connect. Check your connection and try again.');
+      $('#startup-retry').classList.remove('hidden');
     } else {
       $('#startup-screen').classList.add('hidden');
       $('#login-screen')?.classList.remove('hidden');
@@ -1244,7 +1236,6 @@ async function getLoginDevicePayload() {
   }
 })();
 $('#startup-retry').onclick = () => location.reload();
-$('#login-retry-connection')?.addEventListener('click', () => location.reload());
 
 const loginForm = $('#login-form');
 if (loginForm) {
