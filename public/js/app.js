@@ -3502,7 +3502,17 @@ async function openTaskDrawer(taskId) {
         };
       });
     };
-    const renderActivity = () => {
+    // Short timestamps for the activity timeline: time only for today, otherwise "5 Oct, 3:41 pm".
+function activityTime(value) {
+  const date = parseTaskFlowTimestamp(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const dayKey = day => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(day);
+  const time = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true }).format(date);
+  if (dayKey(date) === dayKey(new Date())) return time;
+  const day = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' }).format(date);
+  return `${day}, ${time}`;
+}
+const renderActivity = () => {
       const orderedItems = [...activityItems].sort((left, right) => {
         const timeDifference = Date.parse(left.created_at) - Date.parse(right.created_at);
         if (Number.isFinite(timeDifference) && timeDifference !== 0) return timeDifference;
@@ -3513,7 +3523,7 @@ async function openTaskDrawer(taskId) {
         ? orderedItems.filter(entry => entry.activity_type === 'comment')
         : orderedItems;
       const activityHtml = visibleItems.map((entry, index) => {
-        const timestamp = escapeHtml(fmtDateTime(entry.created_at));
+        const timestamp = escapeHtml(activityTime(entry.created_at));
         if (entry.activity_type === 'comment') {
           return `<div class="task-activity-group"><div class="activity-group-entry comment" data-comment-id="${entry.id}">
             <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b> <span class="activity-inline-time">· ${timestamp}</span>${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
