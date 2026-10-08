@@ -2201,58 +2201,111 @@ window.TaskFlowApp?.addListener('backButton', async () => {
   await window.TaskFlowApp.minimizeApp();
 });
 
-async function renderNotifications() {
+const NOTIFICATION_PAGE_SIZE = 10;
+let notificationFeed = null; // { items, seen, hasMore, loading, observer }
+
+function notificationKey(entry) {
+  return `${entry.source || 'activity'}:${entry.id}`;
+}
+
+function notificationGroupsMarkup(items) {
+  const today = todayISO();
+  const yesterdayDate = new Date(`${today}T12:00:00+05:30`);
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterday = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(yesterdayDate);
+  const groups = new Map([['Today', []], ['Yesterday', []], ['Earlier', []]]);
+  items.forEach(entry => {
+    const date = parseTaskFlowTimestamp(entry.created_at);
+    const day = Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(date) : '';
+    groups.get(day === today ? 'Today' : day === yesterday ? 'Yesterday' : 'Earlier').push(entry);
+  });
+  return Array.from(groups, ([label, entries]) => entries.length ? `
+    <section class="notification-group" aria-label="${label}">
+      <h2>${label}</h2>
+      ${entries.map(entry => {
+        const action = String(entry.action || '').toLowerCase();
+        const iconName = /attendance|punch|location/.test(action) ? 'clock'
+          : /reimburse|expense|receipt/.test(action) ? 'receipt'
+            : /project/.test(action) ? 'folder'
+              : /setting|access|user|permission/.test(action) ? 'settings' : 'check';
+        return `<article class="notification-item">
+          <span class="notification-icon">${icon(iconName)}</span>
+          <div><b>${escapeHtml(entry.action)}</b><p>By ${escapeHtml(entry.actor_name || 'Unknown user')} · ${escapeHtml(fmtDateTime(entry.created_at))}</p>${entry.details ? `<small>${escapeHtml(entry.details)}</small>` : ''}</div>
+        </article>`;
+      }).join('')}
+    </section>` : '').join('');
+}
+
+function renderNotificationFeed(list, feed) {
+  if (feed.observer) { feed.observer.disconnect(); feed.observer = null; }
+  if (!feed.items.length) {
+    list.innerHTML = '<p class="hint">No recent activity is available for your account yet.</p>';
+    return;
+  }
+  list.innerHTML = `${notificationGroupsMarkup(feed.items)}
+    <div id="notifications-more" class="notifications-more">
+      ${feed.hasMore
+        ? '<div id="notifications-sentinel" class="ui-state-loading" role="status"><span class="ui-spinner" aria-hidden="true"></span><span>Loading more...</span></div><button type="button" class="btn btn-secondary btn-sm" id="notifications-load-more">Load more</button>'
+        : '<p class="hint">You are all caught up.</p>'}
+    </div>`;
+  $('#notifications-load-more')?.addEventListener('click', () => renderNotifications({ more: true }));
+  const sentinel = $('#notifications-sentinel');
+  if (sentinel && 'IntersectionObserver' in window) {
+    feed.observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) renderNotifications({ more: true });
+    }, { rootMargin: '150px' });
+    feed.observer.observe(sentinel);
+  }
+}
+
+async function renderNotifications({ more = false } = {}) {
   const list = $('#notifications-list');
   if (!list) return;
-  list.innerHTML = uiSkeletonRows(3);
+  if (!more || !notificationFeed) {
+    if (notificationFeed?.observer) notificationFeed.observer.disconnect();
+    notificationFeed = { items: [], seen: new Set(), hasMore: true, loading: false, observer: null };
+    list.innerHTML = uiSkeletonRows(3);
+  }
+  const feed = notificationFeed;
+  if (feed.loading || !feed.hasMore) return;
+  feed.loading = true;
+  const cursor = feed.items.length ? String(feed.items[feed.items.length - 1].created_at) : null;
+  const query = new URLSearchParams({ limit: String(NOTIFICATION_PAGE_SIZE) });
+  if (more && cursor) query.set('before', cursor);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000);
-    let activity;
-    try {
-      activity = await api('/auth/activity', { signal: controller.signal });
-    } finally {
-      clearTimeout(timeout);
-    }
-    if (!activity.length) {
-      latestNotificationId = Math.max(latestNotificationId || 0, 0);
-      list.innerHTML = '<p class="hint">No recent activity is available for your account yet.</p>';
-      return;
-    }
-    latestNotificationId = Math.max(latestNotificationId || 0, ...activity.map(entry => Number(entry.id) || 0));
-    const today = todayISO();
-    const yesterdayDate = new Date(`${today}T12:00:00+05:30`);
-    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-    const yesterday = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
-    }).format(yesterdayDate);
-    const groups = new Map([['Today', []], ['Yesterday', []], ['Earlier', []]]);
-    activity.forEach(entry => {
-      const date = parseTaskFlowTimestamp(entry.created_at);
-      const day = Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
-      }).format(date) : '';
-      groups.get(day === today ? 'Today' : day === yesterday ? 'Yesterday' : 'Earlier').push(entry);
+    const page = await api(`/auth/activity?${query}`, { signal: controller.signal });
+    if (feed !== notificationFeed) return;
+    const rows = Array.isArray(page) ? page : [];
+    rows.forEach(entry => {
+      const key = notificationKey(entry);
+      if (feed.seen.has(key)) return;
+      feed.seen.add(key);
+      feed.items.push(entry);
     });
-    list.innerHTML = Array.from(groups, ([label, entries]) => entries.length ? `
-      <section class="notification-group" aria-label="${label}">
-        <h2>${label}</h2>
-        ${entries.map(entry => {
-          const action = String(entry.action || '').toLowerCase();
-          const iconName = /attendance|punch|location/.test(action) ? 'clock'
-            : /reimburse|expense|receipt/.test(action) ? 'receipt'
-              : /project/.test(action) ? 'folder'
-                : /setting|access|user|permission/.test(action) ? 'settings' : 'check';
-          return `<article class="notification-item">
-            <span class="notification-icon">${icon(iconName)}</span>
-            <div><b>${escapeHtml(entry.action)}</b><p>By ${escapeHtml(entry.actor_name || 'Unknown user')} · ${escapeHtml(fmtDateTime(entry.created_at))}</p>${entry.details ? `<small>${escapeHtml(entry.details)}</small>` : ''}</div>
-          </article>`;
-        }).join('')}
-      </section>` : '').join('');
+    feed.hasMore = rows.length === NOTIFICATION_PAGE_SIZE;
+    latestNotificationId = Math.max(latestNotificationId || 0, 0, ...rows.map(entry => Number(entry.id) || 0));
+    renderNotificationFeed(list, feed);
   } catch (error) {
-    const message = error.name === 'AbortError' ? 'The activity request timed out after 60 seconds.' : error.message;
-    list.innerHTML = `<p class="form-error" role="alert">Unable to load recent activity: ${escapeHtml(message)}</p><button class="btn btn-secondary" id="notifications-retry" type="button">Retry</button>`;
-    $('#notifications-retry').onclick = () => renderNotifications();
+    if (feed !== notificationFeed) return;
+    if (feed.items.length) {
+      const more = $('#notifications-more');
+      if (more) {
+        more.innerHTML = uiErrorState(error, 'notifications-more-retry');
+        $('#notifications-more-retry')?.addEventListener('click', () => renderNotifications({ more: true }));
+      }
+    } else {
+      list.innerHTML = uiErrorState(error, 'notifications-retry');
+      $('#notifications-retry')?.addEventListener('click', () => renderNotifications());
+    }
+  } finally {
+    clearTimeout(timeout);
+    feed.loading = false;
   }
 }
 
@@ -5769,7 +5822,7 @@ async function renderAdmin() {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 60000);
       try {
-        return await api('/auth/activity', { signal: controller.signal });
+        return await api('/auth/activity?limit=100', { signal: controller.signal });
       } catch (error) {
         if (error.name === 'AbortError') throw new Error('/auth/activity timed out after 60 seconds.');
         throw new Error(`/auth/activity: ${error.message}`);
