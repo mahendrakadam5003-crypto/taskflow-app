@@ -675,7 +675,11 @@ html.is-native textarea::placeholder { color: #7B8494; }
     font-weight: 600;
   }
 
-  html.is-native .sidebar { height: 100dvh; }
+  html.is-native .sidebar {
+    height: 100dvh;
+    padding-top: calc(12px + env(safe-area-inset-top));
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
   html.is-native .app.focused-view:not(.drawer-open) .drawer,
   html.is-native .app.project-shell:not(.drawer-open) .drawer { height: calc(100dvh - 52px - env(safe-area-inset-top)); }
   html.is-native .attendance-shift-action { padding: 14px 0; }
