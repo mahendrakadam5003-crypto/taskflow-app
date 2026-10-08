@@ -71,3 +71,22 @@ test('expense approval push identifies the approver, claimant, and expense', () 
     body: "Amit approved Siddhesh's expense: INR 1099.00 - Travel."
   });
 });
+
+test('task check-in and check-out push identify the actor and task', () => {
+  assert.deepEqual(formatActivityNotification({
+    action: 'Task check-in',
+    actor_name: 'Amit',
+    task_title: 'SRS Router Buy'
+  }), {
+    title: 'Task check-in',
+    body: 'Amit checked in to "SRS Router Buy".'
+  });
+  assert.deepEqual(formatActivityNotification({
+    action: 'Task check-out',
+    actor_name: 'Amit',
+    task_title: 'SRS Router Buy'
+  }), {
+    title: 'Task check-out',
+    body: 'Amit checked out of "SRS Router Buy".'
+  });
+});
