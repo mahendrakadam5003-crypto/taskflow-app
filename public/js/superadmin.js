@@ -123,10 +123,12 @@ function renderSummary(summary) {
 }
 
 function renderUserErrors(result) {
-  document.getElementById('user-error-count').textContent = `${result.pendingCount} open`;
+  const pendingCount = result.pendingCount == null ? null : Number(result.pendingCount);
+  const pendingCountLabel = pendingCount == null ? '' : `${pendingCount}${result.pendingCountHasMore ? '+' : ''}`;
+  document.getElementById('user-error-count').textContent = pendingCount == null ? 'Open reports' : `${pendingCountLabel} open`;
   const tabCount = document.getElementById('user-error-tab-count');
-  tabCount.textContent = String(result.pendingCount);
-  tabCount.classList.toggle('hidden', result.pendingCount < 1);
+  tabCount.textContent = pendingCountLabel;
+  tabCount.classList.toggle('hidden', pendingCount == null || pendingCount < 1);
   const list = document.getElementById('user-error-list');
   list.innerHTML = result.errors.length
     ? result.errors.map(error => {

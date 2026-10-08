@@ -507,11 +507,15 @@ test('super-admin Activity exposes safe error diagnostics and resolves reports',
     assert.equal(firstPageResponse.status, 200);
     assert.equal(firstPage.errors.length, 50);
     assert.equal(firstPage.hasMore, true);
+    assert.equal(firstPage.pendingCount, 51);
+    assert.equal(firstPage.pendingCountHasMore, true);
     const secondPageResponse = await fetch(`${baseUrl}/user-errors?offset=50&limit=50`, { headers });
     const secondPage = await secondPageResponse.json();
     assert.equal(secondPageResponse.status, 200);
     assert.equal(secondPage.errors.length, 1);
     assert.equal(secondPage.hasMore, false);
+    assert.equal(secondPage.pendingCount, 51);
+    assert.equal(secondPage.pendingCountHasMore, false);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await controlDb.close();

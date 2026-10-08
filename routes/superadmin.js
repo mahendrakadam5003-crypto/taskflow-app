@@ -616,16 +616,17 @@ function createSuperAdminRouter({
             ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
           args: [limit + 1, requestedOffset]
         };
-      phase = 'report_queries';
-      const [errorsResult, pendingResult] = await Promise.all([
-        controlDb.execute(errorQuery),
-        controlDb.execute('SELECT COUNT(*) AS count FROM user_error_reports WHERE resolved_at IS NULL')
-      ]);
+      phase = 'report_list_query';
+      const errorsResult = await controlDb.execute(errorQuery);
       res.set('Cache-Control', 'no-store');
       const errorRows = errorsResult.rows || [];
+      const hasMore = errorRows.length > limit;
       return res.json({
-        pendingCount: Number(pendingResult.rows?.[0]?.count || 0),
-        hasMore: errorRows.length > limit,
+        pendingCount: status === 'open'
+          ? requestedOffset + Math.min(errorRows.length, limit) + (hasMore ? 1 : 0)
+          : null,
+        pendingCountHasMore: status === 'open' && hasMore,
+        hasMore,
         errors: errorRows.slice(0, limit).map(row => ({
           id: Number(row.id),
           companyId: row.company_id == null ? null : Number(row.company_id),
