@@ -311,8 +311,8 @@ router.get('/projects', async (req, res) => {
   try {
     const admin = req.session.role === 'admin';
     const rows = admin
-      ? await db.prepare('SELECT id,name,created_at,(pin_hash IS NOT NULL) AS locked FROM projects ORDER BY created_at').all()
-      : await db.prepare(`SELECT DISTINCT p.id,p.name,p.created_at,(p.pin_hash IS NOT NULL) AS locked FROM projects p LEFT JOIN project_members pm ON pm.project_id=p.id WHERE p.created_by=? OR pm.user_id=? ORDER BY p.created_at`).all(req.session.userId, req.session.userId);
+      ? await db.prepare('SELECT id,name,created_at,(pin_hash IS NOT NULL) AS locked,show_billing,show_work_location FROM projects ORDER BY created_at').all()
+      : await db.prepare(`SELECT DISTINCT p.id,p.name,p.created_at,(p.pin_hash IS NOT NULL) AS locked,p.show_billing,p.show_work_location FROM projects p LEFT JOIN project_members pm ON pm.project_id=p.id WHERE p.created_by=? OR pm.user_id=? ORDER BY p.created_at`).all(req.session.userId, req.session.userId);
     res.json(rows);
   } catch (err) { sendInternalError(res, err, 'Project list failed'); }
 });
@@ -1142,6 +1142,24 @@ router.put('/project-action-access/:userId', requireAdmin, async (req, res) => {
   }
 });
 
+router.put('/projects/:id/feature-settings', requireAdmin, async (req, res) => {
+  try {
+    const { show_billing, show_work_location } = req.body || {};
+    if (typeof show_billing !== 'boolean' || typeof show_work_location !== 'boolean') {
+      return res.status(400).json({ error: 'Provide show_billing and show_work_location as true or false.' });
+    }
+    const project = await db.prepare('SELECT id, name FROM projects WHERE id=?').get(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found.' });
+    await db.prepare('UPDATE projects SET show_billing=?, show_work_location=? WHERE id=?')
+      .run(show_billing ? 1 : 0, show_work_location ? 1 : 0, req.params.id);
+    await logActivity(req, 'Project settings changed', 'project', project.id,
+      `${project.name}: billing ${show_billing ? 'on' : 'off'}, work location ${show_work_location ? 'on' : 'off'}`, req.session.userId);
+    res.json({ ok: true, show_billing: show_billing ? 1 : 0, show_work_location: show_work_location ? 1 : 0 });
+  } catch (error) {
+    sendInternalError(res, error, 'Project settings could not be saved');
+  }
+});
+
 router.put('/projects/:id', async (req, res) => {
   try {
     if (!(await canAccessProject(req.params.id, req.session.userId, req.session.role === 'admin'))) return res.status(403).json({ error: 'You are not a member of this project.' });
@@ -1294,8 +1312,11 @@ router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
     if (!(await canProjectAction(req, 'create_task'))) return res.status(403).json({ error: 'You do not have permission to create tasks.' });
     if (req.body.work_mode !== undefined && !(await canChangeTaskWorkMode(req))) return res.status(403).json({ error: 'You do not have permission to choose the task work location. Ask an administrator.' });
     const { title, description, assignee_id, due_date, invoice_number, invoice_date, invoice_type, customer_name, total_amount } = req.body;
-    const workMode = req.body.work_mode === 'on_field' ? 'on_field' : 'office';
-    const noBillingRequired = req.body.no_billing_required === true || Number(req.body.no_billing_required) === 1;
+    const features = await db.prepare('SELECT show_billing, show_work_location FROM projects WHERE id=?').get(req.params.id);
+    const billingEnabled = !features || Number(features.show_billing ?? 1) === 1;
+    const workLocationEnabled = !features || Number(features.show_work_location ?? 1) === 1;
+    const workMode = workLocationEnabled && req.body.work_mode === 'on_field' ? 'on_field' : 'office';
+    const noBillingRequired = !billingEnabled || req.body.no_billing_required === true || Number(req.body.no_billing_required) === 1;
     const invoiceType = String(invoice_type || 'gst').trim().toLowerCase();
     if (!INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invoice type must be Cash or GST.' });
     if (!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
@@ -1340,6 +1361,11 @@ router.put('/tasks/:id', async (req, res) => {
     if (Object.keys(req.body).some(key => !['status', 'work_mode'].includes(key)) && !(await canProjectAction(req, 'edit_task'))) return res.status(403).json({ error: 'You do not have permission to edit tasks.' });
     const taskBefore = await db.prepare('SELECT project_id, title, description, status, assignee_id, due_date, payment_member_id, invoice_number, invoice_date, customer_name, total_amount, amount_received, invoice_type, no_billing_required, work_mode FROM tasks WHERE id=?').get(req.params.id);
     if (!taskBefore) return res.status(404).json({ error: 'Task not found.' });
+    const taskFeatures = await db.prepare('SELECT show_billing, show_work_location FROM projects WHERE id=?').get(taskBefore.project_id);
+    if (taskFeatures && Number(taskFeatures.show_work_location ?? 1) !== 1) delete req.body.work_mode;
+    if (taskFeatures && Number(taskFeatures.show_billing ?? 1) !== 1) {
+      for (const key of ['customer_name', 'invoice_number', 'invoice_date', 'invoice_type', 'total_amount', 'no_billing_required']) delete req.body[key];
+    }
     const nextTotalAmount = req.body.total_amount === undefined
       ? Number(taskBefore.total_amount || 0)
       : parseMoneyAmount(req.body.total_amount);
