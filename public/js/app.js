@@ -250,6 +250,36 @@ function reimbursementStatus(status) {
   return reimbursementStatuses[status] || { label: String(status || 'Unknown'), className: 'chip-neutral', step: -1 };
 }
 
+// ================= SHARED UI STATES =================
+// One look for loading, empty, error, offline, slow and permission states on every screen.
+function describeRequestError(error) {
+  if (error?.name === 'AbortError') return { kind: 'timeout', title: 'Taking too long', message: 'The connection looks slow. Check your network and try again.' };
+  if (error?.status === 401) return { kind: 'session', title: 'Session expired', message: 'Please sign in again to continue.' };
+  if (error?.status === 403) return { kind: 'permission', title: 'Access not allowed', message: error.message || 'You do not have permission to see this.' };
+  if (error?.status >= 500) return { kind: 'server', title: 'Something went wrong', message: 'The server could not finish this request. Try again in a moment.' };
+  if (error instanceof TypeError || navigator.onLine === false) return { kind: 'offline', title: 'No connection', message: 'Check your internet connection and try again.' };
+  return { kind: 'error', title: 'Could not load', message: error?.message || 'Something went wrong.' };
+}
+
+function uiLoadingState(label = 'Loading...') {
+  return `<div class="ui-state ui-state-loading" role="status" aria-live="polite"><span class="ui-spinner" aria-hidden="true"></span><span>${escapeHtml(label)}</span><small class="ui-state-slow hidden">Still loading. Your connection may be slow.</small></div>`;
+}
+
+// Shows the "slow connection" note if loading takes longer than delayMs. Returns a function that cancels it.
+function startSlowLoadingHint(container, delayMs = 8000) {
+  const timer = setTimeout(() => container?.querySelector('.ui-state-slow')?.classList.remove('hidden'), delayMs);
+  return () => clearTimeout(timer);
+}
+
+function uiEmptyState({ title, message = '', actionId = '', actionLabel = '' } = {}) {
+  return `<div class="ui-state ui-state-empty"><b>${escapeHtml(title)}</b>${message ? `<p>${escapeHtml(message)}</p>` : ''}${actionId ? `<button class="btn btn-primary" id="${actionId}" type="button">${escapeHtml(actionLabel)}</button>` : ''}</div>`;
+}
+
+function uiErrorState(error, retryId = '') {
+  const info = describeRequestError(error);
+  return `<div class="ui-state ui-state-${info.kind}" role="alert"><b>${escapeHtml(info.title)}</b><p>${escapeHtml(info.message)}</p>${retryId ? `<button class="btn btn-secondary" id="${retryId}" type="button">Try again</button>` : ''}</div>`;
+}
+
 function showAppNotification(message) {
   const bar = $('#app-notification');
   if (!bar) return;
@@ -3049,11 +3079,8 @@ async function renderTasks({ loadMore = false } = {}) {
     }
   } catch (err) {
     if (requestId !== taskListRequestId || Number(CURRENT_PROJECT?.id) !== projectId) return;
-    const message = err.name === 'AbortError'
-      ? 'Task loading timed out. Please try again.'
-      : err.message;
     $('#task-list-loading-more')?.remove();
-    const errorRow = `<tr><td colspan="4" class="form-error">${escapeHtml(message)} <button type="button" class="link-btn" id="task-list-retry">Retry</button></td></tr>`;
+    const errorRow = `<tr><td colspan="4">${uiErrorState(err, 'task-list-retry')}</td></tr>`;
     if (tasks.length) list.insertAdjacentHTML('beforeend', errorRow);
     else list.innerHTML = errorRow;
     $('#task-list-retry').onclick = () => renderTasks({ loadMore: appendPage });
@@ -4483,6 +4510,7 @@ function renderHistory() {
     attendanceHistoryMonth = new Date(Date.UTC(year, month - 1, 1));
   }
   const requestId = ++attendanceHistoryRequestId;
+  if (!calendar.children.length) calendar.innerHTML = uiLoadingState('Loading your attendance...');
   const year = attendanceHistoryMonth.getUTCFullYear();
   const month = attendanceHistoryMonth.getUTCMonth();
   const from = `${year}-${String(month + 1).padStart(2, '0')}-01`;
@@ -4503,7 +4531,10 @@ function renderHistory() {
       renderHistory();
     });
   }).catch(error => {
-    if (requestId === attendanceHistoryRequestId) calendar.innerHTML = `<p class="form-error" role="alert">Attendance history unavailable: ${escapeHtml(error.message)}</p>`;
+    if (requestId === attendanceHistoryRequestId) {
+      calendar.innerHTML = uiErrorState(error, 'attendance-history-retry');
+      $('#attendance-history-retry')?.addEventListener('click', () => renderHistory());
+    }
   });
 }
 
@@ -5996,13 +6027,15 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
     const requestId = ++requestCounter;
     const { year, month, from, to } = activeRange();
     const userId = $('#admin-att-employee').value;
-    calendar.innerHTML = '<p class="hint" role="status">Loading attendance...</p>';
+    calendar.innerHTML = uiLoadingState('Loading attendance...');
+    const stopSlowHint = startSlowLoadingHint(calendar);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
     try {
       // One small row per day from the server, not every punch row for the month.
       const summary = await api(`/attendance/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${filterQuery()}`, { signal: controller.signal });
       clearTimeout(timeout);
+      stopSlowHint();
       if (requestId !== requestCounter) return;
       calendar.innerHTML = attendanceSummaryMonthMarkup(summary, year, month, { admin: !userId, monthNavigation: true, from, to, today });
       const openDay = async date => {
@@ -6035,9 +6068,9 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
       if (openDate) await openDay(openDate);
     } catch (err) {
       clearTimeout(timeout);
+      stopSlowHint();
       if (requestId === requestCounter) {
-        const message = err.name === 'AbortError' ? 'Attendance is taking too long to load.' : err.message;
-        calendar.innerHTML = `<p class="form-error" role="alert">${escapeHtml(message)}</p><button class="btn btn-secondary" id="admin-att-retry" type="button">Retry</button>`;
+        calendar.innerHTML = uiErrorState(err, 'admin-att-retry');
         $('#admin-att-retry').onclick = () => renderRows();
       }
     }
