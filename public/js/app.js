@@ -4492,7 +4492,7 @@ function renderHistory() {
     const rows = Array.isArray(rawRows) ? rawRows.flat(5) : [];
     calendar.innerHTML = attendanceMonthMarkup(rows, year, month, { monthNavigation: true });
     calendar.querySelectorAll('[data-attendance-date]').forEach(button => {
-      button.onclick = () => showAttendanceDayDetails(button.dataset.attendanceDate, rows.filter(row => row.date === button.dataset.attendanceDate));
+      button.onclick = () => showAttendanceDayDetails(button.dataset.attendanceDate, rows.filter(row => row.date === button.dataset.attendanceDate), { withinRange: true });
     });
     $('#attendance-history-prev').onclick = () => {
       attendanceHistoryMonth = new Date(Date.UTC(year, month - 1, 1));
