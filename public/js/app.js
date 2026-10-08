@@ -5864,39 +5864,84 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
   const departments = [...new Set(users.map(u => u.department || u.DEPARTMENT || '').filter(Boolean))].sort();
   const departmentOptions = departments.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
 
+  // The calendar always shows one month. It opens on the current month; a From/To range
+  // inside that month narrows the view and dims the days outside it.
+  const monthBounds = (year, month) => ({
+    from: `${year}-${String(month + 1).padStart(2, '0')}-01`,
+    to: new Date(Date.UTC(year, month + 1, 0)).toISOString().slice(0, 10)
+  });
   const [startYear, startMonth] = today.split('-').map(Number);
+  const defaults = monthBounds(startYear, startMonth - 1);
   let monthStart = new Date(Date.UTC(startYear, startMonth - 1, 1));
+  let rangeFrom = null;
+  let rangeTo = null;
   let requestCounter = 0;
+
+  const activeRange = () => {
+    const year = monthStart.getUTCFullYear();
+    const month = monthStart.getUTCMonth();
+    const bounds = monthBounds(year, month);
+    return { year, month, from: rangeFrom || bounds.from, to: rangeTo || bounds.to };
+  };
 
   wrap.innerHTML = `
     <h2 class="section-title">Attendance calendar</h2>
     <div class="attendance-filters">
+      <label>From <input type="date" id="admin-att-from" value="${defaults.from}"></label>
+      <label>To <input type="date" id="admin-att-to" value="${defaults.to}"></label>
+      <button class="btn btn-secondary btn-sm" id="admin-att-filter" type="button">Filter</button>
       <label>Employee <select id="admin-att-employee"><option value="">All employees</option>${employeeOptions}</select></label>
       <label>Department <select id="admin-att-department"><option value="">All departments</option>${departmentOptions}</select></label>
       <button class="btn btn-secondary" id="admin-att-export" type="button">Export CSV</button>
     </div>
+    <p class="form-error" id="admin-att-range-error" role="alert"></p>
     <div id="admin-attendance-calendar"></div>`;
 
   const calendar = $('#admin-attendance-calendar');
-  const monthRange = () => {
-    const year = monthStart.getUTCFullYear();
-    const month = monthStart.getUTCMonth();
-    return {
-      year,
-      month,
-      from: `${year}-${String(month + 1).padStart(2, '0')}-01`,
-      to: new Date(Date.UTC(year, month + 1, 0)).toISOString().slice(0, 10)
-    };
-  };
   const filterQuery = () => {
     const userId = $('#admin-att-employee').value;
     const department = $('#admin-att-department').value;
     return `${userId ? `&user_id=${encodeURIComponent(userId)}` : ''}${department ? `&department=${encodeURIComponent(department)}` : ''}`;
   };
 
+  const setMonth = date => {
+    monthStart = date;
+    rangeFrom = null;
+    rangeTo = null;
+    const bounds = activeRange();
+    $('#admin-att-from').value = bounds.from;
+    $('#admin-att-to').value = bounds.to;
+    $('#admin-att-range-error').textContent = '';
+    renderRows();
+  };
+
+  const applyRange = () => {
+    const error = $('#admin-att-range-error');
+    const from = $('#admin-att-from').value;
+    const to = $('#admin-att-to').value;
+    if (!from || !to) {
+      error.textContent = 'Choose both From and To dates.';
+      return;
+    }
+    if (from > to) {
+      error.textContent = 'The From date must be before the To date.';
+      return;
+    }
+    if (from.slice(0, 7) !== to.slice(0, 7)) {
+      error.textContent = 'Choose a range within one month. The calendar shows one month at a time.';
+      return;
+    }
+    error.textContent = '';
+    const [year, month] = from.split('-').map(Number);
+    monthStart = new Date(Date.UTC(year, month - 1, 1));
+    rangeFrom = from;
+    rangeTo = to;
+    renderRows();
+  };
+
   const renderRows = async (openDate = null) => {
     const requestId = ++requestCounter;
-    const { year, month, from, to } = monthRange();
+    const { year, month, from, to } = activeRange();
     const userId = $('#admin-att-employee').value;
     calendar.innerHTML = '<p class="hint" role="status">Loading attendance...</p>';
     const controller = new AbortController();
@@ -5906,7 +5951,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
       clearTimeout(timeout);
       if (requestId !== requestCounter) return;
       const rows = Array.isArray(rawRows) ? rawRows : [];
-      calendar.innerHTML = attendanceMonthMarkup(rows, year, month, { admin: !userId, monthNavigation: true });
+      calendar.innerHTML = attendanceMonthMarkup(rows, year, month, { admin: !userId, monthNavigation: true, from, to });
       const openDay = async date => {
         // Admins can punch people in/out from today's details when this device is allowed to punch.
         const allowAdminPunch = date === today && Boolean(myDeviceAccess[`allow_${currentDeviceType()}`]);
@@ -5921,7 +5966,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
         }
         showAttendanceDayDetails(date, dayRows, {
           admin: true,
-          withinRange: true,
+          withinRange: date >= from && date <= to,
           allowAdminPunch,
           onAdminPunch: async (button, selectedDate) => {
             await api(`/attendance/admin-punch-${button.dataset.action}`, {
@@ -5934,14 +5979,8 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
       calendar.querySelectorAll('[data-attendance-date]').forEach(button => {
         button.onclick = () => openDay(button.dataset.attendanceDate);
       });
-      $('#attendance-history-prev').onclick = () => {
-        monthStart = new Date(Date.UTC(year, month - 1, 1));
-        renderRows();
-      };
-      $('#attendance-history-next')?.addEventListener('click', () => {
-        monthStart = new Date(Date.UTC(year, month + 1, 1));
-        renderRows();
-      });
+      $('#attendance-history-prev').onclick = () => setMonth(new Date(Date.UTC(year, month - 1, 1)));
+      $('#attendance-history-next')?.addEventListener('click', () => setMonth(new Date(Date.UTC(year, month + 1, 1))));
       if (openDate) await openDay(openDate);
     } catch (err) {
       clearTimeout(timeout);
@@ -5953,10 +5992,11 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
     }
   };
 
+  $('#admin-att-filter').onclick = applyRange;
   $('#admin-att-employee').onchange = () => renderRows();
   $('#admin-att-department').onchange = () => renderRows();
   $('#admin-att-export').onclick = () => {
-    const { from, to } = monthRange();
+    const { from, to } = activeRange();
     const query = new URLSearchParams({ from, to });
     if ($('#admin-att-employee').value) query.set('user_id', $('#admin-att-employee').value);
     if ($('#admin-att-department').value) query.set('department', $('#admin-att-department').value);
