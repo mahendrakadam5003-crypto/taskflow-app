@@ -103,12 +103,14 @@ test('control database migration is versioned, repeatable, and seeds sample plan
     }
     const migrations = await client.execute('SELECT version FROM control_schema_migrations');
     assert.deepEqual(migrations.rows.map(row => Number(row.version)), [
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, CURRENT_SCHEMA_VERSION
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, CURRENT_SCHEMA_VERSION
     ]);
     const reportIndex = await client.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='user_error_reports_created_idx'");
     assert.equal(reportIndex.rows.length, 1);
     const openReportIndex = await client.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='user_error_reports_status_id_idx'");
     assert.equal(openReportIndex.rows.length, 1);
+    const dedupeIndex = await client.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='user_error_reports_dedupe_idx'");
+    assert.equal(dedupeIndex.rows.length, 1);
     const pricing = await client.execute('SELECT monthly_price_paise, yearly_discount_pct, yearly_price_paise, tax_pct, currency, is_current FROM pricing_versions');
     assert.deepEqual(pricing.rows.map(row => [Number(row.monthly_price_paise), Number(row.yearly_discount_pct), Number(row.yearly_price_paise), Number(row.tax_pct), row.currency, Number(row.is_current)]), [[19900, 10, 214920, 18, 'INR', 1]]);
     const pricingTiers = await client.execute('SELECT tier_key, name, min_seats, max_seats, monthly_price_paise, yearly_price_paise FROM pricing_tiers ORDER BY pricing_version_id, sort_order');
@@ -128,7 +130,7 @@ test('control migration enforces manually approved trials without touching tenan
   try {
     await migrateControlDatabase(client);
     await client.execute("UPDATE pricing_settings SET trial_approval_mode = 'auto' WHERE id = 1");
-    await client.execute('DELETE FROM control_schema_migrations WHERE version IN (13, 14, 15, 16, 17, 18)');
+    await client.execute('DELETE FROM control_schema_migrations WHERE version IN (13, 14, 15, 16, 17, 18, 19)');
     assert.equal(await migrateControlDatabase(client), CURRENT_SCHEMA_VERSION);
     const result = await client.execute('SELECT trial_approval_mode FROM pricing_settings WHERE id = 1');
     assert.equal(result.rows[0].trial_approval_mode, 'manual');
@@ -147,7 +149,7 @@ test('pricing tier migration backfills every version without overwriting custom 
     await migrateControlDatabase(client);
     await client.execute('UPDATE pricing_versions SET monthly_price_paise = 30100, yearly_price_paise = 325080');
     await client.execute('DELETE FROM pricing_tiers');
-    await client.execute('DELETE FROM control_schema_migrations WHERE version IN (14, 15, 16, 17, 18)');
+    await client.execute('DELETE FROM control_schema_migrations WHERE version IN (14, 15, 16, 17, 18, 19)');
     await migrateControlDatabase(client);
     await migrateControlDatabase(client);
 
@@ -181,7 +183,7 @@ test('invoice due-date migration backfills issue dates without overwriting exist
       args: ['INV-DUE-DATE-TEST', '2026-01-01', '2026-02-01', '2026-01-03T00:00:00.000Z']
     });
 
-    await client.execute('DELETE FROM control_schema_migrations WHERE version IN (15, 16, 17, 18)');
+    await client.execute('DELETE FROM control_schema_migrations WHERE version IN (15, 16, 17, 18, 19)');
     await migrateControlDatabase(client);
     let result = await client.execute({
       sql: 'SELECT due_at, created_at FROM invoices WHERE number = ?',
@@ -190,7 +192,7 @@ test('invoice due-date migration backfills issue dates without overwriting exist
     assert.equal(result.rows[0].due_at, result.rows[0].created_at);
 
     await client.execute("UPDATE invoices SET due_at = '2026-01-10T00:00:00.000Z' WHERE number = 'INV-DUE-DATE-TEST'");
-    await client.execute('DELETE FROM control_schema_migrations WHERE version IN (15, 16, 17, 18)');
+    await client.execute('DELETE FROM control_schema_migrations WHERE version IN (15, 16, 17, 18, 19)');
     await migrateControlDatabase(client);
     result = await client.execute({
       sql: 'SELECT due_at FROM invoices WHERE number = ?',

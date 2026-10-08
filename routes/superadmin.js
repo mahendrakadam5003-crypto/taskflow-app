@@ -615,7 +615,7 @@ function createSuperAdminRouter({
       const errorQuery = status === 'all'
         ? {
           sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
-            e.event, e.method, e.route, e.status_code, e.diagnostics, e.created_at, e.resolved_at,
+            e.event, e.method, e.route, e.status_code, e.created_at, e.resolved_at,
             c.name AS company_name, c.code AS registered_company_code
             FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
             ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
@@ -623,18 +623,17 @@ function createSuperAdminRouter({
         }
         : {
           sql: `SELECT e.id, e.company_id, e.company_code, e.actor_user_id, e.request_id,
-            e.event, e.method, e.route, e.status_code, e.diagnostics, e.created_at, e.resolved_at,
+            e.event, e.method, e.route, e.status_code, e.created_at, e.resolved_at,
             c.name AS company_name, c.code AS registered_company_code
             FROM user_error_reports e LEFT JOIN companies c ON c.id = e.company_id
             WHERE e.resolved_at IS NULL
-            ORDER BY e.id DESC LIMIT ? OFFSET ?`,
+            ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?`,
           args: [limit + 1, requestedOffset]
         };
       phase = 'report_list_query';
       reportQueryStartedAt = Date.now();
       const errorsResult = await controlDb.execute(errorQuery);
       const queryMs = Date.now() - reportQueryStartedAt;
-      res.set('Cache-Control', 'no-store');
       const errorRows = errorsResult.rows || [];
       console.info(JSON.stringify({
         event: 'superadmin_user_errors_query_complete',
@@ -643,13 +642,31 @@ function createSuperAdminRouter({
         rows_returned: errorRows.length
       }));
       const hasMore = errorRows.length > limit;
+      const reportRows = errorRows.slice(0, limit);
+      const diagnosticsById = new Map();
+      if (reportRows.length) {
+        phase = 'report_diagnostics_query';
+        const diagnosticsStartedAt = Date.now();
+        const diagnosticsResult = await controlDb.execute({
+          sql: `SELECT id, diagnostics FROM user_error_reports WHERE id IN (${reportRows.map(() => '?').join(', ')})`,
+          args: reportRows.map(row => row.id)
+        });
+        for (const row of diagnosticsResult.rows || []) diagnosticsById.set(Number(row.id), row.diagnostics || null);
+        console.info(JSON.stringify({
+          event: 'superadmin_user_errors_diagnostics_complete',
+          request_id: req.requestId || null,
+          query_ms: Date.now() - diagnosticsStartedAt,
+          rows_returned: diagnosticsResult.rows?.length || 0
+        }));
+      }
+      res.set('Cache-Control', 'no-store');
       return res.json({
         pendingCount: status === 'open'
           ? requestedOffset + Math.min(errorRows.length, limit) + (hasMore ? 1 : 0)
           : null,
         pendingCountHasMore: status === 'open' && hasMore,
         hasMore,
-        errors: errorRows.slice(0, limit).map(row => ({
+        errors: reportRows.map(row => ({
           id: Number(row.id),
           companyId: row.company_id == null ? null : Number(row.company_id),
           companyCode: row.registered_company_code || row.company_code || null,
@@ -662,7 +679,7 @@ function createSuperAdminRouter({
           statusCode: Number(row.status_code),
           diagnostics: (() => {
             try {
-              const parsed = JSON.parse(row.diagnostics || '[]');
+              const parsed = JSON.parse(diagnosticsById.get(Number(row.id)) || '[]');
               return Array.isArray(parsed) ? parsed.slice(0, 4) : [];
             } catch (error) {
               return [];

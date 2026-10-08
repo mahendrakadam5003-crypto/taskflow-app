@@ -8,7 +8,7 @@ test('unexpected errors persist request metadata without exception or request co
   const statements = [];
   const reporter = createUserErrorReporter({
     isConfigured: () => true,
-    getDatabase: async () => ({ execute: async statement => statements.push(statement) })
+    getDatabase: async () => ({ execute: async statement => { statements.push(statement); return { rowsAffected: 1 }; } })
   });
   const request = {
     companyTenantId: 42,
@@ -24,7 +24,8 @@ test('unexpected errors persist request metadata without exception or request co
 
   assert.equal(await reporter(request, 'Task creation failed', 500), true);
   assert.equal(statements.length, 1);
-  assert.deepEqual(statements[0].args, [42, 'small-test', 7, 'request-123', 'task_creation_failed', 'POST', '/api/tasks/:id', 500, null]);
+  assert.deepEqual(statements[0].args, [42, 'small-test', 7, 'request-123', 'task_creation_failed', 'POST', '/api/tasks/:id', 500, null, 42, 'task_creation_failed', '/api/tasks/:id']);
+  assert.match(statements[0].sql, /WHERE NOT EXISTS/);
   assert.doesNotMatch(JSON.stringify(statements[0]), /private-password|private-token|12\.345|67\.89/);
 });
 
@@ -32,7 +33,7 @@ test('error diagnostics retain safe SQLite details and causes without persisting
   const statements = [];
   const reporter = createUserErrorReporter({
     isConfigured: () => true,
-    getDatabase: async () => ({ execute: async statement => statements.push(statement) })
+    getDatabase: async () => ({ execute: async statement => { statements.push(statement); return { rowsAffected: 1 }; } })
   });
   const cause = Object.assign(new Error('private token: abc123'), { code: 'ECONNRESET' });
   const error = Object.assign(new Error('SQLITE_ERROR: no such column: allow_phone'), {
@@ -66,7 +67,7 @@ test('one request produces no duplicate inbox reports when multiple error bounda
   const statements = [];
   const reporter = createUserErrorReporter({
     isConfigured: () => true,
-    getDatabase: async () => ({ execute: async statement => statements.push(statement) })
+    getDatabase: async () => ({ execute: async statement => { statements.push(statement); return { rowsAffected: 1 }; } })
   });
   const request = { method: 'GET', path: '/api/example' };
 
@@ -96,4 +97,34 @@ test('reporting failure is swallowed and emits only a fixed safe event', async (
 
   assert.equal(await reporter({ companyTenantId: 9 }, 'Failure', 500), false);
   assert.deepEqual(logs.map(JSON.parse), [{ event: 'user_error_report_persist_failed', company_id: 9 }]);
+});
+
+test('same event, route, and company are persisted at most once per minute', async () => {
+  const keys = new Set();
+  const statements = [];
+  const reporter = createUserErrorReporter({
+    isConfigured: () => true,
+    getDatabase: async () => ({
+      execute: async statement => {
+        statements.push(statement);
+        const dedupeKey = JSON.stringify(statement.args.slice(-3));
+        if (keys.has(dedupeKey)) return { rowsAffected: 0 };
+        keys.add(dedupeKey);
+        return { rowsAffected: 1 };
+      }
+    })
+  });
+  const makeRequest = companyTenantId => ({
+    companyTenantId,
+    method: 'GET',
+    baseUrl: '/api',
+    path: '/tasks/1',
+    route: { path: '/tasks/:id' }
+  });
+
+  assert.equal(await reporter(makeRequest(42), 'Task read failed', 500), true);
+  assert.equal(await reporter(makeRequest(42), 'Task read failed', 500), false);
+  assert.equal(await reporter(makeRequest(43), 'Task read failed', 500), true);
+  assert.equal(await reporter(makeRequest(42), 'Task update failed', 500), true);
+  assert.equal(statements.length, 4);
 });

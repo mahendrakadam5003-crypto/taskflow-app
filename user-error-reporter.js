@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { getControlDatabase } = require('./control-db');
 const { hasControlDatabaseConfiguration } = require('./tenant-manager');
+const REPORT_DEDUPE_WINDOW = "datetime('now', '-1 minute')";
 
 function normalizeEvent(event) {
   return String(event || 'server_error')
@@ -90,14 +91,20 @@ function createUserErrorReporter({
 
     try {
       const controlDb = await getDatabase();
-      await controlDb.execute({
+      const result = await controlDb.execute({
         sql: `INSERT INTO user_error_reports (
           company_id, company_code, actor_user_id, request_id, event, method, route, status_code, diagnostics
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+        WHERE NOT EXISTS (
+          SELECT 1 FROM user_error_reports
+          WHERE company_id IS ? AND event = ? AND route = ?
+            AND created_at >= ${REPORT_DEDUPE_WINDOW}
+        )`,
         args: [report.companyId, report.companyCode, report.actorUserId, report.requestId,
-          report.event, report.method, report.route, report.statusCode, report.diagnostics]
+          report.event, report.method, report.route, report.statusCode, report.diagnostics,
+          report.companyId, report.event, report.route]
       });
-      return true;
+      return Number(result?.rowsAffected ?? result?.changes ?? 0) === 1;
     } catch (error) {
       logger(JSON.stringify({ event: 'user_error_report_persist_failed', company_id: report.companyId }));
       return false;

@@ -33,7 +33,9 @@ const controlDatabase = {
         registered_company_code: 'small-test'
       }] };
     }
-    if (sql.includes('COUNT(*) AS count FROM user_error_reports')) return { rows: [{ count: 1 }] };
+    if (sql.startsWith('SELECT id, diagnostics FROM user_error_reports WHERE id IN')) {
+      return { rows: [{ id: 19, diagnostics: null }] };
+    }
     if (sql.startsWith('UPDATE user_error_reports')) return { rowsAffected: 1 };
     if (sql.includes('INSERT INTO super_admin_audit')) return { rowsAffected: 1 };
     assert.fail(`Unexpected control database statement: ${sql}`);
