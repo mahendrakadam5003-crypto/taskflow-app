@@ -4806,7 +4806,7 @@ function renderAttendanceDeviceAccess(devices) {
     list.querySelectorAll('.reset-attendance-device').forEach(button => {
       button.onclick = async () => {
         const deviceName = button.dataset.deviceName;
-        const confirmed = await confirmModal('Reset attendance device?', `${deviceName ? `Clear ${deviceName}'s device binding` : "Clear this employee's device binding"}? The employee's next punch will automatically bind the app or browser used.`, 'Reset device', true);
+        const confirmed = await confirmModal('Reset attendance device?', `${deviceName ? `Clear ${escapeHtml(deviceName)}'s device binding` : "Clear this employee's device binding"}? The employee's next punch will automatically bind the app or browser used.`, 'Reset device', true);
         if (!confirmed) return;
         try {
           await api(`/attendance/device-registration/${button.dataset.deviceUser}`, { method: 'DELETE' });
