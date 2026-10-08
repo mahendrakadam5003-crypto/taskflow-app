@@ -2415,7 +2415,11 @@ async function renderReimbursements() {
         ? `Claims ${reimbursementOffset + 1}–${reimbursementOffset + rows.length}`
         : 'No claims';
       table.innerHTML = rows.length ? rows.map(row => {
-        const canApprove = canReview && ((row.status === 'submitted' && (isAdmin || Number(access.approval_level) === 1)) || (row.status === 'approved_level_1' && (isAdmin || Number(access.approval_level) >= 2)));
+        const awaitingDifferentApprover = row.status === 'approved_level_1'
+          && Number(row.approved_level_1_by) === Number(ME?.id);
+        const canApprove = canReview && !awaitingDifferentApprover
+          && ((row.status === 'submitted' && (isAdmin || Number(access.approval_level) === 1))
+            || (row.status === 'approved_level_1' && (isAdmin || Number(access.approval_level) >= 2)));
         const canEdit = !isAdmin && Number(row.user_id) === Number(ME?.id) && row.status === 'submitted';
         const receiptItems = Array.isArray(row.receipt_items) ? row.receipt_items : (row.receipt_url ? [{ url: row.receipt_url, original_name: 'View receipt' }] : []);
         const availableReceiptCount = receiptItems.filter(item => item.url).length;
@@ -2429,7 +2433,7 @@ async function renderReimbursements() {
         <td data-label="Amount">${escapeHtml(row.currency)} ${Number(row.amount).toFixed(2)}</td>
         <td data-label="Receipt">${receiptCell}</td>
         <td data-label="Status"><span class="chip ${reimbursementStatus(row.status).className}">${escapeHtml(reimbursementStatus(row.status).label)}</span>${canReview && row.edited_at ? `<small class="hint">Edited after submission · ${escapeHtml(fmtDateTime(row.edited_at))}</small>` : ''}${row.admin_note ? `<small class="hint">${escapeHtml(row.admin_note)}</small>` : ''}</td>
-        <td data-label="Action">${canReview ? (canApprove ? `<button class="btn btn-primary btn-sm reimbursement-action" data-id="${row.id}" data-status="approved">Approve</button> <button class="btn btn-danger btn-sm reimbursement-action" data-id="${row.id}" data-status="rejected">Reject</button>` : row.status === 'approved' && canPay ? `<button class="btn btn-secondary btn-sm reimbursement-action" data-id="${row.id}" data-status="paid">Mark paid</button>` : '—') : ''}${canEdit ? ` <button class="btn btn-secondary btn-sm reimbursement-edit" data-id="${row.id}" type="button">Edit</button>` : ''}${isAdmin ? ` <button class="btn btn-danger btn-sm reimbursement-delete" data-id="${row.id}">Delete</button>` : ''}</td>
+        <td data-label="Action">${canReview ? (canApprove ? `<button class="btn btn-primary btn-sm reimbursement-action" data-id="${row.id}" data-status="approved">Approve</button> <button class="btn btn-danger btn-sm reimbursement-action" data-id="${row.id}" data-status="rejected">Reject</button>` : awaitingDifferentApprover ? '<span class="hint">Waiting for a different approver</span>' : row.status === 'approved' && canPay ? `<button class="btn btn-secondary btn-sm reimbursement-action" data-id="${row.id}" data-status="paid">Mark paid</button>` : '—') : ''}${canEdit ? ` <button class="btn btn-secondary btn-sm reimbursement-edit" data-id="${row.id}" type="button">Edit</button>` : ''}${isAdmin ? ` <button class="btn btn-danger btn-sm reimbursement-delete" data-id="${row.id}">Delete</button>` : ''}</td>
       </tr>`;
       }).join('') : `<tr><td colspan="${canReview ? 10 : 7}" class="hint" style="text-align:center; padding:15px;">No reimbursement claims found.</td></tr>`;
       if (canReview) {
