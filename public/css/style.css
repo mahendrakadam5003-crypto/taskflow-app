@@ -739,3 +739,22 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .ui-state-error b, .ui-state-timeout b, .ui-state-server b { color: var(--red); }
 .ui-state-offline b, .ui-state-session b, .ui-state-permission b { color: var(--ink); }
 @media (prefers-reduced-motion: reduce) { .ui-spinner { animation: none; } }
+
+/* ---------- skeleton loading ---------- */
+.ui-skeleton { display: grid; gap: 10px; padding: 8px 0; }
+.ui-skel { display: block; background: linear-gradient(90deg, var(--surface-2) 25%, var(--line) 50%, var(--surface-2) 75%); background-size: 200% 100%; border-radius: 6px; animation: ui-shimmer 1.4s ease-in-out infinite; }
+@keyframes ui-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.ui-skel-heading { display: grid; grid-template-columns: 32px 1fr 32px; align-items: center; gap: 10px; margin-bottom: 12px; }
+.ui-skel-title { height: 18px; width: 60%; justify-self: center; }
+.ui-skel-arrow { height: 30px; width: 30px; border-radius: 6px; }
+.ui-skel-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.ui-skel-summary .ui-skel { height: 54px; }
+.ui-skel-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.ui-skel-cell { aspect-ratio: 1; border-radius: 50%; }
+.ui-skel-line { display: grid; grid-template-columns: 28px 1fr 64px; align-items: center; gap: 12px; padding: 10px 12px; }
+.ui-skel-avatar { width: 28px; height: 28px; border-radius: 50%; }
+.ui-skel-text { height: 14px; width: 70%; }
+.ui-skel-chip { height: 22px; width: 64px; border-radius: 999px; }
+@media (prefers-reduced-motion: reduce) { .ui-skel { animation: none; } }
+.ui-skel-inline { display: inline-block; width: 72px; height: 1em; vertical-align: middle; border-radius: 4px; }
+.ui-skel-inline-sm { width: 110px; }
