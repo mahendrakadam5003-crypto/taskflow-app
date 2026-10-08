@@ -780,3 +780,9 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 /* ---------- project feature settings ---------- */
 .feature-toggle { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-size: 14px; }
 .feature-toggle input { width: 16px; height: 16px; }
+
+/* ---------- notifications: tappable items with context ---------- */
+.notification-item.is-clickable { cursor: pointer; }
+.notification-item.is-clickable:hover, .notification-item.is-clickable:focus-visible { background: var(--surface-2); outline: none; }
+.notification-subject { display: block; margin-top: 3px; color: var(--ink); font-weight: 600; }
+.notification-detail { margin: 3px 0 0; color: var(--ink-2, var(--ink)); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
