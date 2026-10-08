@@ -32,9 +32,14 @@ function logCompanyEvent(companyId, event, level = 'error') {
 }
 
 function sendInternalError(res, error, context) {
+  // TEMPORARY DEBUG: remove debug_* fields once the cause is found.
   console.error(JSON.stringify({
     event: String(context || 'request_failed').slice(0, 100),
-    company_id: res.locals?.company_id ?? null
+    company_id: res.locals?.company_id ?? null,
+    debug_message: String(error?.message || '').slice(0, 300),
+    debug_code: error?.code || null,
+    debug_cause: String(error?.cause?.message || '').slice(0, 300),
+    debug_at: String(error?.stack || '').split('\n')[1]?.trim() || null
   }));
   Promise.resolve(res.locals?.reportUserError?.(context || 'request_failed', 500, error)).catch(() => {});
   if (res.headersSent) return;
