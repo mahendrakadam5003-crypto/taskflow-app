@@ -3865,8 +3865,9 @@ const renderActivity = () => {
       const recordTaskLocation = async (path, message) => {
         try {
           if (path === 'check-in') await saveChanges();
+          const verificationMethod = await verifyAttendanceIfRequired(path === 'check-in' ? 'in' : 'out', 'task');
           const coords = await getLiveCoords();
-          await api(`/tasks/${taskId}/${path}`, { method: 'POST', body: coords });
+          await api(`/tasks/${taskId}/${path}`, { method: 'POST', body: { ...coords, verification_method: verificationMethod } });
           await renderTasks();
           await openTaskDrawer(taskId);
         } catch (error) { showAppNotification(error.message); }
@@ -4369,7 +4370,7 @@ async function waitForNativeBridge(timeoutMs = 4000) {
   return Boolean(window.TaskFlowBiometricAuth);
 }
 
-async function verifyAttendanceIfRequired(action) {
+async function verifyAttendanceIfRequired(action, context = 'punch') {
   const setting = await api('/attendance/verification-required');
   if (!setting.required) return null;
   const insideApp = Boolean(window.Capacitor?.isNativePlatform?.());
@@ -4385,7 +4386,7 @@ async function verifyAttendanceIfRequired(action) {
   if (!insideApp) {
     setAttendanceBiometricFeedback('error', 'Open the TaskFlow mobile app to punch.');
     await vibrateAttendance(2);
-    throw new Error('Attendance verification requires the installed TaskFlow mobile app.');
+    throw new Error('Verification requires the installed TaskFlow mobile app.');
   }
   if (!biometricAuth) {
     setAttendanceBiometricFeedback('error', 'Phone verification did not load. Check your connection and try again.');
@@ -4395,8 +4396,8 @@ async function verifyAttendanceIfRequired(action) {
   setAttendanceBiometricFeedback('pending', 'Verify with fingerprint or phone screen lock.');
   try {
     await biometricAuth.authenticate({
-      reason: `Verify identity before punch ${action}`,
-      androidTitle: `Verify before punch ${action}`,
+      reason: `Verify identity before ${context} ${action}`,
+      androidTitle: `Verify before ${context} ${action}`,
       androidSubtitle: 'Use fingerprint, face, or your phone screen lock',
       allowDeviceCredential: true,
       androidConfirmationRequired: false,
