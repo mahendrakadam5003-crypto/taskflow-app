@@ -548,6 +548,9 @@ function openReceiptPreview(urls, initialIndex = 0) {
   if (!urls.length) return;
   let index = Math.max(0, Math.min(initialIndex, urls.length - 1));
   let scale = 1;
+  let rotation = 0;
+  let offsetX = 0;
+  let offsetY = 0;
   const render = () => {
     showModal(`
       <div class="receipt-preview-modal">
@@ -556,17 +559,88 @@ function openReceiptPreview(urls, initialIndex = 0) {
           <div>
             <button class="btn btn-secondary btn-sm" id="receipt-zoom-out" type="button">−</button>
             <button class="btn btn-secondary btn-sm" id="receipt-zoom-in" type="button">+</button>
+            <button class="btn btn-secondary btn-sm" id="receipt-rotate-left" type="button" aria-label="Rotate counterclockwise" title="Rotate counterclockwise">↶</button>
+            <button class="btn btn-secondary btn-sm" id="receipt-rotate-right" type="button" aria-label="Rotate clockwise" title="Rotate clockwise">↻</button>
+            <button class="btn btn-secondary btn-sm" id="receipt-preview-reset" type="button">Reset</button>
             <button class="btn btn-secondary btn-sm" id="receipt-preview-close" type="button">Close</button>
           </div>
         </div>
-        <div class="receipt-preview-stage"><img id="receipt-preview-image" src="${urls[index]}" alt="Receipt preview" style="transform:scale(${scale})"></div>
+        <div class="receipt-preview-stage"><img id="receipt-preview-image" src="${urls[index]}" alt="Receipt preview" draggable="false"></div>
         ${urls.length > 1 ? `<div class="receipt-preview-navigation"><button class="btn btn-secondary btn-sm" id="receipt-prev" type="button" ${index === 0 ? 'disabled' : ''}>Previous</button><button class="btn btn-secondary btn-sm" id="receipt-next" type="button" ${index === urls.length - 1 ? 'disabled' : ''}>Next</button></div>` : ''}
       </div>`);
+    const image = $('#receipt-preview-image');
+    const stage = $('.receipt-preview-stage');
+    const activePointers = new Map();
+    let dragStart = null;
+    let pinchStart = null;
+    const clampScale = value => Math.max(.5, Math.min(6, value));
+    const updateTransform = () => {
+      image.style.transform = `translate(${offsetX}px, ${offsetY}px) rotate(${rotation}deg) scale(${scale})`;
+      image.style.cursor = activePointers.size ? 'grabbing' : 'grab';
+    };
+    const resetTransform = () => {
+      scale = 1;
+      rotation = 0;
+      offsetX = 0;
+      offsetY = 0;
+      updateTransform();
+    };
+    const pointerDistance = () => {
+      const [first, second] = [...activePointers.values()];
+      return Math.hypot(second.x - first.x, second.y - first.y);
+    };
+    stage.addEventListener('wheel', event => {
+      event.preventDefault();
+      scale = clampScale(scale * Math.exp(-event.deltaY * .001));
+      updateTransform();
+    }, { passive: false });
+    stage.addEventListener('pointerdown', event => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      event.preventDefault();
+      stage.setPointerCapture(event.pointerId);
+      activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (activePointers.size === 1) {
+        dragStart = { x: event.clientX, y: event.clientY, offsetX, offsetY };
+      } else {
+        dragStart = null;
+        pinchStart = { distance: pointerDistance(), scale };
+      }
+      updateTransform();
+    });
+    stage.addEventListener('pointermove', event => {
+      if (!activePointers.has(event.pointerId)) return;
+      activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (activePointers.size > 1 && pinchStart) {
+        scale = clampScale(pinchStart.scale * pointerDistance() / Math.max(1, pinchStart.distance));
+      } else if (dragStart) {
+        offsetX = dragStart.offsetX + event.clientX - dragStart.x;
+        offsetY = dragStart.offsetY + event.clientY - dragStart.y;
+      }
+      updateTransform();
+    });
+    const finishPointer = event => {
+      if (!activePointers.has(event.pointerId)) return;
+      activePointers.delete(event.pointerId);
+      pinchStart = null;
+      if (activePointers.size === 1) {
+        const remaining = [...activePointers.values()][0];
+        dragStart = { x: remaining.x, y: remaining.y, offsetX, offsetY };
+      } else {
+        dragStart = null;
+      }
+      updateTransform();
+    };
+    stage.addEventListener('pointerup', finishPointer);
+    stage.addEventListener('pointercancel', finishPointer);
     $('#receipt-preview-close').onclick = closeModal;
-    $('#receipt-zoom-out').onclick = () => { scale = Math.max(.5, scale - .25); render(); };
-    $('#receipt-zoom-in').onclick = () => { scale = Math.min(3, scale + .25); render(); };
-    $('#receipt-prev')?.addEventListener('click', () => { index -= 1; scale = 1; render(); });
-    $('#receipt-next')?.addEventListener('click', () => { index += 1; scale = 1; render(); });
+    $('#receipt-zoom-out').onclick = () => { scale = clampScale(scale - .25); updateTransform(); };
+    $('#receipt-zoom-in').onclick = () => { scale = clampScale(scale + .25); updateTransform(); };
+    $('#receipt-rotate-left').onclick = () => { rotation = (rotation - 90 + 360) % 360; updateTransform(); };
+    $('#receipt-rotate-right').onclick = () => { rotation = (rotation + 90) % 360; updateTransform(); };
+    $('#receipt-preview-reset').onclick = resetTransform;
+    $('#receipt-prev')?.addEventListener('click', () => { index -= 1; resetTransform(); render(); });
+    $('#receipt-next')?.addEventListener('click', () => { index += 1; resetTransform(); render(); });
+    updateTransform();
   };
   render();
 }

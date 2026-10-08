@@ -485,10 +485,10 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .receipt-document-link { align-self: center; color: var(--green); font-size: 13px; }
 .modal.receipt-preview-dialog { width: min(900px, calc(100vw - 32px)); max-width: calc(100vw - 32px); box-sizing: border-box; }
 .receipt-preview-modal { width: 100%; }
-.receipt-preview-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
-.receipt-preview-toolbar > div { display: flex; gap: 6px; }
-.receipt-preview-stage { min-height: 300px; max-height: 70vh; overflow: auto; display: grid; place-items: center; padding: 12px; background: #f4f6f5; border: 1px solid var(--line); border-radius: 8px; }
-.receipt-preview-stage img { display: block; width: auto; height: auto; max-width: 100%; max-height: 64vh; object-fit: contain; transform-origin: center center; transition: transform .15s ease; }
+.receipt-preview-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+.receipt-preview-toolbar > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.receipt-preview-stage { min-height: 300px; max-height: 70vh; overflow: hidden; display: grid; place-items: center; padding: 12px; background: #f4f6f5; border: 1px solid var(--line); border-radius: 8px; touch-action: none; user-select: none; -webkit-user-select: none; }
+.receipt-preview-stage img { display: block; width: auto; height: auto; max-width: 100%; max-height: 64vh; object-fit: contain; transform-origin: center center; transition: transform .08s linear; user-select: none; -webkit-user-drag: none; }
 .receipt-preview-navigation { display: flex; justify-content: space-between; margin-top: 10px; }
 .reimbursement-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
 .reimbursement-summary-card { min-height: 112px; display: flex; flex-direction: column; justify-content: space-between; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: 0 5px 16px rgba(20,33,61,.05); }
