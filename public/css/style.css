@@ -693,6 +693,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .attendance-calendar-day.has-attendance { background: var(--green-bg); color: var(--green); }
 .attendance-calendar-day.is-today { outline: 2px solid var(--brand); outline-offset: 1px; }
 .attendance-calendar-day.outside-range { opacity: .32; }
+.attendance-calendar-day.is-absent { background: #fde8e8; color: #b42318; }
 .attendance-calendar-day-number { font-size: 14px; font-weight: 650; }
 .attendance-calendar-day-count { max-width: 100%; overflow: hidden; font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .attendance-day-dialog { max-height: min(78dvh, 720px); overflow-y: auto; }
