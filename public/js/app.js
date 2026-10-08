@@ -252,7 +252,19 @@ const reimbursementStatuses = {
   paid: { label: 'Paid', className: 'chip-success', step: 3 },
   rejected: { label: 'Rejected', className: 'chip-danger', step: 0 }
 };
+let reimbursementApprovalLevels = 2;
+function reimbursementStepLabels() {
+  return ['Submitted', ...Array.from({ length: reimbursementApprovalLevels }, (_, index) => `Level ${index + 1}`), 'Paid'];
+}
+function reimbursementStatusFilterOptions() {
+  return Array.from({ length: Math.max(reimbursementApprovalLevels - 1, 0) }, (_, index) =>
+    `<option value="approved_level_${index + 1}">Level ${index + 1} approved</option>`).join('');
+}
 function reimbursementStatus(status) {
+  const levelMatch = /^approved_level_(\d+)$/.exec(String(status || ''));
+  if (levelMatch) return { label: `Level ${levelMatch[1]} approved`, className: 'chip-warning', step: Number(levelMatch[1]) };
+  if (status === 'approved') return { label: 'Approved', className: 'chip-info', step: reimbursementApprovalLevels };
+  if (status === 'paid') return { label: 'Paid', className: 'chip-success', step: reimbursementApprovalLevels + 1 };
   return reimbursementStatuses[status] || { label: String(status || 'Unknown'), className: 'chip-neutral', step: -1 };
 }
 
@@ -579,7 +591,7 @@ function openReimbursementDrawer(row) {
   statusElement.textContent = status.label;
   statusElement.className = `chip ${status.className}`;
   const stepElement = $('#reimbursement-detail-steps');
-  const stepLabels = ['Submitted', 'Level 1', 'Level 2', 'Paid'];
+  const stepLabels = reimbursementStepLabels();
   stepElement.classList.toggle('is-rejected', row.status === 'rejected');
   stepElement.innerHTML = stepLabels.map((label, index) => `<div class="reimbursement-step ${index < status.step ? 'complete' : ''} ${index === status.step ? 'current' : ''}"><span>${index < status.step ? '✓' : index + 1}</span><small>${label}</small></div>`).join('');
   $('#reimbursement-detail-note').textContent = row.admin_note || 'No note';
@@ -1954,7 +1966,8 @@ async function enterApp() {
       api('/project-action-access/me'),
       api('/auth/reimbursement-access/me')
     ]);
-    const canViewDirectory = ME.role === 'admin' || paymentAccess.allowed || Number(reimbursementAccess.approval_level) > 0;
+    if (reimbursementAccess?.approval_levels) reimbursementApprovalLevels = Number(reimbursementAccess.approval_levels) || 2;
+  const canViewDirectory = ME.role === 'admin' || paymentAccess.allowed || Number(reimbursementAccess.approval_level) > 0;
     const rawPeople = canViewDirectory
       ? await api('/auth/users/directory').catch((error) => {
         if (error.status !== 403) throw error;
@@ -2321,6 +2334,7 @@ async function renderReimbursements() {
   if (!wrap.children.length) wrap.innerHTML = uiSkeletonRows(4);
   const isAdmin = ME && ME.role === 'admin';
   const access = await api('/auth/reimbursement-access/me');
+  reimbursementApprovalLevels = Number(access.approval_levels) || 2;
   const canReview = isAdmin || Number(access.approval_level) > 0;
   const canPay = isAdmin || Number(access.can_pay) === 1;
   const peopleOptions = PEOPLE.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('');
@@ -2362,7 +2376,7 @@ async function renderReimbursements() {
       <h3>${canReview ? 'Expense approvals' : 'My expense claims'}</h3>
       <div class="attendance-filters">
         ${canReview ? `<label>Employee <select id="reimbursement-user"><option value="">All employees</option>${peopleOptions}</select></label>
-        <label>Status <select id="reimbursement-status"><option value="">All statuses</option><option>submitted</option><option>approved_level_1</option><option>approved</option><option>rejected</option><option>paid</option></select></label>` : ''}
+        <label>Status <select id="reimbursement-status"><option value="">All statuses</option><option>submitted</option>${reimbursementStatusFilterOptions()}<option>approved</option><option>rejected</option><option>paid</option></select></label>` : ''}
         <label>From <input type="date" id="reimbursement-from"></label>
         <label>To <input type="date" id="reimbursement-to"></label>
         <button class="btn btn-primary" id="reimbursement-filter">Filter</button>
@@ -2526,11 +2540,13 @@ async function renderReimbursements() {
         ? `Claims ${reimbursementOffset + 1}–${reimbursementOffset + rows.length}`
         : 'No claims';
       table.innerHTML = rows.length ? rows.map(row => {
-        const awaitingDifferentApprover = row.status === 'approved_level_1'
-          && Number(row.approved_level_1_by) === Number(ME?.id);
-        const canApprove = canReview && !awaitingDifferentApprover
-          && ((row.status === 'submitted' && (isAdmin || Number(access.approval_level) === 1))
-            || (row.status === 'approved_level_1' && (isAdmin || Number(access.approval_level) >= 2)));
+        const stageMatch = /^approved_level_(\d+)$/.exec(String(row.status || ''));
+        const pendingStage = row.status === 'submitted' ? 1 : (stageMatch ? Number(stageMatch[1]) + 1 : 0);
+        const earlierApprovers = String(row.approval_trail || '').split(',')
+          .concat(row.approved_level_1_by ? [String(row.approved_level_1_by)] : []);
+        const alreadyApproved = earlierApprovers.includes(String(ME?.id));
+        const canApprove = canReview && pendingStage > 0 && !alreadyApproved
+          && (isAdmin || Number(access.approval_level) >= Math.min(pendingStage, reimbursementApprovalLevels));
         const canEdit = !isAdmin && Number(row.user_id) === Number(ME?.id) && row.status === 'submitted';
         const receiptItems = Array.isArray(row.receipt_items) ? row.receipt_items : (row.receipt_url ? [{ url: row.receipt_url, original_name: 'View receipt' }] : []);
         const availableReceiptCount = receiptItems.filter(item => item.url).length;
@@ -4970,7 +4986,12 @@ async function renderAdmin() {
 
       <div class="admin-block">
         <h3>Reimbursement approval access</h3>
-        <p class="hint">Level 1 approves first. Final approver + payer can approve the second stage and mark approved claims as paid.</p>
+        <p class="hint">Claims pass through each approval level in order. The final approver + payer approves the last stage and marks approved claims as paid.</p>
+        <div class="admin-form-row">
+          <label>Approval levels <select id="reimbursement-levels-select" aria-label="Number of approval levels">${[1, 2, 3, 4, 5].map(count => `<option value="${count}">${count}</option>`).join('')}</select></label>
+          <button class="btn btn-secondary btn-sm" id="save-reimbursement-levels" type="button">Save levels</button>
+          <span class="hint">Each company chooses how many approval stages a claim needs.</span>
+        </div>
         <div id="reimbursement-access-list"></div>
       </div>
 
@@ -5701,20 +5722,33 @@ async function renderAdmin() {
     });
     addAdminListPagination(departmentList, 'Search departments');
 
+    await api('/auth/reimbursement-access/me').then(me => { reimbursementApprovalLevels = Number(me.approval_levels) || 2; }).catch(() => {});
     const accessList = $('#reimbursement-access-list');
     reimbursementAccess.forEach((person) => {
       const row = document.createElement('div');
-      row.className = 'admin-form-row';
-      row.innerHTML = `<b style="min-width:180px;">${escapeHtml(person.name)}</b>
-        <select class="reimbursement-access-level" data-user-id="${person.user_id}">
-          <option value="0" ${Number(person.approval_level) === 0 ? 'selected' : ''}>No access</option>
-          <option value="1" ${Number(person.approval_level) === 1 ? 'selected' : ''}>Level 1 approver</option>
-          <option value="2" ${Number(person.approval_level) === 2 ? 'selected' : ''}>Final approver + payer</option>
-        </select>
+      row.className = 'reimbursement-access-row';
+      const levelOptions = Array.from({ length: reimbursementApprovalLevels + 1 }, (_, level) => {
+        const label = level === 0 ? 'No access' : (level === reimbursementApprovalLevels ? 'Final approver + payer' : `Level ${level} approver`);
+        return `<option value="${level}" ${Number(person.approval_level) === level ? 'selected' : ''}>${label}</option>`;
+      }).join('');
+      row.innerHTML = `<b class="reimbursement-access-name">${escapeHtml(person.name)}</b>
+        <select class="reimbursement-access-level" data-user-id="${person.user_id}" aria-label="Approval level for ${escapeHtml(person.name)}">${levelOptions}</select>
         <button class="btn btn-secondary btn-sm save-reimbursement-access" data-user-id="${person.user_id}">Save</button>`;
       accessList.appendChild(row);
     });
     addAdminListPagination(accessList, 'Search approvers by name or username');
+    $('#reimbursement-levels-select').value = String(reimbursementApprovalLevels);
+    $('#save-reimbursement-levels')?.addEventListener('click', async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        await api('/auth/settings', { method: 'PUT', body: { reimbursement_approval_levels: Number($('#reimbursement-levels-select').value) } });
+        reloadWithActionMessage('admin', 'Approval levels saved. Claims already in progress keep their current approvals.');
+      } catch (error) {
+        showAppNotification(error.message);
+        button.disabled = false;
+      }
+    });
 
     const trackingAccessList = $('#tracking-access-list');
     trackingAccess.forEach((person) => {
@@ -5893,7 +5927,7 @@ async function renderAdmin() {
       button.onclick = async () => {
         const select = document.querySelector(`.reimbursement-access-level[data-user-id="${button.dataset.userId}"]`);
         await api(`/auth/reimbursement-access/${button.dataset.userId}`, {
-          method: 'PUT', body: { approval_level: Number(select.value), can_pay: select.value === '2' }
+          method: 'PUT', body: { approval_level: Number(select.value), can_pay: Number(select.value) === reimbursementApprovalLevels }
         });
         refreshNotificationsAfterAction();
         renderAdmin();
