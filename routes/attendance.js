@@ -831,6 +831,31 @@ router.get('/', requireAdmin, async (req, res) => {
   }
 });
 
+// admin: one small row per day for the calendar (counts only, no punch rows)
+router.get('/calendar', requireAdmin, async (req, res) => {
+  const { from, to, user_id, department } = req.query;
+  if (!from || !to) return res.status(400).json({ error: 'from and to are required.' });
+  const filters = ['a.date >= ?', 'a.date <= ?'];
+  const params = [from, to];
+  if (user_id) { filters.push('a.user_id = ?'); params.push(user_id); }
+  if (department) { filters.push('u.department = ?'); params.push(department); }
+  const days = await db.prepare(`SELECT a.date AS date,
+      COUNT(DISTINCT a.user_id) AS present,
+      SUM(CASE WHEN a.punch_in IS NOT NULL THEN 1 ELSE 0 END) AS punch_ins,
+      SUM(CASE WHEN a.punch_out IS NOT NULL THEN 1 ELSE 0 END) AS punch_outs
+    FROM attendance a JOIN users u ON u.id = a.user_id
+    WHERE ${filters.join(' AND ')} AND (a.punch_in IS NOT NULL OR a.punch_out IS NOT NULL)
+    GROUP BY a.date ORDER BY a.date`).all(...params);
+
+  const staffFilters = ['active = 1'];
+  const staffParams = [];
+  if (user_id) { staffFilters.push('id = ?'); staffParams.push(user_id); }
+  if (department) { staffFilters.push('department = ?'); staffParams.push(department); }
+  const staff = await db.prepare(`SELECT COUNT(*) AS total FROM users WHERE ${staffFilters.join(' AND ')}`).get(...staffParams);
+
+  res.json({ days, active_staff: Number(staff?.total || 0) });
+});
+
 // admin: who is currently active right now
 router.get('/live', requireAdmin, async (req, res) => {
   const rows = await db.prepare(`
