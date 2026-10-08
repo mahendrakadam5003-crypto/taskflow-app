@@ -2220,7 +2220,12 @@ async function renderReimbursements() {
       <div class="reimbursement-summary-card"><span>Pending</span><b class="pending" id="reimbursement-pending-amount">Loading...</b></div>
       <div class="reimbursement-summary-card"><span>Approved</span><b class="approved" id="reimbursement-approved-amount">Loading...</b></div>
     </div>`;
-  const reimbursementForm = `
+  const employeeOverview = isAdmin ? `<div class="admin-block">${reimbursementSummary}</div>` : `
+    <div class="admin-block">
+      <div id="employee-reimbursement-overview">
+        ${reimbursementSummary}
+        <div class="reimbursement-section-heading"><h3>Recent expenses</h3><button class="btn btn-primary" id="reimbursement-new-expense" type="button">+ New expense</button></div>
+      </div>
       <div id="employee-reimbursement-form" class="hidden">
         <div class="reimbursement-section-heading"><h3 id="reimbursement-form-title">Submit expense</h3><button class="btn btn-secondary" id="reimbursement-cancel-new" type="button">Back to expenses</button></div>
         <form id="reimbursement-form" class="admin-form-row">
@@ -2236,21 +2241,7 @@ async function renderReimbursements() {
         </form>
         <div id="reimbursement-form-error" class="form-error"></div>
         <div id="reimbursement-form-success" style="color:#25602a; font-size:13px; min-height:16px;"></div>
-      </div>`;
-  const employeeOverview = isAdmin ? `
-    <div class="admin-block">
-      <div id="employee-reimbursement-overview">
-        ${reimbursementSummary}
-        <div class="reimbursement-section-heading"><h3>My expenses</h3><button class="btn btn-primary" id="reimbursement-new-expense" type="button">+ New expense</button></div>
       </div>
-      ${reimbursementForm}
-    </div>` : `
-    <div class="admin-block">
-      <div id="employee-reimbursement-overview">
-        ${reimbursementSummary}
-        <div class="reimbursement-section-heading"><h3>Recent expenses</h3><button class="btn btn-primary" id="reimbursement-new-expense" type="button">+ New expense</button></div>
-      </div>
-      ${reimbursementForm}
     </div>`;
 
   wrap.innerHTML = `
@@ -2531,43 +2522,45 @@ async function renderReimbursements() {
     }
   };
 
-  $('#reimbursement-new-expense')?.addEventListener('click', () => showExpenseForm());
-  $('#reimbursement-cancel-new')?.addEventListener('click', hideExpenseForm);
-  $('#reimbursement-form')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const editing = editingReimbursementId !== null;
-    const formData = new FormData();
-    formData.append('amount', $('#reimbursement-amount').value);
-    formData.append('currency', $('#reimbursement-currency').value);
-    formData.append('category', $('#reimbursement-category').value);
-    formData.append('expense_date', $('#reimbursement-date').value);
-    formData.append('description', $('#reimbursement-description').value.trim());
-    if (!editing) formData.append('submission_key', reimbursementSubmissionKey || crypto.randomUUID());
-    selectedReceiptFiles.forEach(receipt => formData.append('receipt', receipt));
-    const response = await fetch(editing ? `/api/reimbursements/${editingReimbursementId}` : '/api/reimbursements', {
-      method: editing ? 'PUT' : 'POST', body: formData, credentials: 'same-origin'
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) { $('#reimbursement-form-error').textContent = result.error || 'Unable to save expense.'; return; }
-    if (!editing) reimbursementOffset = 0;
-    editingReimbursementId = null;
-    reimbursementSubmissionKey = null;
-    $('#reimbursement-form').reset();
-    $('#reimbursement-date').value = todayISO();
-    $('#reimbursement-form-title').textContent = 'Submit expense';
-    $('#reimbursement-submit').textContent = 'Submit claim';
-    $('#reimbursement-receipt').value = '';
-    selectedReceiptFiles = [];
-    updateReceiptSelection();
-    $('#reimbursement-description').style.height = 'auto';
-    $('#reimbursement-form-error').textContent = '';
-    $('#reimbursement-form-success').textContent = editing ? 'Expense updated successfully.' : 'Expense submitted successfully.';
-    $('#employee-reimbursement-form').classList.add('hidden');
-    $('#employee-reimbursement-overview').classList.remove('hidden');
-    await refreshReimbursementSummary();
-    await renderRows();
-    showAppNotification(editing ? 'Expense updated successfully.' : 'Expense submitted successfully.');
-  });
+  if (!isAdmin) {
+    $('#reimbursement-new-expense').onclick = () => showExpenseForm();
+    $('#reimbursement-cancel-new').onclick = hideExpenseForm;
+    $('#reimbursement-form').onsubmit = async (event) => {
+      event.preventDefault();
+      const editing = editingReimbursementId !== null;
+      const formData = new FormData();
+      formData.append('amount', $('#reimbursement-amount').value);
+      formData.append('currency', $('#reimbursement-currency').value);
+      formData.append('category', $('#reimbursement-category').value);
+      formData.append('expense_date', $('#reimbursement-date').value);
+      formData.append('description', $('#reimbursement-description').value.trim());
+      if (!editing) formData.append('submission_key', reimbursementSubmissionKey || crypto.randomUUID());
+      selectedReceiptFiles.forEach(receipt => formData.append('receipt', receipt));
+      const response = await fetch(editing ? `/api/reimbursements/${editingReimbursementId}` : '/api/reimbursements', {
+        method: editing ? 'PUT' : 'POST', body: formData, credentials: 'same-origin'
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) { $('#reimbursement-form-error').textContent = result.error || 'Unable to save expense.'; return; }
+      if (!editing) reimbursementOffset = 0;
+      editingReimbursementId = null;
+      reimbursementSubmissionKey = null;
+      $('#reimbursement-form').reset();
+      $('#reimbursement-date').value = todayISO();
+      $('#reimbursement-form-title').textContent = 'Submit expense';
+      $('#reimbursement-submit').textContent = 'Submit claim';
+      $('#reimbursement-receipt').value = '';
+      selectedReceiptFiles = [];
+      updateReceiptSelection();
+      $('#reimbursement-description').style.height = 'auto';
+      $('#reimbursement-form-error').textContent = '';
+      $('#reimbursement-form-success').textContent = editing ? 'Expense updated successfully.' : 'Expense submitted successfully.';
+      $('#employee-reimbursement-form').classList.add('hidden');
+      $('#employee-reimbursement-overview').classList.remove('hidden');
+      await refreshReimbursementSummary();
+      await renderRows();
+      showAppNotification(editing ? 'Expense updated successfully.' : 'Expense submitted successfully.');
+    };
+  }
   ['reimbursement-user', 'reimbursement-status', 'reimbursement-from', 'reimbursement-to'].forEach(id => {
     const filter = $(`#${id}`);
     if (filter) filter.onchange = () => { reimbursementOffset = 0; renderRows(); };
@@ -4073,14 +4066,47 @@ function bindAttendancePunchAction(button, action) {
   });
 }
 
+function loadNativeBridgeScript() {
+  return new Promise(resolve => {
+    const script = document.createElement('script');
+    script.src = `/js/native-capacitor.js?v=43&retry=${Date.now()}`;
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
+}
+
+async function waitForNativeBridge(timeoutMs = 4000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (window.TaskFlowBiometricAuth) return true;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  return Boolean(window.TaskFlowBiometricAuth);
+}
+
 async function verifyAttendanceIfRequired(action) {
   const setting = await api('/attendance/verification-required');
   if (!setting.required) return null;
+  const insideApp = Boolean(window.Capacitor?.isNativePlatform?.());
+  if (insideApp && !window.TaskFlowBiometricAuth) {
+    // Inside the app but the native bridge script did not finish loading (slow or dropped connection).
+    // Wait briefly, then try loading it once more before giving up.
+    if (!await waitForNativeBridge()) {
+      await loadNativeBridgeScript();
+      await waitForNativeBridge(3000);
+    }
+  }
   const biometricAuth = window.TaskFlowBiometricAuth;
-  if (!window.Capacitor?.isNativePlatform?.() || !biometricAuth) {
-    setAttendanceBiometricFeedback('error', 'TaskFlow mobile verification is unavailable.');
+  if (!insideApp) {
+    setAttendanceBiometricFeedback('error', 'Open the TaskFlow mobile app to punch.');
     await vibrateAttendance(2);
     throw new Error('Attendance verification requires the installed TaskFlow mobile app.');
+  }
+  if (!biometricAuth) {
+    setAttendanceBiometricFeedback('error', 'Phone verification did not load. Check your connection and try again.');
+    await vibrateAttendance(2);
+    throw new Error('Phone verification did not load. Check your connection and try again.');
   }
   setAttendanceBiometricFeedback('pending', 'Verify with fingerprint or phone screen lock.');
   try {
