@@ -425,6 +425,17 @@ if (hasControlDatabaseConfiguration()) {
   sessionOptions.store = new FileStore({ path: path.join(__dirname, 'sessions'), retries: 5, retryDelay: 100, ttl: sessionMaxAgeMs / 1000 });
 }
 app.use(session(sessionOptions));
+// General limit for every API route. Keyed by signed-in user; anonymous requests are keyed by IP.
+const { rateLimit: createApiRateLimit, ipKeyGenerator } = require('express-rate-limit');
+const apiRateLimiter = createApiRateLimit({
+  windowMs: 60 * 1000,
+  limit: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: req => (req.session?.userId ? `user:${req.session.userId}` : `ip:${ipKeyGenerator(req.ip)}`),
+  message: { error: 'Too many requests. Please slow down and try again shortly.' }
+});
+app.use('/api', apiRateLimiter);
 app.use(createCompanyContextMiddleware({ runWithTenant: db.runWithTenant }));
 app.use((req, res, next) => {
   if (req.companyTenantId === undefined) return next();
