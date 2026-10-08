@@ -4983,6 +4983,10 @@ async function renderAdmin() {
       <div class="admin-block">
         <h3>Attendance device access</h3>
         <p class="hint">Choose separately whether each person may punch from the TaskFlow app, a mobile browser, or a laptop browser. Allowing browser login only permits sign-in; it does not grant attendance access. Laptop punching still requires browser location permission.</p>
+        <div class="admin-form-row">
+          <button class="btn btn-danger" id="reset-attendance-devices" type="button">Reset all attendance devices</button>
+          <span class="hint">Employees must register an attendance device again before punching. App sign-in devices, access permissions, and attendance records are unchanged.</span>
+        </div>
         <div class="admin-form-row permission-list-controls">
           <input id="attendance-device-access-search" type="search" placeholder="Search by employee, username, or device" aria-label="Search attendance device users">
           <label>Rows per page <select id="attendance-device-access-page-size" aria-label="Attendance device users per page"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
@@ -5034,10 +5038,6 @@ async function renderAdmin() {
         <div class="admin-form-row">
           <button class="btn btn-danger" id="reset-app-login-devices" type="button">Reset all app sign-in devices</button>
           <span class="hint">Use after reinstalling or changing the APK signing version if users cannot sign in. This is separate from attendance device access.</span>
-        </div>
-        <div class="admin-form-row">
-          <button class="btn btn-danger" id="reset-attendance-devices" type="button">Reset all attendance devices</button>
-          <span class="hint">Employees must register an attendance device again before punching. App sign-in devices, access permissions, and attendance records are unchanged.</span>
         </div>
         <div class="admin-form-row" style="margin-bottom: 20px;">
           <input id="u-name" placeholder="Full name">
@@ -5627,7 +5627,7 @@ async function renderAdmin() {
       users.forEach((u) => {
         const tr = document.createElement('tr');
         tr.style.borderBottom = "1px solid #eee";
-        const actionsHtml = `<button class="btn btn-secondary btn-sm admin-edit-user" type="button">Edit</button>`;
+        const actionsHtml = `<button class="btn btn-secondary btn-sm admin-edit-user" type="button">Edit</button> <button class="btn btn-danger btn-sm admin-reset-app-device" type="button">Reset app device</button>`;
         tr.innerHTML = `
           <td style="padding:10px;"><b>${escapeHtml(u.name || u.NAME)}</b></td>
           <td style="padding:10px;">${escapeHtml(u.email || 'No email')}<br><small>${u.email ? (Number(u.email_verified) === 1 ? 'Verified · email code / Google available' : 'Unverified · password login available') : 'Password login available'}</small>${u.email && Number(u.email_verified) !== 1 ? '<br><button class="btn btn-secondary btn-sm admin-send-email-verification" type="button">Resend invitation</button>' : ''}</td>
@@ -5641,6 +5641,26 @@ async function renderAdmin() {
         `;
         tbody.appendChild(tr);
         tr.querySelector('.admin-edit-user').onclick = () => adminEditUser(u, departments);
+        tr.querySelector('.admin-reset-app-device').onclick = async event => {
+          const button = event.currentTarget;
+          const name = u.name || u.NAME || 'this user';
+          const confirmed = await confirmModal(
+            'Reset app sign-in device?',
+            `${escapeHtml(name)} will be signed out and must sign in again on the mobile app. Their next installation is registered as the new device. Attendance device access is not changed.`,
+            'Reset device',
+            true
+          );
+          if (!confirmed) return;
+          button.disabled = true;
+          try {
+            await api(`/auth/users/${Number(u.id)}/app-device`, { method: 'DELETE' });
+            showAppNotification(`App sign-in device reset for ${name}.`);
+          } catch (error) {
+            showAppNotification(error.message);
+          } finally {
+            button.disabled = false;
+          }
+        };
         tr.querySelector('[data-web-login-user]').onchange = async event => {
           const checkbox = event.currentTarget;
           const enabled = checkbox.checked;
