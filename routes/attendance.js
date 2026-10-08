@@ -255,6 +255,45 @@ async function recordLocationPoint(attendanceId, userId, lat, lng, recordedAt, m
   return { id: info.lastInsertRowid, distanceMeters, placeChanged, flags };
 }
 
+// Batched version of recordLocationPoint for queued uploads: one read, one atomic write.
+async function recordLocationBatch(attendanceId, userId, items, extraFlags = []) {
+  if (!items.length) return { accepted: 0, duplicates: 0 };
+  const earliest = items[0].recordedAt;
+  const previousRow = await db.prepare(`SELECT latitude, longitude, recorded_at FROM attendance_locations
+    WHERE attendance_id = ? AND recorded_at < ? AND latitude IS NOT NULL AND longitude IS NOT NULL
+    ORDER BY recorded_at DESC, id DESC LIMIT 1`).get(attendanceId, earliest);
+  let previous = previousRow
+    ? { lat: Number(previousRow.latitude), lng: Number(previousRow.longitude), recordedAt: previousRow.recorded_at }
+    : null;
+
+  const statements = items.map(item => {
+    const distanceMeters = previous ? distanceBetweenPoints(previous.lat, previous.lng, item.lat, item.lng) : 0;
+    const placeChanged = distanceMeters >= 50 ? 1 : 0;
+    const activitySignal = getActivitySignal(item.point);
+    const flags = [...extraFlags];
+    const accuracy = Number(item.point?.accuracy);
+    if (Number.isFinite(accuracy) && accuracy > MAX_ACCEPTABLE_ACCURACY_M) flags.push('low_accuracy');
+    if (previous) {
+      const seconds = (Date.parse(item.recordedAt) - Date.parse(previous.recordedAt)) / 1000;
+      if (seconds > 0 && distanceMeters >= MIN_DISTANCE_FOR_SPEED_CHECK_M && distanceMeters / seconds > MAX_PLAUSIBLE_SPEED_MPS) {
+        flags.push('impossible_speed');
+      }
+    }
+    previous = { lat: item.lat, lng: item.lng, recordedAt: item.recordedAt };
+    return {
+      sql: `INSERT OR IGNORE INTO attendance_locations
+        (attendance_id, user_id, recorded_at, latitude, longitude, distance_meters, place_changed, activity_type, activity_confidence, flags, client_point_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [attendanceId, userId, item.recordedAt, item.lat, item.lng, distanceMeters, placeChanged,
+        activitySignal.type, activitySignal.confidence, flags.join(','), item.point.client_point_id]
+    };
+  });
+
+  const results = await db.batch(statements);
+  const duplicates = results.filter(result => Number(result?.rowsAffected ?? 0) === 0).length;
+  return { accepted: items.length - duplicates, duplicates };
+}
+
 async function getLocationName(lat, lng, req) {
   try {
     const cacheKey = `${Number(lat).toFixed(5)},${Number(lng).toFixed(5)}`;
@@ -548,23 +587,8 @@ router.post('/location-updates', async (req, res) => {
     normalizedPoints.push({ ...coordinates, recordedAt, point });
   }
   normalizedPoints.sort((first, second) => Date.parse(first.recordedAt) - Date.parse(second.recordedAt));
-  let accepted = 0;
-  let duplicates = 0;
-  for (const item of normalizedPoints) {
-    const result = await recordLocationPoint(
-      attendance.id,
-      req.session.userId,
-      item.lat,
-      item.lng,
-      item.recordedAt,
-      0,
-      item.point,
-      item.point.client_point_id,
-      sourceFlags(device)
-    );
-    if (result?.duplicate) duplicates += 1;
-    else accepted += 1;
-  }
+  // One read for the previous stored point, then every point is computed in memory and written in one transaction.
+  const { accepted, duplicates } = await recordLocationBatch(attendance.id, req.session.userId, normalizedPoints, sourceFlags(device));
   res.json({ ok: true, accepted, duplicates });
 });
 
