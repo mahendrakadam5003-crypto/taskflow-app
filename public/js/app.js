@@ -2561,10 +2561,19 @@ async function renderReimbursements() {
   const peopleOptions = PEOPLE.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('');
   const categoryOptions = ['Travel', 'Fuel', 'Meals', 'Lodging', 'Supplies', 'Other'].map(category => `<option>${category}</option>`).join('');
   const reimbursementSummary = `
-    <div class="reimbursement-summary-strip">
-      <div><span>Total</span><b id="reimbursement-total-amount"><span class="ui-skel ui-skel-inline"></span></b><small id="reimbursement-total-count"><span class="ui-skel ui-skel-inline ui-skel-inline-sm"></span></small></div>
-      <div><span>Pending</span><b class="pending" id="reimbursement-pending-amount"><span class="ui-skel ui-skel-inline"></span></b></div>
-      <div><span>Approved</span><b class="approved" id="reimbursement-approved-amount"><span class="ui-skel ui-skel-inline"></span></b></div>
+    <div class="reimbursement-totals-box">
+      <div class="reimbursement-totals-header">
+        <button type="button" class="reimbursement-filter-icon" id="reimbursement-filter-open" aria-label="Open filters" title="Filters">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8L3 5z"/></svg>
+          <span class="reimbursement-filter-badge hidden" id="reimbursement-filter-badge"></span>
+        </button>
+      </div>
+      <div class="reimbursement-summary-strip">
+        <div><span>Total</span><b id="reimbursement-total-amount"><span class="ui-skel ui-skel-inline"></span></b><small id="reimbursement-total-count"><span class="ui-skel ui-skel-inline ui-skel-inline-sm"></span></small></div>
+        <div><span>Pending</span><b class="pending" id="reimbursement-pending-amount"><span class="ui-skel ui-skel-inline"></span></b></div>
+        <div><span>Approved</span><b class="approved" id="reimbursement-approved-amount"><span class="ui-skel ui-skel-inline"></span></b></div>
+      </div>
+      <div class="reimbursement-totals-actions"><button class="btn btn-secondary" id="reimbursement-export" type="button">Export CSV</button></div>
     </div>`;
   const employeeOverview = isAdmin ? `<div class="admin-block">${reimbursementSummary}</div>` : `
     <div class="admin-block">
@@ -2595,14 +2604,7 @@ async function renderReimbursements() {
     ${employeeOverview}
     <div class="admin-block">
       <h3>${canReview ? 'Expense approvals' : 'My expense claims'}</h3>
-      <div class="reimbursement-toolbar">
-        <button type="button" class="reimbursement-filter-icon" id="reimbursement-filter-open" aria-label="Open filters" title="Filters">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8L3 5z"/></svg>
-          <span class="reimbursement-filter-badge hidden" id="reimbursement-filter-badge"></span>
-        </button>
-        <button class="btn btn-secondary" id="reimbursement-export">Export CSV</button>
-        ${canReview ? '<button class="btn btn-primary" id="reimbursement-bulk-approve" style="display:none;">Approve selected</button>' : ''}
-      </div>
+      <div class="reimbursement-toolbar">${canReview ? '<button class="btn btn-primary" id="reimbursement-bulk-approve" style="display:none;">Approve selected</button>' : ''}</div>
       <div id="reimbursement-filter-page" class="reimbursement-filter-page hidden" role="dialog" aria-modal="true" aria-label="Expense filters">
         <div class="reimbursement-filter-page-bar"><button type="button" class="btn btn-secondary btn-sm" id="reimbursement-filter-back">Back</button><b>Filters</b><span></span></div>
         <div class="reimbursement-filter-page-body">
@@ -2817,7 +2819,7 @@ async function renderReimbursements() {
         <td data-label="Amount">${escapeHtml(row.currency)} ${Number(row.amount).toFixed(2)}</td>
         <td data-label="Receipt">${receiptCell}</td>
         <td data-label="Status"><span class="chip ${reimbursementStatus(row.status).className}">${escapeHtml(reimbursementStatus(row.status).label)}</span>${canReview && row.edited_at ? `<small class="hint">Edited after submission · ${escapeHtml(fmtDateTime(row.edited_at))}</small>` : ''}${row.admin_note ? `<small class="hint">${escapeHtml(row.admin_note)}</small>` : ''}</td>
-        <td data-label="Action">${canReview ? (canApprove ? `<button class="btn btn-primary btn-sm reimbursement-action" data-id="${row.id}" data-status="approved">Approve</button> <button class="btn btn-danger btn-sm reimbursement-action" data-id="${row.id}" data-status="rejected">Reject</button>` : awaitingDifferentApprover ? '<span class="hint">Waiting for a different approver</span>' : row.status === 'approved' && canPay ? `<button class="btn btn-secondary btn-sm reimbursement-action" data-id="${row.id}" data-status="paid">Mark paid</button>` : '—') : ''}${canEdit ? ` <button class="btn btn-secondary btn-sm reimbursement-edit" data-id="${row.id}" type="button">Edit</button>` : ''}${isAdmin ? ` <button class="btn btn-danger btn-sm reimbursement-delete" data-id="${row.id}">Delete</button>` : ''}</td>
+        <td data-label="Action">${canReview ? (canApprove ? `<button class="btn btn-primary btn-sm reimbursement-action" data-id="${row.id}" data-status="approved">Approve</button> <button class="btn btn-danger btn-sm reimbursement-action" data-id="${row.id}" data-status="rejected">Reject</button>` : alreadyApproved ? '<span class="hint">Waiting for a different approver</span>' : row.status === 'approved' && canPay ? `<button class="btn btn-secondary btn-sm reimbursement-action" data-id="${row.id}" data-status="paid">Mark paid</button>` : '—') : ''}${canEdit ? ` <button class="btn btn-secondary btn-sm reimbursement-edit" data-id="${row.id}" type="button">Edit</button>` : ''}${isAdmin ? ` <button class="btn btn-danger btn-sm reimbursement-delete" data-id="${row.id}">Delete</button>` : ''}</td>
       </tr>`;
       }).join('') : `<tr><td colspan="${canReview ? 10 : 7}" class="hint" style="text-align:center; padding:15px;">No reimbursement claims found.</td></tr>`;
       if (canReview) {
