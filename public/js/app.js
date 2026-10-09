@@ -1379,7 +1379,16 @@ async function requestNativeNotificationPermission() {
           if (activityId) deliveredPushActivityIds.add(String(activityId));
           showAppNotification(notification.body || notification.title || 'TaskFlow has a new update.');
         });
-        await push.addListener('pushNotificationActionPerformed', () => showView('notifications'));
+        await push.addListener('pushNotificationActionPerformed', event => {
+          const data = event?.notification?.data || {};
+          if (data.entity_type === 'task' && data.entity_id && data.project_id) {
+            openNotificationTarget({ entityType: 'task', entityId: data.entity_id, projectId: data.project_id });
+          } else if (data.entity_type === 'reimbursement' && data.entity_id) {
+            openNotificationTarget({ entityType: 'reimbursement', entityId: data.entity_id });
+          } else {
+            showView('notifications');
+          }
+        });
         pushListenersRegistered = true;
       }
       let pushPermission = await push.checkPermissions();
