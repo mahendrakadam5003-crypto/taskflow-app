@@ -786,3 +786,13 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .notification-item.is-clickable:hover, .notification-item.is-clickable:focus-visible { background: var(--surface-2); outline: none; }
 .notification-subject { display: block; margin-top: 3px; color: var(--ink); font-weight: 600; }
 .notification-detail { margin: 3px 0 0; color: var(--ink-2, var(--ink)); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+
+/* ---------- project settings: gear icon and feature switches ---------- */
+.project-gear { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; margin-left: auto; color: var(--muted); cursor: pointer; flex: 0 0 auto; }
+.project-gear:hover, .project-gear:focus-visible { background: var(--surface-2); color: var(--ink); outline: none; }
+.project-gear svg { width: 18px; height: 18px; }
+.project-gear-button { width: 40px; height: 40px; }
+.feature-toggle-list { display: grid; gap: 4px; margin: 12px 0; }
+.feature-toggle-list .feature-toggle { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.feature-toggle-list .feature-toggle span { display: grid; gap: 2px; }
+.feature-toggle-list .feature-toggle input { margin-top: 3px; }
