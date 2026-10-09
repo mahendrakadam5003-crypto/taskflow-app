@@ -943,3 +943,15 @@ html.is-native textarea::placeholder { color: #7B8494; }
 .btn .ui-ring { width: 30px; height: 30px; }
 .btn .ui-ring-percent { font-size: 9px; }
 .btn .ui-ring-label { display: none; }
+
+/* ---------- Payment History on phones: compact summary, one row of three boxes ---------- */
+@media (max-width: 760px) {
+  .payment-summary-section { margin-bottom: 8px; }
+  .payment-summary-section h2 { font-size: 13px; margin: 6px 0; }
+  .payment-summary-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .payment-summary-card { padding: 7px 8px; min-width: 0; }
+  .payment-summary-card span { font-size: 10px; line-height: 1.2; display: block; }
+  .payment-summary-card b { font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .payment-summary-card small { font-size: 10px; }
+  .payment-summary-period { font-size: 12px; margin-bottom: 6px; }
+}
