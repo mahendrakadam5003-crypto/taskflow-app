@@ -499,6 +499,42 @@ router.get('/payment-history', async (req, res) => {
   res.json(rows.map(row => ({ ...row, pending_amount: Math.round(Math.max(0, Number(row.total_amount || 0) - Number(row.amount_received || 0)) * 100) / 100 })));
 });
 
+router.get('/payment-history/export.csv', async (req, res) => {
+  try {
+    if (!(await canViewPaymentHistory(req))) return res.status(403).json({ error: 'You do not have payment-history access.' });
+    const params = [];
+    const invoiceType = String(req.query.invoice_type || '').trim().toLowerCase();
+    if (invoiceType && !INVOICE_TYPES.includes(invoiceType)) return res.status(400).json({ error: 'Invalid invoice type.' });
+    let sql = `SELECT t.title, t.invoice_type, t.invoice_number, t.invoice_date, t.customer_name, t.total_amount,
+      t.payment_status, t.payment_received_date, t.amount_received, p.name AS project_name, member.name AS payment_member_name,
+      COALESCE(t.payment_member_id, t.assignee_id) AS payment_member_id
+      FROM tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN users member ON member.id=COALESCE(t.payment_member_id, t.assignee_id)
+      WHERE t.invoice_number IS NOT NULL AND trim(t.invoice_number) <> '' AND t.invoice_date IS NOT NULL AND trim(t.invoice_date) <> ''
+      AND COALESCE(t.no_billing_required, 0)=0`;
+    if (req.query.from) { sql += ' AND (t.invoice_date IS NULL OR t.invoice_date >= ?)'; params.push(req.query.from); }
+    if (req.query.to) { sql += ' AND (t.invoice_date IS NULL OR t.invoice_date <= ?)'; params.push(req.query.to); }
+    if (req.query.status) { sql += ' AND t.payment_status = ?'; params.push(req.query.status); }
+    if (req.query.assignee_id) { sql += ' AND COALESCE(t.payment_member_id, t.assignee_id) = ?'; params.push(Number(req.query.assignee_id)); }
+    if (invoiceType) { sql += ' AND t.invoice_type = ?'; params.push(invoiceType); }
+    sql += " ORDER BY COALESCE(t.invoice_date, '9999-12-31') DESC, t.id DESC";
+    const rows = await db.prepare(sql).all(...params);
+    const headers = ['Member', 'Invoice number', 'Invoice type', 'Invoice date', 'Customer', 'Task', 'Project', 'Total', 'Status', 'Received date', 'Received', 'Pending'];
+    const lines = [headers.map(csvValue).join(',')];
+    (rows || []).forEach(row => {
+      const pending = Math.round(Math.max(0, Number(row.total_amount || 0) - Number(row.amount_received || 0)) * 100) / 100;
+      lines.push([
+        row.payment_member_name || 'Unassigned', row.invoice_number, row.invoice_type, row.invoice_date, row.customer_name,
+        row.title, row.project_name, row.total_amount, row.payment_status, row.payment_received_date, row.amount_received, pending
+      ].map(csvValue).join(','));
+    });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="payment-history.csv"');
+    res.send(`\ufeff${lines.join('\n')}`);
+  } catch (error) {
+    sendInternalError(res, error, 'Payment history export failed');
+  }
+});
+
 router.get('/payment-history/summary', async (req, res) => {
   if (!(await canViewPaymentHistory(req))) return res.status(403).json({ error: 'You do not have payment-history access.' });
   const conditions = [`t.invoice_number IS NOT NULL AND trim(t.invoice_number) <> ''
