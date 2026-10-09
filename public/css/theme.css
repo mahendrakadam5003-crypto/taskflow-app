@@ -929,3 +929,12 @@ html.is-native textarea::placeholder { color: #7B8494; }
   .attendance-admin-layout > .attendance-calendar-box { order: 2; }
   .attendance-admin-layout > .today-attendance, .attendance-admin-layout > .section-title { order: 0; }
 }
+
+/* ---------- Desktop filters: one row, labels above fields, buttons on the same line ---------- */
+@media (min-width: 761px) {
+  .reimbursement-filter-page { flex-wrap: nowrap; align-items: flex-end; gap: 14px; }
+  .reimbursement-filter-page-body { flex: 1 1 auto; flex-wrap: nowrap; align-items: flex-end; gap: 12px; min-width: 0; }
+  .reimbursement-filter-field { flex: 1 1 0; min-width: 120px; max-width: none; }
+  .reimbursement-filter-field select, .reimbursement-filter-field input { width: 100%; box-sizing: border-box; }
+  .reimbursement-filter-page-footer { flex: 0 0 auto; flex-wrap: nowrap; white-space: nowrap; }
+}
