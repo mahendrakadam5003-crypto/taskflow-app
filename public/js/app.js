@@ -2922,11 +2922,16 @@ async function renderReimbursements() {
       formData.append('description', $('#reimbursement-description').value.trim());
       if (!editing) formData.append('submission_key', reimbursementSubmissionKey || crypto.randomUUID());
       selectedReceiptFiles.forEach(receipt => formData.append('receipt', receipt));
-      const response = await fetch(editing ? `/api/reimbursements/${editingReimbursementId}` : '/api/reimbursements', {
-        method: editing ? 'PUT' : 'POST', body: formData, credentials: 'same-origin'
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) { $('#reimbursement-form-error').textContent = result.error || 'Unable to save expense.'; return; }
+      showUploadRing(editing ? 'Saving expense' : 'Uploading receipts');
+      try {
+        await xhrFormWithProgress(editing ? `/api/reimbursements/${editingReimbursementId}` : '/api/reimbursements', editing ? 'PUT' : 'POST', formData,
+          percent => updateUploadRing(percent, editing ? 'Saving expense' : 'Uploading receipts'));
+      } catch (error) {
+        hideUploadRing();
+        $('#reimbursement-form-error').textContent = error.message || 'Unable to save expense.';
+        return;
+      }
+      hideUploadRing();
       if (!editing) reimbursementOffset = 0;
       editingReimbursementId = null;
       reimbursementSubmissionKey = null;
@@ -4334,7 +4339,7 @@ async function openTaskDrawer(taskId) {
       try {
         const result = await uploadTaskComment(`/api/tasks/${taskId}/comments`, formData, percent => {
           const pendingStatus = commentEntry.querySelector('.comment-pending-status');
-          if (pendingStatus && attachment) pendingStatus.textContent = `Uploading attachment... ${percent}%`;
+          if (pendingStatus && attachment) pendingStatus.innerHTML = uiRingMarkup(percent, 'Uploading attachment');
         });
         commentEntry.remove();
         window.refreshOpenTaskActivity?.();
@@ -4539,6 +4544,26 @@ function setAttendanceBiometricFeedback(state, message) {
   label.textContent = message;
 }
 
+function setAttendancePunchProgressHtml(html) {
+  const progress = $('#attendance-punch-progress');
+  if (!progress) return;
+  progress.innerHTML = html;
+  progress.classList.toggle('hidden', !html);
+}
+// Shows a ring while the punch is sent. The percentage rises toward 92% and finishes on completion.
+async function runPunchWithRing(action, button) {
+  let percent = 0;
+  const ticker = setInterval(() => {
+    percent += (92 - percent) * 0.12;
+    setAttendancePunchProgressHtml(uiRingMarkup(percent, 'Punching'));
+  }, 180);
+  try {
+    await action(button);
+  } finally {
+    clearInterval(ticker);
+    setAttendancePunchProgressHtml('');
+  }
+}
 function setAttendancePunchProgress(message) {
   const progress = $('#attendance-punch-progress');
   if (!progress) return;
@@ -4568,18 +4593,73 @@ async function vibrateAttendance(pulses = 1) {
   }
 }
 
+// Round progress ring with the percentage shown under it. Used for every file upload and for punching.
+function uiRingMarkup(percent, label) {
+  const value = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+  const radius = 18;
+  const length = 2 * Math.PI * radius;
+  return `<div class="ui-ring" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}" aria-label="${escapeHtml(label)}">
+    <svg viewBox="0 0 44 44" aria-hidden="true"><circle class="ui-ring-track" cx="22" cy="22" r="${radius}"></circle><circle class="ui-ring-fill" cx="22" cy="22" r="${radius}" stroke-dasharray="${length.toFixed(2)}" stroke-dashoffset="${(length * (1 - value / 100)).toFixed(2)}"></circle></svg>
+    <span class="ui-ring-percent">${value}%</span>
+  </div><small class="ui-ring-label">${escapeHtml(label)}</small>`;
+}
+
+let uploadRingCard = null;
+function showUploadRing(label) {
+  if (!uploadRingCard) {
+    uploadRingCard = document.createElement('div');
+    uploadRingCard.className = 'upload-ring-card';
+    document.body.appendChild(uploadRingCard);
+  }
+  uploadRingCard.innerHTML = uiRingMarkup(0, label);
+  uploadRingCard.classList.remove('hidden');
+}
+function updateUploadRing(percent, label) {
+  if (uploadRingCard) uploadRingCard.innerHTML = uiRingMarkup(percent, label);
+}
+function hideUploadRing() {
+  uploadRingCard?.classList.add('hidden');
+}
+
+// Sends a form with real upload progress (fetch cannot report it). Resolves with the JSON response.
+function xhrFormWithProgress(url, method, formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open(method, url);
+    request.withCredentials = true;
+    request.upload.onprogress = event => {
+      if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100));
+    };
+    request.onload = () => {
+      let result = {};
+      try { result = JSON.parse(request.responseText) || {}; } catch (error) { }
+      if (request.status >= 200 && request.status < 300) resolve(result);
+      else reject(new Error(result.error || 'Unable to save. Please try again.'));
+    };
+    request.onerror = () => reject(new Error('Network error during upload. Check your connection and try again.'));
+    request.send(formData);
+  });
+}
+
 function bindAttendancePunchAction(button, action) {
   if (!nativeApp) {
-    button.onclick = () => action(button);
+    button.onclick = () => runPunchWithRing(action, button);
     return;
   }
 
   let holdTimer = null;
   let holdCompleted = false;
+  let holdFrame = null;
+  const stopHoldFill = () => {
+    if (holdFrame) cancelAnimationFrame(holdFrame);
+    holdFrame = null;
+    button.style.removeProperty('--hold');
+  };
   const cancelHold = () => {
     if (holdTimer) clearTimeout(holdTimer);
     holdTimer = null;
     button.classList.remove('is-holding');
+    stopHoldFill();
     if (!holdCompleted) setAttendancePunchProgress('');
   };
 
@@ -4587,14 +4667,22 @@ function bindAttendancePunchAction(button, action) {
     if (button.disabled || (event.button != null && event.button !== 0)) return;
     holdCompleted = false;
     button.classList.add('is-holding');
-    setAttendancePunchProgress('Keep holding to verify…');
+    const holdStart = Date.now();
+    const holdMs = 650;
+    const paintHold = () => {
+      const percent = Math.min(100, Math.round(((Date.now() - holdStart) / holdMs) * 100));
+      button.style.setProperty('--hold', `${percent}%`);
+      setAttendancePunchProgressHtml(`<div class="punch-hold-bar" aria-hidden="true"><span style="width:${percent}%"></span></div><small class="punch-hold-text">Keep holding to verify… ${percent}%</small>`);
+      if (percent < 100 && holdTimer) holdFrame = requestAnimationFrame(paintHold);
+    };
+    holdFrame = requestAnimationFrame(paintHold);
     holdTimer = setTimeout(() => {
       holdTimer = null;
       holdCompleted = true;
       button.classList.remove('is-holding');
-      setAttendancePunchProgress('');
-      void action(button);
-    }, 650);
+      stopHoldFill();
+      runPunchWithRing(action, button);
+    }, holdMs);
   });
   button.addEventListener('pointerup', cancelHold);
   button.addEventListener('pointercancel', cancelHold);
