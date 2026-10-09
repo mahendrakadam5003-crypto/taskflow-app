@@ -3789,17 +3789,7 @@ async function openTaskDrawer(taskId) {
         };
       });
     };
-    // Short timestamps for the activity timeline: time only for today, otherwise "5 Oct, 3:41 pm".
-function activityTime(value) {
-  const date = parseTaskFlowTimestamp(value);
-  if (!Number.isFinite(date.getTime())) return '';
-  const dayKey = day => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(day);
-  const time = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true }).format(date);
-  if (dayKey(date) === dayKey(new Date())) return time;
-  const day = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' }).format(date);
-  return `${day}, ${time}`;
-}
-const renderActivity = () => {
+    const renderActivity = () => {
       const orderedItems = [...activityItems].sort((left, right) => {
         const timeDifference = Date.parse(left.created_at) - Date.parse(right.created_at);
         if (Number.isFinite(timeDifference) && timeDifference !== 0) return timeDifference;
@@ -6441,6 +6431,17 @@ function attendanceSummaryMonthMarkup(summary, year, month, options = {}) {
     <div class="attendance-calendar-weekdays">${weekdayHeaders}</div>
     <div class="attendance-calendar-grid">${emptyDays}${dayCells}</div>
   </section>`;
+}
+
+// Short timestamps for the activity timeline: time only for today, otherwise "5 Oct, 3:41 pm".
+function activityTime(value) {
+  const date = parseTaskFlowTimestamp(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const dayKey = day => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(day);
+  const time = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true }).format(date);
+  if (dayKey(date) === dayKey(new Date())) return time;
+  const day = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' }).format(date);
+  return `${day}, ${time}`;
 }
 
 // Today's attendance: who has punched in and out today, with times, location and device. Loads when opened.
