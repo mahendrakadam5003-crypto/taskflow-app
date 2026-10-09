@@ -383,12 +383,129 @@ function attachmentTypeLabel(type, name) {
   return mime || 'File';
 }
 
+// In-app image viewer: pinch / wheel to zoom, drag to move, double-tap or double-click to zoom in or reset.
+function openImageViewer(src, name = 'Image') {
+  document.querySelector('#image-viewer')?.remove();
+  const viewer = document.createElement('div');
+  viewer.id = 'image-viewer';
+  viewer.className = 'image-viewer';
+  viewer.setAttribute('role', 'dialog');
+  viewer.setAttribute('aria-modal', 'true');
+  viewer.setAttribute('aria-label', `Preview of ${name}`);
+  viewer.innerHTML = `<div class="image-viewer-bar"><span class="image-viewer-name"></span><button type="button" class="image-viewer-close" aria-label="Close preview">✕</button></div>
+    <div class="image-viewer-stage"><img class="image-viewer-img" alt=""></div>
+    <div class="image-viewer-hint">Pinch or scroll to zoom · drag to move · double-tap to zoom in</div>`;
+  viewer.querySelector('.image-viewer-name').textContent = name;
+  const img = viewer.querySelector('.image-viewer-img');
+  const stage = viewer.querySelector('.image-viewer-stage');
+  img.onerror = () => { stage.innerHTML = '<p class="image-viewer-error">This image could not be loaded.</p>'; };
+  img.src = src;
+
+  let scale = 1;
+  let x = 0;
+  let y = 0;
+  const pointers = new Map();
+  let pinchStart = null;
+  let dragStart = null;
+  let lastTap = 0;
+  const clamp = value => Math.min(6, Math.max(1, value));
+  const apply = () => { img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`; };
+  const centerOffset = (clientX, clientY) => {
+    const rect = stage.getBoundingClientRect();
+    return { x: clientX - (rect.left + rect.width / 2), y: clientY - (rect.top + rect.height / 2) };
+  };
+  const zoomTo = (nextScale, anchorX, anchorY) => {
+    const ratio = clamp(nextScale) / scale;
+    x = anchorX - ratio * (anchorX - x);
+    y = anchorY - ratio * (anchorY - y);
+    scale = clamp(nextScale);
+    if (scale <= 1) { x = 0; y = 0; }
+    apply();
+  };
+
+  stage.addEventListener('pointerdown', event => {
+    stage.setPointerCapture(event.pointerId);
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size === 2) {
+      const [first, second] = [...pointers.values()];
+      pinchStart = { distance: Math.hypot(first.x - second.x, first.y - second.y), scale };
+      dragStart = null;
+    } else if (pointers.size === 1) {
+      dragStart = { x: event.clientX - x, y: event.clientY - y };
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        if (scale > 1) { scale = 1; x = 0; y = 0; apply(); }
+        else {
+          const center = centerOffset(event.clientX, event.clientY);
+          zoomTo(2.5, center.x, center.y);
+        }
+        lastTap = 0;
+      } else {
+        lastTap = now;
+      }
+    }
+  });
+  stage.addEventListener('pointermove', event => {
+    if (!pointers.has(event.pointerId)) return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size >= 2 && pinchStart) {
+      const [first, second] = [...pointers.values()];
+      const distance = Math.hypot(first.x - second.x, first.y - second.y);
+      const midpoint = centerOffset((first.x + second.x) / 2, (first.y + second.y) / 2);
+      zoomTo(pinchStart.scale * (distance / pinchStart.distance), midpoint.x, midpoint.y);
+    } else if (pointers.size === 1 && dragStart && scale > 1) {
+      x = event.clientX - dragStart.x;
+      y = event.clientY - dragStart.y;
+      apply();
+    }
+  });
+  const endPointer = event => {
+    pointers.delete(event.pointerId);
+    if (pointers.size < 2) pinchStart = null;
+    if (pointers.size === 1) {
+      const [remaining] = pointers.values();
+      dragStart = { x: remaining.x - x, y: remaining.y - y };
+    }
+    if (!pointers.size) dragStart = null;
+  };
+  stage.addEventListener('pointerup', endPointer);
+  stage.addEventListener('pointercancel', endPointer);
+  stage.addEventListener('dblclick', event => {
+    if (scale > 1) { scale = 1; x = 0; y = 0; apply(); return; }
+    const center = centerOffset(event.clientX, event.clientY);
+    zoomTo(2.5, center.x, center.y);
+  });
+  stage.addEventListener('wheel', event => {
+    event.preventDefault();
+    const center = centerOffset(event.clientX, event.clientY);
+    zoomTo(event.deltaY < 0 ? scale * 1.15 : scale / 1.15, center.x, center.y);
+  }, { passive: false });
+
+  const close = () => {
+    document.removeEventListener('keydown', onKey);
+    viewer.remove();
+  };
+  const onKey = event => { if (event.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  viewer.querySelector('.image-viewer-close').onclick = close;
+  document.body.appendChild(viewer);
+  apply();
+}
+
+// Taps on comment images open the viewer instead of downloading the file.
+document.addEventListener('click', event => {
+  const trigger = event.target.closest?.('[data-image-viewer]');
+  if (!trigger) return;
+  event.preventDefault();
+  openImageViewer(trigger.dataset.imageViewer, trigger.dataset.imageName);
+});
+
 function renderCommentAttachment(entry) {
   if (!entry.image_path || !entry.attachment_available) return entry.image_path ? '<span class="hint">Attachment expired</span>' : '';
   const name = entry.attachment_name || 'Telegram attachment';
   const type = attachmentTypeLabel(entry.attachment_type, name);
   if (String(entry.attachment_type || '').toLowerCase().startsWith('image/')) {
-    return `<a class="comment-attachment" href="${entry.image_path}" target="_blank" rel="noopener"><img class="comment-image" src="${entry.image_path}" loading="lazy" decoding="async" alt="${escapeHtml(name)}"><span class="comment-attachment-caption">${escapeHtml(name)} · Download</span></a>`;
+    return `<div class="comment-attachment-wrap"><a class="comment-attachment" href="${entry.image_path}" data-image-viewer="${entry.image_path}" data-image-name="${escapeHtml(name)}"><img class="comment-image" src="${entry.image_path}" loading="lazy" decoding="async" alt="${escapeHtml(name)}"></a><div class="comment-attachment-caption"><span>${escapeHtml(name)}</span> · <a class="comment-download" href="${entry.image_path}" download="${escapeHtml(name)}">Download</a></div></div>`;
   }
   return `<a class="comment-file-card" href="${entry.image_path}" target="_blank" rel="noopener"><span class="comment-file-icon">${icon('folder')}</span><span><b>${escapeHtml(name)}</b><small>${escapeHtml(type)} · Download</small></span></a>`;
 }
