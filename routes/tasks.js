@@ -1538,12 +1538,12 @@ router.get('/tasks/:id/activity', async (req, res) => {
     const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 50) : 15;
     const offset = Math.max(0, Number.parseInt(req.query.offset, 10) || 0);
     const rows = await db.prepare(`SELECT * FROM (
-      SELECT 'comment' AS activity_type, c.id, c.user_id, c.author_name, c.body, c.edited_at,
+      SELECT 'comment' AS activity_type, c.id, c.user_id, c.author_name, c.body, c.edited_at, c.parent_id,
         c.image_path, c.attachment_name, c.attachment_type, c.created_at,
         u.name AS user_name, NULL AS actor_name, NULL AS field_name, NULL AS old_value, NULL AS new_value
       FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE c.task_id=?
       UNION ALL
-      SELECT 'history' AS activity_type, h.id, h.actor_id AS user_id, h.author_name, NULL AS body, NULL AS edited_at,
+      SELECT 'history' AS activity_type, h.id, h.actor_id AS user_id, h.author_name, NULL AS body, NULL AS edited_at, NULL AS parent_id,
         NULL AS image_path, NULL AS attachment_name, NULL AS attachment_type, h.created_at,
         NULL AS user_name, u.name AS actor_name, h.field_name, h.old_value, h.new_value
       FROM task_history h LEFT JOIN users u ON u.id=h.actor_id WHERE h.task_id=?
@@ -1780,10 +1780,33 @@ async function requireTaskCheckinToComment(req, res, next) {
   }
 }
 
+// Replies attach to a top-level comment on the same task (replies to replies are attached to the top comment).
+async function resolveReplyParent(taskId, rawParentId) {
+  if (rawParentId === undefined || rawParentId === null || rawParentId === '') return null;
+  const parentId = Number(rawParentId);
+  if (!Number.isSafeInteger(parentId) || parentId < 1) return { error: 'The comment you are replying to is invalid.' };
+  const parent = await db.prepare('SELECT id, task_id, user_id, parent_id FROM comments WHERE id=?').get(parentId);
+  if (!parent || Number(parent.task_id) !== Number(taskId)) return { error: 'The comment you are replying to no longer exists on this task.' };
+  const top = parent.parent_id ? await db.prepare('SELECT id, user_id FROM comments WHERE id=?').get(parent.parent_id) : parent;
+  return { id: Number(top?.id || parent.id), authorId: Number(parent.user_id) };
+}
+
+async function notifyReplyAuthor(req, taskId, reply, body) {
+  try {
+    if (!reply || !reply.authorId || reply.authorId === Number(req.session.userId)) return;
+    await logActivity(req, 'Replied to your comment', 'task', taskId, commentSnippet(body), reply.authorId);
+  } catch (error) {
+    logRequestEvent(req, 'task_reply_notification_failed', 'warn');
+  }
+}
+
 router.post('/tasks/:id/comments', requireTaskCheckinToComment, uploadRateLimit, handleCommentUploadError, async (req, res) => {
   try {
     const body = String(req.body.body || '').trim();
     if (!body && !req.file) return res.status(400).json({ error: 'Write a comment or attach an image.' });
+    const reply = await resolveReplyParent(req.params.id, req.body.parent_id);
+    if (reply?.error) return res.status(400).json({ error: reply.error });
+    const replyParentId = reply ? reply.id : null;
     if (req.file) {
       const reservation = await reserveUpload(req, req.file.size);
       let attachment;
@@ -1795,13 +1818,14 @@ router.post('/tasks/:id/comments', requireTaskCheckinToComment, uploadRateLimit,
             args: [attachment.fileId, attachment.messageId, req.file.originalname, req.file.mimetype, req.session.userId, req.params.id, req.file.size]
           },
           {
-            sql: 'INSERT INTO comments (task_id, user_id, body, image_path, attachment_name, attachment_type) VALUES (?, ?, ?, ?, ?, ?)',
-            args: [req.params.id, req.session.userId, body, `/api/download/${encodeURIComponent(attachment.fileId)}`, req.file.originalname, req.file.mimetype]
+            sql: 'INSERT INTO comments (task_id, user_id, body, image_path, attachment_name, attachment_type, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            args: [req.params.id, req.session.userId, body, `/api/download/${encodeURIComponent(attachment.fileId)}`, req.file.originalname, req.file.mimetype, replyParentId]
           },
           { sql: 'DELETE FROM file_usage WHERE file_reference = ?', args: [reservation] }
         ]);
         await notifyTaskRelatedPeople(req, req.params.id, 'Task comment added', commentSnippet(body));
-    await notifyMentionedMembers(req, req.params.id, body);
+        await notifyMentionedMembers(req, req.params.id, body);
+        await notifyReplyAuthor(req, req.params.id, reply, body);
         return res.json({ ok: true, id: results?.[1]?.lastInsertRowid });
       } catch (error) {
         if (attachment?.messageId) {
@@ -1813,10 +1837,11 @@ router.post('/tasks/:id/comments', requireTaskCheckinToComment, uploadRateLimit,
         throw error;
       }
     }
-    const info = await db.prepare('INSERT INTO comments (task_id, user_id, body, image_path, attachment_name, attachment_type) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(req.params.id, req.session.userId, body, null, null, null);
+    const info = await db.prepare('INSERT INTO comments (task_id, user_id, body, image_path, attachment_name, attachment_type, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(req.params.id, req.session.userId, body, null, null, null, replyParentId);
     await notifyTaskRelatedPeople(req, req.params.id, 'Task comment added', commentSnippet(body));
     await notifyMentionedMembers(req, req.params.id, body);
+    await notifyReplyAuthor(req, req.params.id, reply, body);
     res.json({ ok: true, id: info.lastInsertRowid });
   } catch (err) {
     if (err instanceof StorageLimitError) return res.status(err.statusCode).json({ error: err.message });
