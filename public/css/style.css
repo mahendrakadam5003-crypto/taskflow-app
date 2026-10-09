@@ -882,3 +882,8 @@ html.is-native textarea::placeholder { color: #7B8494; }
 .reimbursement-totals-box { display: grid; gap: 10px; padding: 12px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .reimbursement-totals-header, .reimbursement-totals-actions { display: flex; justify-content: flex-end; }
 .reimbursement-totals-box .reimbursement-summary-strip { margin-bottom: 0; }
+
+/* ---------- Attendance calendar box: same filter icon, Export CSV bottom right ---------- */
+.attendance-calendar-box { display: grid; gap: 10px; width: 100%; padding: 14px; margin: 12px 0 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-sizing: border-box; }
+.attendance-calendar-box > #admin-attendance-calendar { min-width: 0; }
+@media (max-width: 760px) { .attendance-calendar-box { padding: 12px; } }
