@@ -28,7 +28,7 @@ async function notifyActivityRecipients(activityId, userIds) {
     args: [id, userId]
   })));
   try {
-    const activity = await db.prepare(`SELECT al.action, al.details, al.entity_type,
+    const activity = await db.prepare(`SELECT al.action, al.details, al.entity_type, al.entity_id, t.project_id AS task_project_id,
         actor.name AS actor_name, subject.name AS subject_name, t.title AS task_title
       FROM activity_log al
       LEFT JOIN users actor ON actor.id = al.actor_id
