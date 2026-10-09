@@ -292,6 +292,14 @@ router.get('/summary', async (req, res) => {
       sql += ' AND r.user_id = ?';
       params.push(req.session.userId);
     }
+    const filterQuery = req.query || {};
+    if (filterQuery.user_id && (req.session.role === 'admin' || access.approval_level)) {
+      sql += ' AND r.user_id = ?';
+      params.push(Number(filterQuery.user_id));
+    }
+    if (filterQuery.status) { sql += ' AND r.status = ?'; params.push(String(filterQuery.status)); }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(filterQuery.from || '')) { sql += ' AND r.expense_date >= ?'; params.push(filterQuery.from); }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(filterQuery.to || '')) { sql += ' AND r.expense_date <= ?'; params.push(filterQuery.to); }
     sql += ' GROUP BY r.currency ORDER BY r.currency';
     const currencyTotals = await db.prepare(sql).all(...params);
     res.json({
