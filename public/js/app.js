@@ -2561,10 +2561,10 @@ async function renderReimbursements() {
   const peopleOptions = PEOPLE.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('');
   const categoryOptions = ['Travel', 'Fuel', 'Meals', 'Lodging', 'Supplies', 'Other'].map(category => `<option>${category}</option>`).join('');
   const reimbursementSummary = `
-    <div class="reimbursement-summary">
-      <div class="reimbursement-summary-card"><span>Total claims</span><b id="reimbursement-total-amount"><span class="ui-skel ui-skel-inline"></span></b><small id="reimbursement-total-count"><span class="ui-skel ui-skel-inline ui-skel-inline-sm"></span></small></div>
-      <div class="reimbursement-summary-card"><span>Pending</span><b class="pending" id="reimbursement-pending-amount"><span class="ui-skel ui-skel-inline"></span></b></div>
-      <div class="reimbursement-summary-card"><span>Approved</span><b class="approved" id="reimbursement-approved-amount"><span class="ui-skel ui-skel-inline"></span></b></div>
+    <div class="reimbursement-summary-strip">
+      <div><span>Total</span><b id="reimbursement-total-amount"><span class="ui-skel ui-skel-inline"></span></b><small id="reimbursement-total-count"><span class="ui-skel ui-skel-inline ui-skel-inline-sm"></span></small></div>
+      <div><span>Pending</span><b class="pending" id="reimbursement-pending-amount"><span class="ui-skel ui-skel-inline"></span></b></div>
+      <div><span>Approved</span><b class="approved" id="reimbursement-approved-amount"><span class="ui-skel ui-skel-inline"></span></b></div>
     </div>`;
   const employeeOverview = isAdmin ? `<div class="admin-block">${reimbursementSummary}</div>` : `
     <div class="admin-block">
@@ -2595,14 +2595,23 @@ async function renderReimbursements() {
     ${employeeOverview}
     <div class="admin-block">
       <h3>${canReview ? 'Expense approvals' : 'My expense claims'}</h3>
-      <div class="attendance-filters">
-        ${canReview ? `<label>Employee <select id="reimbursement-user"><option value="">All employees</option>${peopleOptions}</select></label>
-        <label>Status <select id="reimbursement-status"><option value="">All statuses</option><option>submitted</option>${reimbursementStatusFilterOptions()}<option>approved</option><option>rejected</option><option>paid</option></select></label>` : ''}
-        <label>From <input type="date" id="reimbursement-from"></label>
-        <label>To <input type="date" id="reimbursement-to"></label>
-        <button class="btn btn-primary" id="reimbursement-filter">Filter</button>
+      <div class="reimbursement-toolbar">
+        <button type="button" class="reimbursement-filter-icon" id="reimbursement-filter-open" aria-label="Open filters" title="Filters">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8L3 5z"/></svg>
+          <span class="reimbursement-filter-badge hidden" id="reimbursement-filter-badge"></span>
+        </button>
         <button class="btn btn-secondary" id="reimbursement-export">Export CSV</button>
         ${canReview ? '<button class="btn btn-primary" id="reimbursement-bulk-approve" style="display:none;">Approve selected</button>' : ''}
+      </div>
+      <div id="reimbursement-filter-page" class="reimbursement-filter-page hidden" role="dialog" aria-modal="true" aria-label="Expense filters">
+        <div class="reimbursement-filter-page-bar"><button type="button" class="btn btn-secondary btn-sm" id="reimbursement-filter-back">Back</button><b>Filters</b><span></span></div>
+        <div class="reimbursement-filter-page-body">
+          ${canReview ? `<label class="reimbursement-filter-field">Employee<select id="reimbursement-user"><option value="">All employees</option>${peopleOptions}</select></label>
+          <label class="reimbursement-filter-field">Status<select id="reimbursement-status"><option value="">All statuses</option><option>submitted</option>${reimbursementStatusFilterOptions()}<option>approved</option><option>rejected</option><option>paid</option></select></label>` : ''}
+          <label class="reimbursement-filter-field">From<input type="date" id="reimbursement-from"></label>
+          <label class="reimbursement-filter-field">To<input type="date" id="reimbursement-to"></label>
+        </div>
+        <div class="reimbursement-filter-page-footer"><button type="button" class="btn btn-secondary" id="reimbursement-filter-reset">Reset</button><button type="button" class="btn btn-primary" id="reimbursement-filter">Apply filters</button></div>
       </div>
       <div class="task-table-wrap reimbursement-table-wrap" style="overflow-x:auto; margin-top:14px;">
         <table class="attn-table reimbursement-table"><thead><tr>
@@ -2720,9 +2729,36 @@ async function renderReimbursements() {
       button.disabled = false;
     }
   });
+  const summaryFilterQuery = () => {
+    const query = new URLSearchParams();
+    if (canReview && $('#reimbursement-user')?.value) query.set('user_id', $('#reimbursement-user').value);
+    if (canReview && $('#reimbursement-status')?.value) query.set('status', $('#reimbursement-status').value);
+    if ($('#reimbursement-from')?.value) query.set('from', $('#reimbursement-from').value);
+    if ($('#reimbursement-to')?.value) query.set('to', $('#reimbursement-to').value);
+    return query.toString() ? `?${query}` : '';
+  };
+  const updateFilterBadge = () => {
+    const active = [$('#reimbursement-user')?.value, $('#reimbursement-status')?.value, $('#reimbursement-from')?.value, $('#reimbursement-to')?.value].filter(Boolean).length;
+    const badge = $('#reimbursement-filter-badge');
+    if (!badge) return;
+    badge.textContent = String(active);
+    badge.classList.toggle('hidden', active === 0);
+  };
+  const openFilterPage = () => $('#reimbursement-filter-page')?.classList.remove('hidden');
+  const closeFilterPage = () => $('#reimbursement-filter-page')?.classList.add('hidden');
+  $('#reimbursement-filter-open')?.addEventListener('click', openFilterPage);
+  $('#reimbursement-filter-back')?.addEventListener('click', closeFilterPage);
+  $('#reimbursement-filter-reset')?.addEventListener('click', () => {
+    ['#reimbursement-user', '#reimbursement-status', '#reimbursement-from', '#reimbursement-to'].forEach(id => { const field = $(id); if (field) field.value = ''; });
+    reimbursementOffset = 0;
+    updateFilterBadge();
+    closeFilterPage();
+    renderRows();
+    refreshReimbursementSummary();
+  });
   const refreshReimbursementSummary = async () => {
     try {
-      const summary = await api('/reimbursements/summary');
+      const summary = await api(`/reimbursements/summary${summaryFilterQuery()}`);
       const currencyTotals = summary.currency_totals || [];
       const formatCurrencyTotals = field => currencyTotals.length
         ? currencyTotals.map(row => `${escapeHtml(row.currency)} ${Number(row[field] || 0).toFixed(2)}`).join(' · ')
@@ -2913,7 +2949,14 @@ async function renderReimbursements() {
     const filter = $(`#${id}`);
     if (filter) filter.onchange = () => { reimbursementOffset = 0; renderRows(); };
   });
-  $('#reimbursement-filter').onclick = () => { reimbursementOffset = 0; renderRows(); };
+  $('#reimbursement-filter').onclick = () => {
+    reimbursementOffset = 0;
+    updateFilterBadge();
+    closeFilterPage();
+    renderRows();
+    refreshReimbursementSummary();
+  };
+  updateFilterBadge();
   $('#reimbursement-prev').onclick = () => {
     reimbursementOffset = Math.max(0, reimbursementOffset - reimbursementPageSize);
     renderRows();
