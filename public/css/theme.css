@@ -850,3 +850,25 @@ html.is-native textarea::placeholder { color: #7B8494; }
 .image-viewer-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px 14px; }
 .image-viewer-footer .image-viewer-hint { flex: 1; padding: 0; text-align: left; }
 .image-viewer-close-text { flex: 0 0 auto; min-height: 40px; padding: 0 18px; border: 0; border-radius: 10px; background: #fff; color: #0b1220; font-weight: 600; font-size: 14px; cursor: pointer; }
+
+/* ---------- Expenses: compact totals, filter icon, filters on their own page ---------- */
+.reimbursement-summary-strip { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; margin-bottom: 12px; }
+.reimbursement-summary-strip > div { display: grid; gap: 2px; padding: 8px 10px; min-width: 0; border-left: 1px solid var(--line); }
+.reimbursement-summary-strip > div:first-child { border-left: 0; }
+.reimbursement-summary-strip span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+.reimbursement-summary-strip b { font-size: 14px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.reimbursement-summary-strip small { color: var(--muted); font-size: 11px; }
+.reimbursement-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.reimbursement-filter-icon { position: relative; display: inline-grid; place-items: center; width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); cursor: pointer; }
+.reimbursement-filter-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+.reimbursement-filter-badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--green); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
+.reimbursement-filter-badge.hidden { display: none; }
+.reimbursement-filter-page { position: fixed; inset: 0; z-index: 120; display: flex; flex-direction: column; background: var(--bg, #f4f6fa); }
+.reimbursement-filter-page.hidden { display: none; }
+.reimbursement-filter-page-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: calc(12px + env(safe-area-inset-top, 0px)) 14px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.reimbursement-filter-page-body { flex: 1; overflow-y: auto; display: grid; gap: 14px; padding: 16px 14px; align-content: start; }
+.reimbursement-filter-field { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+.reimbursement-filter-field select, .reimbursement-filter-field input { min-height: 42px; font-size: 15px; }
+.reimbursement-filter-page-footer { display: grid; grid-template-columns: 1fr 1.4fr; gap: 10px; padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--line); background: var(--surface); }
+/* Expense details: Back and Close at the top only */
+#reimbursement-drawer .drawer-floating-close, #reimbursement-drawer .drawer-footer { display: none !important; }
