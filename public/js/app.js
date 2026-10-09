@@ -6592,16 +6592,27 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
       <div id="today-attendance-body" class="today-attendance-body" hidden></div>
     </section>
     <h2 class="section-title">Attendance calendar</h2>
-    <div class="attendance-filters">
-      <label>From <input type="date" id="admin-att-from" value="${defaults.from}"></label>
-      <label>To <input type="date" id="admin-att-to" value="${defaults.to}"></label>
-      <button class="btn btn-secondary btn-sm" id="admin-att-filter" type="button">Filter</button>
-      <label>Employee <select id="admin-att-employee"><option value="">All employees</option>${employeeOptions}</select></label>
-      <label>Department <select id="admin-att-department"><option value="">All departments</option>${departmentOptions}</select></label>
-      <button class="btn btn-secondary" id="admin-att-export" type="button">Export CSV</button>
+    <div class="attendance-calendar-box">
+      <div class="reimbursement-totals-header">
+        <button type="button" class="reimbursement-filter-icon" id="admin-att-filter-open" aria-label="Open filters" title="Filters">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8L3 5z"/></svg>
+          <span class="reimbursement-filter-badge hidden" id="admin-att-filter-badge"></span>
+        </button>
+      </div>
+      <div id="admin-attendance-calendar"></div>
+      <div class="reimbursement-totals-actions"><button class="btn btn-secondary" id="admin-att-export" type="button">Export CSV</button></div>
     </div>
-    <p class="form-error" id="admin-att-range-error" role="alert"></p>
-    <div id="admin-attendance-calendar"></div>`;
+    <div id="admin-att-filter-page" class="reimbursement-filter-page hidden" role="dialog" aria-modal="true" aria-label="Attendance filters">
+      <div class="reimbursement-filter-page-bar"><button type="button" class="btn btn-secondary btn-sm" id="admin-att-filter-back">Back</button><b>Filters</b><span></span></div>
+      <div class="reimbursement-filter-page-body">
+        <label class="reimbursement-filter-field">From<input type="date" id="admin-att-from" value="${defaults.from}"></label>
+        <label class="reimbursement-filter-field">To<input type="date" id="admin-att-to" value="${defaults.to}"></label>
+        <label class="reimbursement-filter-field">Employee<select id="admin-att-employee"><option value="">All employees</option>${employeeOptions}</select></label>
+        <label class="reimbursement-filter-field">Department<select id="admin-att-department"><option value="">All departments</option>${departmentOptions}</select></label>
+        <p class="form-error" id="admin-att-range-error" role="alert"></p>
+      </div>
+      <div class="reimbursement-filter-page-footer"><button type="button" class="btn btn-secondary" id="admin-att-filter-reset">Reset</button><button type="button" class="btn btn-primary" id="admin-att-filter">Apply filters</button></div>
+    </div>`;
 
   const calendar = $('#admin-attendance-calendar');
   setupTodayAttendance(today);
@@ -6643,6 +6654,8 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
     monthStart = new Date(Date.UTC(year, month - 1, 1));
     rangeFrom = from;
     rangeTo = to;
+    closeAttendanceFilterPage();
+    updateAttendanceFilterBadge();
     renderRows();
   };
 
@@ -6699,9 +6712,26 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
     }
   };
 
+  const openAttendanceFilterPage = () => $('#admin-att-filter-page')?.classList.remove('hidden');
+  const closeAttendanceFilterPage = () => $('#admin-att-filter-page')?.classList.add('hidden');
+  const updateAttendanceFilterBadge = () => {
+    const active = [$('#admin-att-employee').value, $('#admin-att-department').value].filter(Boolean).length + (rangeFrom || rangeTo ? 1 : 0);
+    const badge = $('#admin-att-filter-badge');
+    if (!badge) return;
+    badge.textContent = String(active);
+    badge.classList.toggle('hidden', active === 0);
+  };
+  $('#admin-att-filter-open').onclick = openAttendanceFilterPage;
+  $('#admin-att-filter-back').onclick = closeAttendanceFilterPage;
   $('#admin-att-filter').onclick = applyRange;
-  $('#admin-att-employee').onchange = () => renderRows();
-  $('#admin-att-department').onchange = () => renderRows();
+  $('#admin-att-filter-reset').onclick = () => {
+    $('#admin-att-employee').value = '';
+    $('#admin-att-department').value = '';
+    closeAttendanceFilterPage();
+    updateAttendanceFilterBadge();
+    setMonth(new Date(Date.UTC(startYear, startMonth - 1, 1)));
+  };
+  updateAttendanceFilterBadge();
   $('#admin-att-export').onclick = () => {
     const { from, to } = activeRange();
     const query = new URLSearchParams({ from, to });
