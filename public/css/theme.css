@@ -780,3 +780,34 @@ html.is-native textarea::placeholder { color: #7B8494; }
 .activity-group-entry.comment .comment-image { max-width: min(100%, 340px); max-height: 420px; width: auto; height: auto; object-fit: contain; border-radius: 10px; margin-top: 8px; }
 .comment-attachment-caption { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .comment-attachment:hover .comment-attachment-caption { text-decoration: underline; }
+
+/* ---------- Phone layout: compact header, sideways-scrolling task table (Asana-style) ---------- */
+@media (max-width: 760px) {
+  .project-header { flex-wrap: wrap; align-items: flex-start; gap: 6px 10px; margin-bottom: 8px; }
+  .project-header > div:first-child { flex: 1 1 100%; min-width: 0; }
+  .project-header h1 { font-size: 20px; }
+  .project-header .link-btn { font-size: 13px; padding: 0; }
+  .project-header-actions { flex: 1 1 100%; display: grid; grid-template-columns: 1fr 1fr 1.25fr; gap: 6px; }
+  .project-header-actions .btn { padding: 8px 6px; font-size: 13px; white-space: nowrap; min-height: 38px; }
+
+  .task-toolbar { flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .task-toolbar .task-search-wrap { flex: 1 1 100%; min-width: 0; }
+  .task-toolbar > .btn, .task-toolbar > select { font-size: 13px; padding: 8px 10px; min-height: 36px; }
+
+  .task-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 10px; }
+  .task-table { display: table; width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; }
+  .task-table thead { display: table-header-group; }
+  .task-table thead th { background: var(--surface); font-size: 11px; padding: 8px 10px; white-space: nowrap; }
+  .task-table tbody tr.task-row { display: table-row; }
+  .task-table tbody tr.task-row td { display: table-cell; width: auto; padding: 12px 10px; border-bottom: 1px solid var(--line); background: var(--surface); white-space: nowrap; vertical-align: middle; }
+  .task-table tbody tr.task-row td:nth-child(1) { position: sticky; left: 0; z-index: 2; width: 44px; min-width: 44px; padding: 0; text-align: center; }
+  .task-table tbody tr.task-row td:nth-child(2) { position: sticky; left: 44px; z-index: 2; min-width: 58vw; max-width: 58vw; white-space: normal; box-shadow: 6px 0 8px -6px rgba(20,33,61,.18); }
+  .task-table tbody tr.task-row td:nth-child(3) { min-width: 170px; }
+  .task-table tbody tr.task-row td:nth-child(4) { min-width: 120px; }
+  .task-table tbody tr.task-row .task-title-cell b { display: block; white-space: normal; overflow: visible; font-size: 14px; }
+  .task-table tbody tr.task-row .task-assignee-cell { font-size: 13px !important; justify-self: auto; }
+  .task-table tbody tr.task-row .assignee-cell { gap: 8px; }
+  .task-table tbody tr.task-row .avatar { width: 24px; height: 24px; font-size: 10px; }
+  .task-table tbody tr.task-row .task-due-cell { font-size: 12px !important; justify-self: auto; max-width: none; }
+  .task-mobile-label { display: none !important; }
+}
