@@ -794,22 +794,22 @@ html.is-native textarea::placeholder { color: #7B8494; }
   .task-toolbar .task-search-wrap { flex: 1 1 100%; min-width: 0; }
   .task-toolbar > .btn, .task-toolbar > select { font-size: 13px; padding: 8px 10px; min-height: 36px; }
 
-  .task-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 10px; }
-  .task-table { display: table; width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; }
-  .task-table thead { display: table-header-group; }
-  .task-table thead th { background: var(--surface); font-size: 11px; padding: 8px 10px; white-space: nowrap; }
-  .task-table tbody tr.task-row { display: table-row; }
-  .task-table tbody tr.task-row td { display: table-cell; width: auto; padding: 12px 10px; border-bottom: 1px solid var(--line); background: var(--surface); white-space: nowrap; vertical-align: middle; }
-  .task-table tbody tr.task-row td:nth-child(1) { position: sticky; left: 0; z-index: 2; width: 44px; min-width: 44px; padding: 0; text-align: center; }
-  .task-table tbody tr.task-row td:nth-child(2) { position: sticky; left: 44px; z-index: 2; min-width: 58vw; max-width: 58vw; white-space: normal; box-shadow: 6px 0 8px -6px rgba(20,33,61,.18); }
-  .task-table tbody tr.task-row td:nth-child(3) { min-width: 170px; }
-  .task-table tbody tr.task-row td:nth-child(4) { min-width: 120px; }
-  .task-table tbody tr.task-row .task-title-cell b { display: block; white-space: normal; overflow: visible; font-size: 14px; }
-  .task-table tbody tr.task-row .task-assignee-cell { font-size: 13px !important; justify-self: auto; }
-  .task-table tbody tr.task-row .assignee-cell { gap: 8px; }
-  .task-table tbody tr.task-row .avatar { width: 24px; height: 24px; font-size: 10px; }
-  .task-table tbody tr.task-row .task-due-cell { font-size: 12px !important; justify-self: auto; max-width: none; }
-  .task-mobile-label { display: none !important; }
+  #view-project .task-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 10px; }
+  #view-project .task-table { display: table; width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; }
+  #view-project .task-table thead { display: table-header-group; }
+  #view-project .task-table thead th { background: var(--surface); font-size: 11px; padding: 8px 10px; white-space: nowrap; }
+  #view-project .task-table tbody tr.task-row { display: table-row; }
+  #view-project .task-table tbody tr.task-row td { display: table-cell; width: auto; padding: 12px 10px; border-bottom: 1px solid var(--line); background: var(--surface); white-space: nowrap; vertical-align: middle; }
+  #view-project .task-table tbody tr.task-row td:nth-child(1) { position: sticky; left: 0; z-index: 2; width: 44px; min-width: 44px; padding: 0; text-align: center; }
+  #view-project .task-table tbody tr.task-row td:nth-child(2) { position: sticky; left: 44px; z-index: 2; min-width: 58vw; max-width: 58vw; white-space: normal; box-shadow: 6px 0 8px -6px rgba(20,33,61,.18); }
+  #view-project .task-table tbody tr.task-row td:nth-child(3) { min-width: 170px; }
+  #view-project .task-table tbody tr.task-row td:nth-child(4) { min-width: 120px; }
+  #view-project .task-table tbody tr.task-row .task-title-cell b { display: block; white-space: normal; overflow: visible; font-size: 14px; }
+  #view-project .task-table tbody tr.task-row .task-assignee-cell { font-size: 13px !important; justify-self: auto; }
+  #view-project .task-table tbody tr.task-row .assignee-cell { gap: 8px; }
+  #view-project .task-table tbody tr.task-row .avatar { width: 24px; height: 24px; font-size: 10px; }
+  #view-project .task-table tbody tr.task-row .task-due-cell { font-size: 12px !important; justify-self: auto; max-width: none; }
+  #view-project .task-mobile-label { display: none !important; }
 }
 
 /* ---------- Comment images: larger, and tap to open the viewer ---------- */
@@ -838,9 +838,9 @@ html.is-native textarea::placeholder { color: #7B8494; }
 
 /* ---------- Phone task table: every column moves sideways, task name can be narrow ---------- */
 @media (max-width: 760px) {
-  .task-table tbody tr.task-row td:nth-child(2) { position: static; min-width: 150px; max-width: 150px; box-shadow: none; white-space: normal; }
-  .task-table tbody tr.task-row .task-title-cell b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; line-height: 1.25; }
-  .task-table thead th:nth-child(2) { min-width: 150px; max-width: 150px; }
+  #view-project .task-table tbody tr.task-row td:nth-child(2) { position: static; min-width: 150px; max-width: 150px; box-shadow: none; white-space: normal; }
+  #view-project .task-table tbody tr.task-row .task-title-cell b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; line-height: 1.25; }
+  #view-project .task-table thead th:nth-child(2) { min-width: 150px; max-width: 150px; }
 }
 
 /* ---------- Image viewer: keep clear of the phone status bar and navigation bar ---------- */
