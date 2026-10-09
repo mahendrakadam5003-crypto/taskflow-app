@@ -1345,6 +1345,13 @@ router.get('/tasks/search', async (req, res) => {
 router.post('/projects/:id/tasks', requireProjectAccess, async (req, res) => {
   try {
     if (!(await canProjectAction(req, 'create_task'))) return res.status(403).json({ error: 'You do not have permission to create tasks.' });
+    // A double tap or a slow connection can send the same new task twice. Return the copy already saved.
+    const titleForDuplicate = String(req.body.title || '').trim();
+    if (titleForDuplicate) {
+      const recent = await db.prepare(`SELECT id FROM tasks WHERE project_id = ? AND created_by = ? AND title = ?
+        AND created_at >= datetime('now', '-15 seconds') ORDER BY id DESC LIMIT 1`).get(req.params.id, req.session.userId, titleForDuplicate);
+      if (recent) return res.status(200).json({ id: recent.id, duplicate: true });
+    }
     if (req.body.work_mode !== undefined && !(await canChangeTaskWorkMode(req))) return res.status(403).json({ error: 'You do not have permission to choose the task work location. Ask an administrator.' });
     const { title, description, assignee_id, due_date, invoice_number, invoice_date, invoice_type, customer_name, total_amount } = req.body;
     const features = await db.prepare('SELECT show_billing, show_work_location, show_description FROM projects WHERE id=?').get(req.params.id);
