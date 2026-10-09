@@ -92,7 +92,11 @@ public class BackgroundLocationPlugin extends Plugin {
             else getContext().startService(service);
             call.resolve(new JSObject().put("active", true));
         } catch (Exception error) {
-            call.reject("Unable to start shift location tracking.", error);
+            String errorName = error.getClass().getName();
+            String reason = errorName.contains("ForegroundServiceStartNotAllowed")
+                ? "Keep TaskFlow open on screen and tap Fix settings again."
+                : errorName + ": " + (error.getMessage() == null ? "no details" : error.getMessage());
+            call.reject("Unable to start shift location tracking. " + reason, error);
         }
     }
 
