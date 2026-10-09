@@ -872,3 +872,36 @@ html.is-native textarea::placeholder { color: #7B8494; }
 .reimbursement-filter-page-footer { display: grid; grid-template-columns: 1fr 1.4fr; gap: 10px; padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--line); background: var(--surface); }
 /* Expense details: Back and Close at the top only */
 #reimbursement-drawer .drawer-floating-close, #reimbursement-drawer .drawer-footer { display: none !important; }
+
+/* ---------- Expenses totals box: filter icon top right, Export CSV bottom right ---------- */
+.reimbursement-totals-box { display: grid; gap: 10px; padding: 12px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.reimbursement-totals-header, .reimbursement-totals-actions { display: flex; justify-content: flex-end; }
+.reimbursement-totals-box .reimbursement-summary-strip { margin-bottom: 0; }
+
+/* ---------- Expenses totals box: filter icon top right, Export CSV bottom right ---------- */
+.reimbursement-totals-box { display: grid; gap: 10px; padding: 12px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.reimbursement-totals-header, .reimbursement-totals-actions { display: flex; justify-content: flex-end; }
+.reimbursement-totals-box .reimbursement-summary-strip { margin-bottom: 0; }
+
+/* ---------- Attendance calendar box: same filter icon, Export CSV bottom right ---------- */
+.attendance-calendar-box { display: grid; gap: 10px; width: 100%; padding: 14px; margin: 12px 0 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-sizing: border-box; }
+.attendance-calendar-box > #admin-attendance-calendar { min-width: 0; }
+@media (max-width: 760px) { .attendance-calendar-box { padding: 12px; } }
+
+/* ---------- Upload progress ring (percentage under it) ---------- */
+.ui-ring { position: relative; display: inline-grid; place-items: center; width: 52px; height: 52px; margin: 0 auto; }
+.ui-ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.ui-ring-track { fill: none; stroke: var(--line); stroke-width: 4; }
+.ui-ring-fill { fill: none; stroke: var(--green, #2f9e74); stroke-width: 4; stroke-linecap: round; transition: stroke-dashoffset .25s ease; }
+.ui-ring-percent { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ui-ring-label { display: block; margin-top: 4px; text-align: center; color: var(--muted); font-size: 12px; }
+.upload-ring-card { position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 150; display: grid; justify-items: center; gap: 2px; padding: 12px 14px; min-width: 130px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+.upload-ring-card.hidden { display: none; }
+#attendance-punch-progress .ui-ring { width: 46px; height: 46px; }
+/* Hold-to-punch linear fill, with the percentage */
+.attendance-punch-action { position: relative; overflow: hidden; }
+.attendance-punch-action::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: var(--hold, 0%); background: rgba(255,255,255,.2); pointer-events: none; }
+.punch-hold-bar { height: 6px; width: 100%; max-width: 260px; margin: 6px auto 2px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.punch-hold-bar span { display: block; height: 100%; background: var(--green, #2f9e74); transition: width .05s linear; }
+.punch-hold-text { display: block; text-align: center; font-size: 12px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .ui-ring-fill, .punch-hold-bar span { transition: none; } }
