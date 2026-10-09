@@ -2511,6 +2511,19 @@ async function renderNotifications({ more = false } = {}) {
 
 // Native photo picking. The gallery source uses the system photo picker, which does not need camera
 // permission; the camera source asks for camera permission only when the user takes a photo.
+// Asks for photo access once on the phone app before the gallery opens. Web browsers skip this.
+async function ensureNativePhotoPermission() {
+  const camera = window.TaskFlowCamera;
+  if (!window.Capacitor?.isNativePlatform?.() || !camera?.checkPermissions) return true;
+  const allowed = status => status === 'granted' || status === 'limited';
+  let permission = await camera.checkPermissions();
+  if (allowed(permission.photos)) return true;
+  permission = await camera.requestPermissions({ permissions: ['photos'] });
+  if (allowed(permission.photos)) return true;
+  showAppNotification('Allow photo access for TaskFlow in phone settings to attach photos.');
+  return false;
+}
+
 async function pickNativePhoto(source) {
   const camera = window.TaskFlowCamera;
   if (!camera) throw new Error('Photo picker is unavailable. Update TaskFlow and try again.');
@@ -2666,7 +2679,7 @@ async function renderReimbursements() {
     receiptInput.value = '';
     updateReceiptSelection();
   });
-  $('#reimbursement-gallery')?.addEventListener('click', () => receiptInput?.click());
+  $('#reimbursement-gallery')?.addEventListener('click', () => { ensureNativePhotoPermission().then(ok => { if (ok) receiptInput?.click(); }); });
   $('#reimbursement-camera')?.addEventListener('click', async event => {
     const button = event.currentTarget;
     const error = $('#reimbursement-form-error');
@@ -4199,7 +4212,7 @@ async function openTaskDrawer(taskId) {
       }
     };
     commentInput.onblur = () => setTimeout(hideMentionSuggestions, 120);
-    $('#btn-attach-image').onclick = () => { if (!taskActionsLocked) fileInput.click(); };
+    $('#btn-attach-image').onclick = () => { if (!taskActionsLocked) ensureNativePhotoPermission().then(ok => { if (ok) fileInput.click(); }); };
     if (window.Capacitor?.isNativePlatform?.() && window.TaskFlowCamera && !$('#btn-comment-camera')) {
       const cameraButton = document.createElement('button');
       cameraButton.type = 'button';
