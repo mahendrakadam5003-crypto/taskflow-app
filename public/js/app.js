@@ -6443,6 +6443,50 @@ function attendanceSummaryMonthMarkup(summary, year, month, options = {}) {
   </section>`;
 }
 
+// Today's attendance: who has punched in and out today, with times, location and device. Loads when opened.
+function setupTodayAttendance(today) {
+  const toggle = $('#today-attendance-toggle');
+  const body = $('#today-attendance-body');
+  const count = $('#today-attendance-count');
+  if (!toggle || !body) return;
+  const placeText = (text, lat, lng) => text || (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng)) ? `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}` : 'Not recorded');
+  const deviceText = (info, type) => info || type || 'Not recorded';
+  const rowMarkup = row => `<div class="today-attendance-row">
+      <div class="today-attendance-person"><b>${escapeHtml(row.user_name || 'Unknown user')}</b><small>${escapeHtml(row.department || 'No department')}</small></div>
+      <div class="today-attendance-times">
+        <span><b>In</b> ${row.punch_in ? escapeHtml(activityTime(row.punch_in)) : 'Not punched'}</span>
+        <span><b>Out</b> ${row.punch_out ? escapeHtml(activityTime(row.punch_out)) : 'Not punched out'}</span>
+      </div>
+      <div class="today-attendance-details">
+        <span><b>Location</b> In: ${escapeHtml(placeText(row.in_location_text, row.in_lat, row.in_lng))}${row.punch_out ? ` · Out: ${escapeHtml(placeText(row.out_location_text, row.out_lat, row.out_lng))}` : ''}</span>
+        <span><b>Device</b> In: ${escapeHtml(deviceText(row.in_device_info, row.in_device_type))}${row.punch_out ? ` · Out: ${escapeHtml(deviceText(row.out_device_info, row.out_device_type))}` : ''}</span>
+      </div>
+    </div>`;
+  let loaded = false;
+  const load = async () => {
+    body.innerHTML = uiSkeletonRows(3);
+    try {
+      const rows = await api(`/attendance?date=${encodeURIComponent(today)}`);
+      const punched = (Array.isArray(rows) ? rows : []).filter(row => row.punch_in || row.punch_out);
+      count.textContent = `${punched.length} punched today`;
+      body.innerHTML = punched.length
+        ? punched.map(rowMarkup).join('')
+        : '<p class="hint">Nobody has punched in today yet.</p>';
+      loaded = true;
+    } catch (error) {
+      body.innerHTML = uiErrorState(error, 'today-attendance-retry');
+      $('#today-attendance-retry')?.addEventListener('click', load);
+    }
+  };
+  toggle.onclick = async () => {
+    const opening = body.hasAttribute('hidden');
+    body.toggleAttribute('hidden', !opening);
+    toggle.setAttribute('aria-expanded', String(opening));
+    toggle.classList.toggle('is-open', opening);
+    if (opening) await load();
+  };
+}
+
 async function renderAdminAttendance(users, targetId = 'admin-attendance-content') {
   const wrap = $(`#${targetId}`);
   if (!wrap) return;
@@ -6480,6 +6524,14 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
   };
 
   wrap.innerHTML = `
+    <section class="today-attendance" aria-label="Today's attendance">
+      <button type="button" class="today-attendance-toggle" id="today-attendance-toggle" aria-expanded="false" aria-controls="today-attendance-body">
+        <span class="today-attendance-title">Today's attendance</span>
+        <span class="today-attendance-count" id="today-attendance-count">Tap to view</span>
+        <span class="today-attendance-chevron" aria-hidden="true">▾</span>
+      </button>
+      <div id="today-attendance-body" class="today-attendance-body" hidden></div>
+    </section>
     <h2 class="section-title">Attendance calendar</h2>
     <div class="attendance-filters">
       <label>From <input type="date" id="admin-att-from" value="${defaults.from}"></label>
@@ -6493,6 +6545,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
     <div id="admin-attendance-calendar"></div>`;
 
   const calendar = $('#admin-attendance-calendar');
+  setupTodayAttendance(today);
   const filterQuery = () => {
     const userId = $('#admin-att-employee').value;
     const department = $('#admin-att-department').value;
