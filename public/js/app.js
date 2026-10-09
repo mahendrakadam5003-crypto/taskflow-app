@@ -6703,6 +6703,7 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
     </div>`;
 
   const calendar = $('#admin-attendance-calendar');
+  wrap.classList.add('attendance-admin-layout');
   setupTodayAttendance(today);
   const filterQuery = () => {
     const userId = $('#admin-att-employee').value;
