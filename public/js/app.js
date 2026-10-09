@@ -6682,13 +6682,13 @@ async function renderAdminAttendance(users, targetId = 'admin-attendance-content
     <h2 class="section-title">Attendance calendar</h2>
     <div class="attendance-calendar-box">
       <div class="reimbursement-totals-header">
+        <button class="btn btn-secondary attendance-export-button" id="admin-att-export" type="button">Export CSV</button>
         <button type="button" class="reimbursement-filter-icon" id="admin-att-filter-open" aria-label="Open filters" title="Filters">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8L3 5z"/></svg>
           <span class="reimbursement-filter-badge hidden" id="admin-att-filter-badge"></span>
         </button>
       </div>
       <div id="admin-attendance-calendar"></div>
-      <div class="reimbursement-totals-actions"><button class="btn btn-secondary" id="admin-att-export" type="button">Export CSV</button></div>
     </div>
     <div id="admin-att-filter-page" class="reimbursement-filter-page hidden" role="dialog" aria-modal="true" aria-label="Attendance filters">
       <div class="reimbursement-filter-page-bar"><button type="button" class="btn btn-secondary btn-sm" id="admin-att-filter-back">Back</button><b>Filters</b><span></span></div>
