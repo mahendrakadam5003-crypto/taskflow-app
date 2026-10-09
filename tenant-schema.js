@@ -927,6 +927,22 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       }
       await markSchemaVersion(18);
     }
+    if (schemaVersion < 19) {
+      const projectColumns = await dbDriverInterface.prepare('PRAGMA table_info(projects)').all();
+      if (!projectColumns.some(column => column.name === 'show_description')) {
+        await dbDriverInterface.exec('ALTER TABLE projects ADD COLUMN show_description INTEGER NOT NULL DEFAULT 1');
+      }
+      if (!projectColumns.some(column => column.name === 'allow_comments')) {
+        await dbDriverInterface.exec('ALTER TABLE projects ADD COLUMN allow_comments INTEGER NOT NULL DEFAULT 1');
+      }
+      if (!projectColumns.some(column => column.name === 'show_activity')) {
+        await dbDriverInterface.exec('ALTER TABLE projects ADD COLUMN show_activity INTEGER NOT NULL DEFAULT 1');
+      }
+      if (!projectColumns.some(column => column.name === 'allow_checkin')) {
+        await dbDriverInterface.exec('ALTER TABLE projects ADD COLUMN allow_checkin INTEGER NOT NULL DEFAULT 1');
+      }
+      await markSchemaVersion(19);
+    }
     console.log('Database schema and default settings are ready.');
   } catch (err) {
     console.error(JSON.stringify({ event: 'tenant_database_initialization_failed', company_id: companyId ?? null }));
