@@ -1980,13 +1980,22 @@ async function renderPaymentHistory() {
         ${summarySection('Overall', 'overall', true)}
         ${summarySection('Cash invoices', 'cash')}
         ${summarySection('GST invoices', 'gst')}
-        <div class="attendance-filters">
-          <label>From <input type="date" id="payment-history-from"></label>
-          <label>To <input type="date" id="payment-history-to"></label>
-          <label>Member <select id="payment-history-assignee"><option value="">All members</option>${PEOPLE.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('')}</select></label>
-          <label>Invoice type <select id="payment-history-invoice-type"><option value="">All types</option><option value="cash">Cash</option><option value="gst">GST</option></select></label>
-          <label>Status <select id="payment-history-status"><option value="">All statuses</option><option value="received">Received</option><option value="not_received">Not received</option><option value="pending">Pending</option></select></label>
-          <button class="btn btn-primary" id="payment-history-filter">Filter</button>
+        <div class="reimbursement-totals-header">
+          <button type="button" class="reimbursement-filter-icon" id="payment-history-filter-open" aria-label="Open filters" title="Filters">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8L3 5z"/></svg>
+            <span class="reimbursement-filter-badge hidden" id="payment-history-filter-badge"></span>
+          </button>
+        </div>
+        <div id="payment-history-filter-page" class="reimbursement-filter-page hidden" role="dialog" aria-modal="true" aria-label="Payment history filters">
+          <div class="reimbursement-filter-page-bar"><button type="button" class="btn btn-secondary btn-sm" id="payment-history-filter-back">Back</button><b>Filters</b><span></span></div>
+          <div class="reimbursement-filter-page-body">
+            <label class="reimbursement-filter-field">From<input type="date" id="payment-history-from"></label>
+            <label class="reimbursement-filter-field">To<input type="date" id="payment-history-to"></label>
+            <label class="reimbursement-filter-field">Member<select id="payment-history-assignee"><option value="">All members</option>${PEOPLE.map(person => `<option value="${person.id}">${escapeHtml(person.name || person.NAME)}</option>`).join('')}</select></label>
+            <label class="reimbursement-filter-field">Invoice type<select id="payment-history-invoice-type"><option value="">All types</option><option value="cash">Cash</option><option value="gst">GST</option></select></label>
+            <label class="reimbursement-filter-field">Status<select id="payment-history-status"><option value="">All statuses</option><option value="received">Received</option><option value="not_received">Not received</option><option value="pending">Pending</option></select></label>
+          </div>
+          <div class="reimbursement-filter-page-footer"><button type="button" class="btn btn-secondary" id="payment-history-filter-reset">Reset</button><button type="button" class="btn btn-primary" id="payment-history-filter">Apply filters</button></div>
         </div>
           <div class="task-table-wrap" style="overflow-x:auto; margin-top:14px;"><table class="attn-table payment-history-table"><thead><tr><th>Member</th><th>Invoice</th><th>Invoice type</th><th>Invoice date</th><th>Customer</th><th>Task / project</th><th>Total</th><th>Status</th><th>Received date</th><th>Received</th><th>Pending</th><th>Save</th></tr></thead><tbody id="payment-history-table"></tbody></table></div>
       </div>`;
@@ -2045,7 +2054,32 @@ async function renderPaymentHistory() {
         });
       } catch (error) { table.innerHTML = `<tr><td colspan="12" class="form-error">${escapeHtml(error.message)}</td></tr>`; }
     };
-    $('#payment-history-filter').onclick = async () => { await renderSummary(); await renderRows(); };
+    const paymentFilterIds = ['#payment-history-from', '#payment-history-to', '#payment-history-assignee', '#payment-history-invoice-type', '#payment-history-status'];
+    const updatePaymentFilterBadge = () => {
+      const active = paymentFilterIds.filter(id => $(id)?.value).length;
+      const badge = $('#payment-history-filter-badge');
+      if (!badge) return;
+      badge.textContent = String(active);
+      badge.classList.toggle('hidden', active === 0);
+    };
+    const openPaymentFilterPage = () => $('#payment-history-filter-page')?.classList.remove('hidden');
+    const closePaymentFilterPage = () => $('#payment-history-filter-page')?.classList.add('hidden');
+    $('#payment-history-filter-open').onclick = openPaymentFilterPage;
+    $('#payment-history-filter-back').onclick = closePaymentFilterPage;
+    $('#payment-history-filter').onclick = async () => {
+      updatePaymentFilterBadge();
+      closePaymentFilterPage();
+      await renderSummary();
+      await renderRows();
+    };
+    $('#payment-history-filter-reset').onclick = async () => {
+      paymentFilterIds.forEach(id => { const field = $(id); if (field) field.value = ''; });
+      updatePaymentFilterBadge();
+      closePaymentFilterPage();
+      await renderSummary();
+      await renderRows();
+    };
+    updatePaymentFilterBadge();
     renderSummary().catch(error => console.warn('Payment summary refresh failed:', error.message));
     renderRows().catch(error => {
       table.innerHTML = `<tr><td colspan="11" class="form-error">${escapeHtml(error.message)}</td></tr>`;
