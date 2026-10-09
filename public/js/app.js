@@ -2046,8 +2046,18 @@ async function renderPaymentHistory() {
 function renderProjectsDirectory() {
   const directory = $('#projects-directory');
   if (!directory) return;
-  directory.innerHTML = PROJECTS.length ? PROJECTS.map(project => `<button class="dashboard-project projects-directory-card" data-directory-project="${project.id}"><b>${project.locked ? `${icon('lock', 'icon project-lock-icon')} ` : ''}${escapeHtml(project.name)}</b><span>Open project workspace</span></button>`).join('') : `<div class="empty-state">${icon('folder')}<b>No projects yet</b><p>Create a project to organize work.</p>${PROJECT_ACTION_ACCESS.create_project ? '<button class="btn btn-primary" type="button" id="projects-directory-create">Create project</button>' : ''}</div>`;
-  $$('.dashboard-project[data-directory-project]').forEach(button => button.onclick = () => openProject(Number(button.dataset.directoryProject)));
+  directory.innerHTML = PROJECTS.length ? PROJECTS.map(project => `<button class="dashboard-project projects-directory-card" data-directory-project="${project.id}">${ME?.role === 'admin' ? `<span class="project-gear" role="button" tabindex="0" aria-label="Settings for ${escapeHtml(project.name)}" title="Project settings" data-project-gear="${project.id}">${icon('settings')}</span>` : ''}<b>${project.locked ? `${icon('lock', 'icon project-lock-icon')} ` : ''}${escapeHtml(project.name)}</b><span>Open project workspace</span></button>`).join('') : `<div class="empty-state">${icon('folder')}<b>No projects yet</b><p>Create a project to organize work.</p>${PROJECT_ACTION_ACCESS.create_project ? '<button class="btn btn-primary" type="button" id="projects-directory-create">Create project</button>' : ''}</div>`;
+  $$('.dashboard-project[data-directory-project]').forEach(button => button.onclick = event => {
+    const gear = event.target.closest('[data-project-gear]');
+    if (gear) {
+      event.preventDefault();
+      event.stopPropagation();
+      const project = PROJECTS.find(item => Number(item.id) === Number(gear.dataset.projectGear));
+      if (project) openProjectFeatureSettings(project);
+      return;
+    }
+    openProject(Number(button.dataset.directoryProject));
+  });
   $('#projects-directory-create')?.addEventListener('click', () => $('#btn-new-project')?.click());
   const newProject = $('#projects-new-project');
    if (newProject) {
@@ -3029,32 +3039,51 @@ async function openProject(id) {
   await enterProjectView(project);
 }
 
-// Per-project feature switches (set by admins). Missing values mean the feature is on.
+// Per-project feature switches (set by admins). A missing value means the feature is on.
+const PROJECT_FEATURES = [
+  { key: 'show_billing', label: 'Billing', hint: 'Customer and invoice fields on tasks.' },
+  { key: 'show_work_location', label: 'Work on field', hint: 'Office or on-field choice on tasks, and location-based check-in.' },
+  { key: 'show_description', label: 'Description', hint: 'The description box on tasks.' },
+  { key: 'allow_comments', label: 'Commenting', hint: 'Posting comments and replies on tasks.' },
+  { key: 'show_activity', label: 'Activity', hint: 'The activity history and comment list on tasks.' },
+  { key: 'allow_checkin', label: 'Check in / check out', hint: 'Task check-in and check-out buttons.' }
+];
+function featureOnFor(project, key) {
+  return !project || Number(project[key] ?? 1) === 1;
+}
 function projectFeatureOn(feature) {
-  return !CURRENT_PROJECT || Number(CURRENT_PROJECT[feature] ?? 1) === 1;
+  return featureOnFor(CURRENT_PROJECT, feature);
 }
 function applyProjectFeatureVisibility() {
   $('#drawer-work-mode')?.closest('.field-row')?.classList.toggle('hidden', !projectFeatureOn('show_work_location'));
   $('#drawer-billing-details')?.closest('details')?.classList.toggle('hidden', !projectFeatureOn('show_billing'));
+  $('#drawer-desc')?.closest('.field-block')?.classList.toggle('hidden', !projectFeatureOn('show_description'));
+  $('#drawer-comment-input')?.closest('.comment-input-row')?.classList.toggle('hidden', !projectFeatureOn('allow_comments'));
+  $('#drawer-activity')?.classList.toggle('hidden', !projectFeatureOn('show_activity'));
+  $('.activity-filter-tabs')?.classList.toggle('hidden', !projectFeatureOn('show_activity'));
+  $('#task-checkin-controls')?.classList.toggle('hidden', !projectFeatureOn('allow_checkin'));
 }
-function openProjectFeatureSettings() {
-  const project = CURRENT_PROJECT;
-  if (!project) return;
-  showModal(`<h3>Project settings</h3>
-    <p class="hint">Choose which optional fields new and existing tasks in ${escapeHtml(project.name)} show. Only admins can change these.</p>
-    <label class="feature-toggle"><input type="checkbox" id="project-feature-billing" ${projectFeatureOn('show_billing') ? 'checked' : ''}> Billing fields on tasks</label>
-    <label class="feature-toggle"><input type="checkbox" id="project-feature-work" ${projectFeatureOn('show_work_location') ? 'checked' : ''}> Work location (office or on field)</label>
+function openProjectFeatureSettings(project = CURRENT_PROJECT) {
+  if (!project || ME?.role !== 'admin') return;
+  const rows = PROJECT_FEATURES.map(feature => `<label class="feature-toggle">
+      <input type="checkbox" data-feature-key="${feature.key}" ${featureOnFor(project, feature.key) ? 'checked' : ''}>
+      <span><b>${escapeHtml(feature.label)}</b><small class="hint">${escapeHtml(feature.hint)}</small></span>
+    </label>`).join('');
+  showModal(`<h3>Settings for ${escapeHtml(project.name)}</h3>
+    <p class="hint">Turn features on or off for this project. Turning a feature off hides it everywhere in the project, and the server stops accepting it. Only admins can change these.</p>
+    <div class="feature-toggle-list">${rows}</div>
     <div class="modal-actions"><button class="btn btn-secondary" id="project-feature-cancel" type="button">Cancel</button><button class="btn btn-primary" id="project-feature-save" type="button">Save</button></div>`);
   $('#project-feature-cancel').onclick = closeModal;
   $('#project-feature-save').onclick = async () => {
-    const body = { show_billing: $('#project-feature-billing').checked, show_work_location: $('#project-feature-work').checked };
+    const body = {};
+    $$('[data-feature-key]').forEach(input => { body[input.dataset.featureKey] = input.checked; });
     try {
       const result = await api(`/projects/${project.id}/feature-settings`, { method: 'PUT', body });
-      project.show_billing = result.show_billing;
-      project.show_work_location = result.show_work_location;
+      PROJECT_FEATURES.forEach(feature => { project[feature.key] = result[feature.key]; });
       const listed = PROJECTS.find(item => Number(item.id) === Number(project.id));
-      if (listed) Object.assign(listed, { show_billing: result.show_billing, show_work_location: result.show_work_location });
+      if (listed) PROJECT_FEATURES.forEach(feature => { listed[feature.key] = result[feature.key]; });
       closeModal();
+      applyProjectFeatureVisibility();
       showAppNotification('Project settings saved.');
     } catch (error) {
       showAppNotification(error.message);
@@ -3069,12 +3098,14 @@ async function enterProjectView(project) {
     settingsButton = document.createElement('button');
     settingsButton.id = 'btn-project-settings';
     settingsButton.type = 'button';
-    settingsButton.className = 'btn btn-secondary';
-    settingsButton.textContent = 'Settings';
+    settingsButton.className = 'icon-btn project-gear-button';
+    settingsButton.title = 'Project settings';
+    settingsButton.setAttribute('aria-label', 'Project settings');
+    settingsButton.innerHTML = icon('settings');
     $('#btn-manage-members')?.insertAdjacentElement('afterend', settingsButton);
   }
   settingsButton.style.display = ME?.role === 'admin' ? '' : 'none';
-  settingsButton.onclick = openProjectFeatureSettings;
+  settingsButton.onclick = () => openProjectFeatureSettings(CURRENT_PROJECT);
   showView('project');
   renderFocusedProjectSwitcher();
   $$('.project-item').forEach((b) => b.classList.toggle('active', Number(b.dataset.id) === project.id));
