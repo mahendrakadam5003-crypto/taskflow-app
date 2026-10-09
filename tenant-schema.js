@@ -920,6 +920,13 @@ async function initTenantSchema(db, { seedInitialAdmin = true, companyId = null 
       }
       await markSchemaVersion(17);
     }
+    if (schemaVersion < 18) {
+      const commentColumns = await dbDriverInterface.prepare('PRAGMA table_info(comments)').all();
+      if (!commentColumns.some(column => column.name === 'parent_id')) {
+        await dbDriverInterface.exec('ALTER TABLE comments ADD COLUMN parent_id INTEGER');
+      }
+      await markSchemaVersion(18);
+    }
     console.log('Database schema and default settings are ready.');
   } catch (err) {
     console.error(JSON.stringify({ event: 'tenant_database_initialization_failed', company_id: companyId ?? null }));
