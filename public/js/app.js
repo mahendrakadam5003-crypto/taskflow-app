@@ -3701,6 +3701,32 @@ async function openTaskDrawer(taskId) {
           button.textContent = expanded ? 'Show difference' : 'Hide difference';
         };
       });
+      $$('.comment-reply-button').forEach(button => {
+        button.onclick = () => {
+          const commentElement = button.closest('.comment');
+          if (!commentElement || commentElement.querySelector('.comment-reply-form')) return;
+          const commentId = Number(button.dataset.commentId);
+          const form = document.createElement('div');
+          form.className = 'comment-reply-form';
+          form.innerHTML = `<textarea rows="2" placeholder="Write a reply…" aria-label="Write a reply"></textarea><div class="comment-edit-actions"><button type="button" class="btn btn-secondary btn-sm comment-reply-cancel">Cancel</button><button type="button" class="btn btn-primary btn-sm comment-reply-send">Reply</button></div><div class="hint comment-edit-error"></div>`;
+          commentElement.querySelector('.comment-content')?.appendChild(form);
+          const textarea = form.querySelector('textarea');
+          textarea.focus();
+          form.querySelector('.comment-reply-cancel').onclick = () => form.remove();
+          form.querySelector('.comment-reply-send').onclick = async () => {
+            const body = textarea.value.trim();
+            const errorNode = form.querySelector('.comment-edit-error');
+            if (!body) { errorNode.textContent = 'Write a reply first.'; return; }
+            try {
+              await api(`/tasks/${taskId}/comments`, { method: 'POST', body: { body, parent_id: commentId } });
+              form.remove();
+              window.refreshOpenTaskActivity?.();
+            } catch (error) {
+              errorNode.textContent = error.message;
+            }
+          };
+        };
+      });
       $$('.comment-edit-button').forEach(button => {
         button.onclick = () => {
           const comment = activityItems.find(item => item.activity_type === 'comment' && Number(item.id) === Number(button.dataset.commentId));
@@ -3754,8 +3780,8 @@ const renderActivity = () => {
       const activityHtml = visibleItems.map((entry, index) => {
         const timestamp = escapeHtml(activityTime(entry.created_at));
         if (entry.activity_type === 'comment') {
-          return `<div class="task-activity-group"><div class="activity-group-entry comment" data-comment-id="${entry.id}"><span class="avatar comment-avatar" aria-hidden="true">${escapeHtml(getInitials(entry.user_name || entry.author_name || ''))}</span><div class="comment-content">
-            <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b> <span class="activity-inline-time">· ${timestamp}</span>${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
+          return `<div class="task-activity-group${entry.parent_id ? ' is-reply' : ''}"><div class="activity-group-entry comment" data-comment-id="${entry.id}"><span class="avatar comment-avatar" aria-hidden="true">${escapeHtml(getInitials(entry.user_name || entry.author_name || ''))}</span><div class="comment-content">
+            <div class="comment-meta"><b>${escapeHtml(entry.user_name || entry.author_name || 'Unknown user')}</b> <span class="activity-inline-time">· ${timestamp}</span>${entry.parent_id ? ` <span class="comment-replying-to">replying to ${escapeHtml((activityItems.find(item => item.activity_type === 'comment' && Number(item.id) === Number(entry.parent_id)) || {}).user_name || 'a comment')}</span>` : ''}${entry.edited_at ? ` <span class="comment-edited">Edited · ${escapeHtml(fmtDateTime(entry.edited_at))}</span>` : ''}${!taskActionsLocked ? ` <button type="button" class="link-btn comment-reply-button" data-comment-id="${entry.id}">Reply</button>` : ''}${!taskActionsLocked && Number(entry.user_id) === Number(ME?.id) ? ` <button type="button" class="link-btn comment-edit-button" data-comment-id="${entry.id}">Edit</button>` : ''}</div>
             <div class="comment-body">${escapeHtml(entry.body || '').replace(/\n/g, '<br>')}</div>
             ${renderCommentAttachment(entry)}
           </div></div></div>`;
