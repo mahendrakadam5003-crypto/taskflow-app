@@ -394,7 +394,7 @@ function openImageViewer(src, name = 'Image') {
   viewer.setAttribute('aria-label', `Preview of ${name}`);
   viewer.innerHTML = `<div class="image-viewer-bar"><span class="image-viewer-name"></span><button type="button" class="image-viewer-close" aria-label="Close preview">✕</button></div>
     <div class="image-viewer-stage"><img class="image-viewer-img" alt=""></div>
-    <div class="image-viewer-hint">Pinch or scroll to zoom · drag to move · double-tap to zoom in</div>`;
+    <div class="image-viewer-footer"><span class="image-viewer-hint">Pinch or scroll to zoom · drag to move · double-tap to zoom in</span><button type="button" class="image-viewer-close-text">Close</button></div>`;
   viewer.querySelector('.image-viewer-name').textContent = name;
   const img = viewer.querySelector('.image-viewer-img');
   const stage = viewer.querySelector('.image-viewer-stage');
@@ -488,6 +488,7 @@ function openImageViewer(src, name = 'Image') {
   const onKey = event => { if (event.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);
   viewer.querySelector('.image-viewer-close').onclick = close;
+  viewer.querySelector('.image-viewer-close-text').onclick = close;
   document.body.appendChild(viewer);
   apply();
 }
