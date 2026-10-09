@@ -938,3 +938,8 @@ html.is-native textarea::placeholder { color: #7B8494; }
   .reimbursement-filter-field select, .reimbursement-filter-field input { width: 100%; box-sizing: border-box; }
   .reimbursement-filter-page-footer { flex: 0 0 auto; flex-wrap: nowrap; white-space: nowrap; }
 }
+
+/* Check-in / check-out button shows a small ring while it works */
+.btn .ui-ring { width: 30px; height: 30px; }
+.btn .ui-ring-percent { font-size: 9px; }
+.btn .ui-ring-label { display: none; }
