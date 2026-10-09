@@ -909,3 +909,23 @@ html.is-native textarea::placeholder { color: #7B8494; }
 /* Attendance: Export CSV sits left of the filter icon in the top row */
 .attendance-calendar-box .reimbursement-totals-header { align-items: center; gap: 8px; }
 .attendance-export-button { min-height: 40px; padding: 0 14px; }
+
+/* ---------- Split filters: inline row on desktop, filter icon and page on phones ---------- */
+@media (min-width: 761px) {
+  /* Desktop: the filter fields show in a row, like before */
+  .reimbursement-filter-icon, .reimbursement-filter-badge { display: none !important; }
+  .reimbursement-filter-page {
+    position: static; z-index: auto; display: flex !important; flex-wrap: wrap; align-items: flex-end; gap: 12px;
+    background: none; padding: 4px 0 12px;
+  }
+  .reimbursement-filter-page-bar { display: none; }
+  .reimbursement-filter-page-body { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; flex: 1 1 auto; padding: 0; overflow: visible; }
+  .reimbursement-filter-field { flex: 1 1 150px; max-width: 220px; }
+  .reimbursement-filter-page-footer { display: flex; gap: 8px; padding: 0; border: 0; background: none; width: auto; }
+  .reimbursement-filter-page-footer .btn { min-height: 40px; }
+  /* Attendance: filters sit above the calendar on desktop */
+  .attendance-admin-layout { display: flex; flex-direction: column; }
+  .attendance-admin-layout > #admin-att-filter-page { order: 1; }
+  .attendance-admin-layout > .attendance-calendar-box { order: 2; }
+  .attendance-admin-layout > .today-attendance, .attendance-admin-layout > .section-title { order: 0; }
+}
