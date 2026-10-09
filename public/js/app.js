@@ -1981,6 +1981,7 @@ async function renderPaymentHistory() {
         ${summarySection('Cash invoices', 'cash')}
         ${summarySection('GST invoices', 'gst')}
         <div class="reimbursement-totals-header">
+          <button class="btn btn-secondary attendance-export-button" id="payment-history-export" type="button">Export CSV</button>
           <button type="button" class="reimbursement-filter-icon" id="payment-history-filter-open" aria-label="Open filters" title="Filters">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8L3 5z"/></svg>
             <span class="reimbursement-filter-badge hidden" id="payment-history-filter-badge"></span>
@@ -2080,6 +2081,12 @@ async function renderPaymentHistory() {
       await renderRows();
     };
     updatePaymentFilterBadge();
+    $('#payment-history-export').onclick = () => {
+      const params = new URLSearchParams();
+      const keys = { '#payment-history-from': 'from', '#payment-history-to': 'to', '#payment-history-assignee': 'assignee_id', '#payment-history-invoice-type': 'invoice_type', '#payment-history-status': 'status' };
+      Object.entries(keys).forEach(([id, key]) => { const value = $(id)?.value; if (value) params.set(key, value); });
+      window.open(`/api/payment-history/export.csv?${params.toString()}`, '_blank');
+    };
     renderSummary().catch(error => console.warn('Payment summary refresh failed:', error.message));
     renderRows().catch(error => {
       table.innerHTML = `<tr><td colspan="11" class="form-error">${escapeHtml(error.message)}</td></tr>`;
