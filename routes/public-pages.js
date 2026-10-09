@@ -12,7 +12,10 @@ function createAppShellSetHeaders(publicDirectory) {
     const relativePath = path.relative(publicDirectory, filePath).replace(/\\/g, '/');
     if (noCacheFiles.has(relativePath)) {
       res.setHeader('Cache-Control', APP_SHELL_CACHE_CONTROL);
-    } else if (relativePath.startsWith('js/') || relativePath.startsWith('css/')) {
+    } else if (relativePath.startsWith('js/')) {
+      // JavaScript stays no-store so a deployed app.js is never served stale.
+      res.setHeader('Cache-Control', APP_SHELL_CACHE_CONTROL);
+    } else if (relativePath.startsWith('css/')) {
       res.setHeader('Cache-Control', ASSET_CACHE_CONTROL);
     }
   };
