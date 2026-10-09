@@ -3938,6 +3938,32 @@ async function openTaskDrawer(taskId) {
     };
     window.refreshOpenTaskActivity = refreshTaskActivityLatest;
     const activityPollTimer = setInterval(refreshTaskActivityLatest, 10000);
+    // Field sync: reload the drawer when the task changes elsewhere (e.g. office edits seen on the field phone).
+    let lastTaskSnapshot = null;
+    const drawerIsBeingEdited = () => {
+      const drawerEl = $('#task-drawer');
+      return Boolean(drawerEl && drawerEl.contains(document.activeElement));
+    };
+    const refreshTaskFieldsLatest = async (baselineOnly = false) => {
+      if (activeTaskDrawerController !== controller || document.hidden) return;
+      try {
+        const latest = await api(`/tasks/${taskId}`, { signal: controller.signal });
+        const snapshot = JSON.stringify(latest);
+        if (baselineOnly || lastTaskSnapshot === null) { lastTaskSnapshot = snapshot; return; }
+        if (snapshot === lastTaskSnapshot || activeTaskDrawerController !== controller || drawerIsBeingEdited()) return;
+        lastTaskSnapshot = snapshot;
+        const drawerEl = $('#task-drawer');
+        const scroll = drawerEl?.querySelector('.drawer-body')?.scrollTop || 0;
+        await openTaskDrawer(taskId);
+        const body = $('#task-drawer')?.querySelector('.drawer-body');
+        if (body) body.scrollTop = scroll;
+      } catch (refreshError) {
+        // Ignore; the next tick tries again.
+      }
+    };
+    refreshTaskFieldsLatest(true);
+    const taskFieldsTimer = setInterval(() => refreshTaskFieldsLatest(false), 8000);
+    controller.signal.addEventListener('abort', () => clearInterval(taskFieldsTimer));
     controller.signal.addEventListener('abort', () => {
       clearInterval(activityPollTimer);
       if (window.refreshOpenTaskActivity === refreshTaskActivityLatest) window.refreshOpenTaskActivity = null;
@@ -4128,18 +4154,37 @@ async function openTaskDrawer(taskId) {
       }
       const checkInButton = $('#btn-task-check-in');
       const checkOutButton = $('#btn-task-check-out');
-      const recordTaskLocation = async (path, message) => {
+      let checkinBusy = false;
+      const recordTaskLocation = async (path, message, button) => {
+        if (checkinBusy) return;
+        checkinBusy = true;
+        const label = path === 'check-in' ? 'Checking in' : 'Checking out';
+        const original = button ? button.innerHTML : '';
+        let percent = 8;
+        const paint = () => { if (button) button.innerHTML = uiRingMarkup(percent, label); };
+        if (button) button.disabled = true;
+        paint();
+        // Estimated progress while the check-in is sent; it finishes when the server replies.
+        const ticker = setInterval(() => { percent += (90 - percent) * 0.12; paint(); }, 180);
         try {
           if (path === 'check-in') await saveChanges();
           const verificationMethod = await verifyAttendanceIfRequired(path === 'check-in' ? 'in' : 'out', 'task');
           const coords = await getLiveCoords();
           await api(`/tasks/${taskId}/${path}`, { method: 'POST', body: { ...coords, verification_method: verificationMethod } });
+          clearInterval(ticker);
+          showAppNotification(message);
           await renderTasks();
           await openTaskDrawer(taskId);
-        } catch (error) { showAppNotification(error.message); }
+        } catch (error) {
+          showAppNotification(error.message);
+          if (button) { button.disabled = false; button.innerHTML = original; }
+        } finally {
+          clearInterval(ticker);
+          checkinBusy = false;
+        }
       };
-      if (checkInButton) checkInButton.onclick = () => recordTaskLocation('check-in', 'Task check-in recorded.');
-      if (checkOutButton) checkOutButton.onclick = () => recordTaskLocation('check-out', 'Task check-out recorded.');
+      if (checkInButton) checkInButton.onclick = () => recordTaskLocation('check-in', 'Task check-in recorded.', checkInButton);
+      if (checkOutButton) checkOutButton.onclick = () => recordTaskLocation('check-out', 'Task check-out recorded.', checkOutButton);
     }
     let isCompleted = task.status === 'done';
     $('#btn-complete-task').onclick = async () => {
@@ -4382,9 +4427,14 @@ async function showNewTaskModal() {
     <div id="new-task-error" class="form-error"></div>
     <div class="modal-actions"><button class="btn btn-secondary" id="new-task-cancel">Cancel</button><button class="btn btn-primary" id="new-task-save">Create task</button></div>`);
   $('#new-task-cancel').onclick = closeModal;
+  let newTaskSaving = false;
   $('#new-task-save').onclick = async () => {
+    if (newTaskSaving) return;
     const title = $('#new-task-title').value.trim();
     if (!title) { $('#new-task-error').textContent = 'Task title is required.'; return; }
+    newTaskSaving = true;
+    const saveButton = $('#new-task-save');
+    if (saveButton) saveButton.disabled = true;
     try {
       await api(`/projects/${CURRENT_PROJECT.id}/tasks`, { method: 'POST', body: {
         title,
@@ -4394,7 +4444,12 @@ async function showNewTaskModal() {
       }});
       closeModal();
       renderTasks();
-    } catch (err) { $('#new-task-error').textContent = err.message; }
+    } catch (err) {
+      $('#new-task-error').textContent = err.message;
+    } finally {
+      newTaskSaving = false;
+      if (saveButton) saveButton.disabled = false;
+    }
   };
 }
 
